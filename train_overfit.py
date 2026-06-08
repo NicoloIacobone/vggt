@@ -11,11 +11,14 @@ Usage:
 """
 
 import argparse
+import random
 import sys
 from pathlib import Path
 from typing import Dict, Optional
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
@@ -25,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from vggt.models.vggt import VGGT
 from models.d4rt_decoder import D4RTInstanceSegmentationHead
 from train.loss import D4RTLoss
+from train.eval_metrics import compute_instance_segmentation_metrics
 from data.scannet_overfit import ScanNetSingleSceneDataset
 
 
@@ -45,6 +49,7 @@ class D4RTModel(nn.Module):
         num_views: int = 10,
         decoder_hidden_dim: int = 256,
         mask_embed_dim: int = 256,
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.freeze_backbone = freeze_backbone
@@ -76,6 +81,7 @@ class D4RTModel(nn.Module):
             patch_size=9,
             mask_embed_dim=mask_embed_dim,
             memory_dim=2048,  # 2 * embed_dim from VGGT
+            dropout=dropout,
         )
 
     def forward(
@@ -103,13 +109,14 @@ class D4RTModel(nn.Module):
         global_features = aggregated_tokens_list[-1]  # [B, S, P, 2048]
 
         # D4RT decoder forward pass
-        class_logits, mask_embeddings = self.decoder_head(
+        class_logits, mask_embeddings, pred_masks = self.decoder_head(
             coordinates, view_ids, images, global_features, patch_start_idx
         )
 
         return {
             "class_logits": class_logits,
             "mask_embeddings": mask_embeddings,
+            "pred_masks": pred_masks,
         }
 
 
@@ -213,14 +220,23 @@ def generate_query_points(
     view_ids_list = []
 
     for b in range(B):
-        num_instances = batch["num_instances"]
+        # num_instances may be an int or a (collated) 1-element tensor; coerce to int
+        num_instances = int(batch["num_instances"]) if not isinstance(batch["num_instances"], int) else batch["num_instances"]
         num_bg_points = max(1, num_queries - num_instances)
 
         # Instance points from dataset
         # batch["coordinates"] might be [num_instances, 2], move to device
         instance_coords = batch["coordinates"].squeeze(0) if batch["coordinates"].dim() > 2 else batch["coordinates"]
         instance_coords = instance_coords.to(device)  # [num_instances, 2]
-        instance_view_ids = torch.zeros(len(instance_coords), dtype=torch.long, device=device)
+
+        # Each instance query takes the view of the frame it was labeled in, so its view
+        # embedding AND its local RGB patch are sampled from the correct frame (instances
+        # from different frames may share near-identical centroids).
+        if "frame_ids" in batch:
+            instance_view_ids = batch["frame_ids"].squeeze(0) if batch["frame_ids"].dim() > 1 else batch["frame_ids"]
+            instance_view_ids = instance_view_ids.to(device).long()
+        else:
+            instance_view_ids = torch.zeros(len(instance_coords), dtype=torch.long, device=device)
 
         # Generate random background points
         bg_coords = torch.rand(num_bg_points, 2, device=device)
@@ -240,133 +256,114 @@ def generate_query_points(
     return coordinates, view_ids
 
 
-def create_dummy_gt(
+def _squeeze_batch_dim(t: torch.Tensor) -> torch.Tensor:
+    """Drop the leading (size-1) batch dim added by the default DataLoader collate."""
+    return t.squeeze(0) if t.dim() > 0 and t.shape[0] == 1 and t.dim() > 1 else t
+
+
+@torch.no_grad()
+def build_gt_targets(
     batch: Dict[str, torch.Tensor],
-    num_queries: int = 16,
-    device: str = "cpu",
+    patch_start_idx: int,
+    num_patch_tokens: int,
+    device: str,
 ) -> Dict[str, torch.Tensor]:
     """
-    Create random ground truth targets for loss computation.
+    Build dense ground-truth targets for multi-view instance segmentation (item 8.4).
 
-    This creates synthetic targets that are independent of the dataset
-    to validate gradient flow through the entire pipeline.
+    Every target is derived directly from the SAM3 pseudo-labels:
+
+      - classes      : the real ScanNet class label of each cross-view instance.
+      - coordinates  : the real (u, v) centroid of each instance (representative frame).
+      - masks        : per-instance DENSE binary masks at the VGGT patch-grid resolution,
+                       shape [Ng, S, h, w]. The instance's binary mask in each frame is
+                       downsampled (area interpolation) to the patch grid; the peak patch is
+                       always kept so visible-but-small instances are not erased. These are the
+                       targets for the Dice + BCE mask loss and for the mask-aware matcher.
+
+    Because the dataset assigns a single global ID per instance across frames (item 8.3), an
+    instance's mask spans every frame it is visible in.
 
     Args:
-        batch: Batch from dataloader
-        num_queries: Number of queries
-        device: Device to create tensors on
+        batch: One (collated, batch-size-1) sample from ScanNetSingleSceneDataset.
+        patch_start_idx: index where patch tokens begin (special tokens precede them).
+        num_patch_tokens: number of patch tokens P - patch_start_idx (=> h = w = sqrt of it).
+        device: target device.
 
     Returns:
-        Dict with gt_classes, gt_mask_embeddings, gt_coordinates
+        Dict with classes [Ng], coordinates [Ng, 2], masks [Ng, S, h, w].
     """
-    # Create random ground truth that matches the number of queries
-    num_instances = max(1, min(num_queries // 2, 8))  # 1-8 instances
+    classes = _squeeze_batch_dim(batch["classes"]).to(device)            # [Ng]
+    coordinates = _squeeze_batch_dim(batch["coordinates"]).to(device)    # [Ng, 2]
+    masks = _squeeze_batch_dim(batch["masks"]).to(device)                # [S, H, W] global-id map
 
-    # Random classes in valid range [0, 19]
-    gt_classes = torch.randint(0, 20, (num_instances,), device=device)
+    S = masks.shape[0]
+    h = w = int(round(num_patch_tokens ** 0.5))
+    assert h * w == num_patch_tokens, "patch tokens do not form a square grid"
 
-    # Random ground truth embeddings and coordinates
-    gt_mask_embeddings = torch.randn(num_instances, 256, device=device)
-    gt_coordinates = torch.rand(num_instances, 2, device=device)
+    num_instances = int(classes.shape[0])
+    if num_instances == 0:
+        # Degenerate scene: a single empty dummy target so the loss/metrics stay defined.
+        return {
+            "classes": torch.zeros(1, dtype=torch.long, device=device),
+            "coordinates": torch.full((1, 2), 0.5, device=device),
+            "masks": torch.zeros(1, S, h, w, device=device),
+        }
+
+    gt_masks = torch.zeros(num_instances, S, h, w, device=device)
+    for i in range(num_instances):
+        inst_id = i + 1  # i-th instance has global id (i+1) in the mask map (all frames)
+        for f in range(S):
+            bin_mask = (masks[f] == inst_id).float()  # [H, W]
+            if bin_mask.sum() == 0:
+                continue
+            occ = F.interpolate(bin_mask[None, None], size=(h, w), mode="area")[0, 0]  # [h, w]
+            # Keep the peak patch even for small instances; exclude non-overlapping patches.
+            thr = min(0.5, float(occ.max().item()))
+            gt_masks[i, f] = ((occ >= thr) & (occ > 0)).float()
 
     return {
-        "classes": gt_classes,
-        "mask_embeddings": gt_mask_embeddings,
-        "coordinates": gt_coordinates,
+        "classes": classes,
+        "coordinates": coordinates,
+        "masks": gt_masks,
     }
 
 
-def train_epoch(
+@torch.no_grad()
+def evaluate_model(
     model: nn.Module,
-    loss_fn: nn.Module,
-    dataloader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    device: str,
-    num_queries: int = 16,
-    log_interval: int = 10,
+    images: torch.Tensor,
+    coordinates: torch.Tensor,
+    view_ids: torch.Tensor,
+    gt: Dict[str, torch.Tensor],
 ) -> Dict[str, float]:
     """
-    Train for one epoch.
+    Run one forward pass in eval mode and compute instance-segmentation metrics (item 8.4).
 
-    Args:
-        model: D4RTModel
-        loss_fn: D4RTLoss
-        dataloader: Training dataloader
-        optimizer: AdamW optimizer
-        device: Device to train on
-        num_queries: Number of query points per image
-        log_interval: Log every N iterations
-
-    Returns:
-        Dict with average losses
+    Assumes batch size 1 (single overfit scene). Returns the metric dict from
+    `compute_instance_segmentation_metrics` (mIoU / AP50 / AP75 / mAP / class_acc).
     """
-    model.train()
-    total_loss = 0.0
-    losses_dict = {
-        "class_loss": 0.0,
-        "mask_embed_loss": 0.0,
-        "coord_loss": 0.0,
-        "mask_loss": 0.0,
-        "num_matches": 0,
-    }
+    was_training = model.training
+    model.eval()
+    outputs = model(images, coordinates, view_ids)
+    metrics = compute_instance_segmentation_metrics(
+        pred_masks=outputs["pred_masks"][0],     # [N, S, h, w]
+        class_logits=outputs["class_logits"][0],  # [N, C]
+        gt_masks=gt["masks"],                      # [Ng, S, h, w]
+        gt_classes=gt["classes"],                  # [Ng]
+        background_class=0,
+    )
+    if was_training:
+        model.train()
+    return metrics
 
-    for batch_idx, batch in enumerate(dataloader):
-        # Move batch to device
-        images = batch["images"].to(device)  # [B, S, 3, H, W]
-        B, S = images.shape[:2]
 
-        # Generate query points
-        coordinates, view_ids = generate_query_points(batch, num_queries, device)
-
-        # Generate ground truth targets
-        gt = create_dummy_gt(batch, num_queries, device)
-
-        # Forward pass
-        optimizer.zero_grad()
-        outputs = model(images, coordinates, view_ids)
-
-        # Compute loss
-        total_loss_val, loss_components = loss_fn(
-            outputs["class_logits"],
-            outputs["mask_embeddings"],
-            coordinates,
-            gt["classes"],
-            gt["mask_embeddings"],
-            gt["coordinates"],
-        )
-
-        # Backward pass
-        total_loss_val.backward()
-        optimizer.step()
-
-        # Accumulate losses
-        total_loss += total_loss_val.item()
-        for key in losses_dict:
-            if key in loss_components:
-                if key == "num_matches":
-                    losses_dict[key] += loss_components[key]
-                else:
-                    losses_dict[key] += loss_components[key].item() if isinstance(loss_components[key], torch.Tensor) else 0.0
-
-        # Log
-        if (batch_idx + 1) % log_interval == 0:
-            avg_loss = total_loss / (batch_idx + 1)
-            print(
-                f"Iter {batch_idx + 1:3d} | Loss: {total_loss_val.item():8.4f} | "
-                f"Avg Loss: {avg_loss:8.4f} | Matches: {loss_components['num_matches']}"
-            )
-
-    # Average losses
-    num_batches = len(dataloader)
-    avg_losses = {
-        "total_loss": total_loss / num_batches,
-        "class_loss": losses_dict["class_loss"] / num_batches,
-        "mask_embed_loss": losses_dict["mask_embed_loss"] / num_batches,
-        "coord_loss": losses_dict["coord_loss"] / num_batches,
-        "mask_loss": losses_dict["mask_loss"] / num_batches,
-    }
-
-    return avg_losses
+def _format_metrics(m: Dict[str, float]) -> str:
+    return (
+        f"mIoU={m['mIoU']:.3f}  AP50={m['AP50']:.3f}  AP75={m['AP75']:.3f}  "
+        f"mAP={m['mAP']:.3f}  class_acc={m['class_acc']:.3f}  "
+        f"(pred={m['num_pred']}, gt={m['num_gt']})"
+    )
 
 
 def main():
@@ -385,10 +382,19 @@ def main():
     )
     parser.add_argument("--freeze_backbone", action="store_true", default=True, help="Freeze VGGT backbone")
     parser.add_argument("--unfreeze_backbone", action="store_true", help="Unfreeze VGGT backbone")
+    parser.add_argument("--dropout", type=float, default=0.0,
+                        help="Decoder dropout (0 for a clean overfit; >0 for regularized training)")
     parser.add_argument("--log_interval", type=int, default=10, help="Log every N iterations")
     parser.add_argument("--save_checkpoint", type=str, default=None, help="Path to save checkpoint")
 
     args = parser.parse_args()
+
+    # Seed everything for reproducibility of the overfit test
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(0)
 
     # Override freeze_backbone if unfreeze_backbone is set
     if args.unfreeze_backbone:
@@ -411,6 +417,7 @@ def main():
         num_views=10,
         decoder_hidden_dim=256,
         mask_embed_dim=256,
+        dropout=args.dropout,
     )
     model = model.to(device)
 
@@ -444,14 +451,21 @@ def main():
 
     # Create loss function
     print("\n=== Initializing Loss Function ===")
+    # NOTE: the model now predicts DENSE masks (item 8.4), so the mask objective is the real
+    # Dice + BCE loss (`mask_loss_weight=1.0`) and the matcher is mask-aware. The old
+    # mask-embedding regression proxy is disabled (`mask_embed_loss_weight=0.0`); mask
+    # embeddings are now trained purely as the per-query mask kernels via the dense mask loss.
+    # coord_loss_weight is 0 because there is no coordinate-regression head — the "predicted"
+    # coordinates are the fixed input query coordinates, so a coord loss has no gradient path;
+    # coordinates are still used inside the matcher.
     loss_fn = D4RTLoss(
         num_classes=20,
         focal_alpha=0.25,
         focal_gamma=2.0,
         class_loss_weight=1.0,
-        mask_embed_loss_weight=1.0,
-        coord_loss_weight=1.0,
-        mask_loss_weight=0.0,  # No mask prediction in this minimal version
+        mask_embed_loss_weight=0.0,
+        coord_loss_weight=0.0,
+        mask_loss_weight=1.0,
     )
     loss_fn = loss_fn.to(device)
     print("✓ Loss function initialized")
@@ -465,7 +479,36 @@ def main():
     )
     print(f"✓ AdamW optimizer with lr={args.learning_rate}")
 
-    # Training loop
+    # Prepare a SINGLE fixed batch + fixed targets for a genuine overfit test.
+    # A real overfit requires constant inputs and constant targets so the model has
+    # something stable to memorize. (Regenerating random frames/queries/targets every
+    # iteration makes the loss a moving target that can never decrease, regardless of
+    # whether gradients flow.)
+    print("\n=== Preparing Fixed Overfit Batch ===")
+    fixed_batch = next(iter(dataloader))
+    images = fixed_batch["images"].to(device)  # [B, S, 3, H, W]
+    coordinates, view_ids = generate_query_points(fixed_batch, args.num_queries, device)
+
+    # Run the frozen backbone ONCE to obtain the patch layout, then build dense GT targets
+    # (classes / centroids / per-instance binary masks) from the SAM3 masks (item 8.4). The GT
+    # masks live at the VGGT patch-grid resolution so they line up with the predicted masks.
+    with torch.no_grad():
+        agg_list, patch_start_idx = model.backbone.aggregator(images)
+    global_features = agg_list[-1]  # [B, S, P, C_feat]
+    num_patch_tokens = global_features.shape[2] - patch_start_idx
+
+    gt = build_gt_targets(fixed_batch, patch_start_idx, num_patch_tokens, device)
+    print(
+        f"✓ Fixed batch: images={tuple(images.shape)}, "
+        f"queries={coordinates.shape[1]}, gt_instances={gt['classes'].shape[0]}, "
+        f"gt_masks={tuple(gt['masks'].shape)} (real classes/centroids/dense masks)"
+    )
+
+    # Baseline metrics before any training (sanity reference for the final numbers).
+    init_metrics = evaluate_model(model, images, coordinates, view_ids, gt)
+    print(f"  Initial metrics: {_format_metrics(init_metrics)}")
+
+    # Training loop (overfit a single fixed batch)
     print("\n" + "=" * 70)
     print("TRAINING")
     print("=" * 70)
@@ -473,31 +516,52 @@ def main():
     losses_history = []
 
     for epoch in range(args.num_epochs):
-        print(f"\n[Epoch {epoch + 1:3d}/{args.num_epochs}]", end=" ")
+        model.train()
+        optimizer.zero_grad()
 
-        epoch_losses = train_epoch(
-            model=model,
-            loss_fn=loss_fn,
-            dataloader=dataloader,
-            optimizer=optimizer,
-            device=device,
-            num_queries=args.num_queries,
-            log_interval=args.log_interval,
+        outputs = model(images, coordinates, view_ids)
+        total_loss_val, loss_components = loss_fn(
+            outputs["class_logits"],
+            outputs["mask_embeddings"],
+            coordinates,
+            gt["classes"],
+            gt_mask_embeddings=None,           # descriptor proxy disabled (item 8.4)
+            gt_coordinates=gt["coordinates"],
+            gt_masks=gt["masks"],
+            pred_masks=outputs["pred_masks"],
         )
 
+        total_loss_val.backward()
+        # Clip gradients: the dense mask dot-product can produce large, oscillating gradients.
+        torch.nn.utils.clip_grad_norm_(
+            filter(lambda p: p.requires_grad, model.parameters()), max_norm=1.0
+        )
+        optimizer.step()
+
+        epoch_losses = {
+            "total_loss": total_loss_val.item(),
+            "class_loss": loss_components["class_loss"].item(),
+            "mask_embed_loss": loss_components["mask_embed_loss"].item(),
+            "coord_loss": loss_components["coord_loss"].item(),
+            "mask_loss": loss_components["mask_loss"].item()
+            if isinstance(loss_components["mask_loss"], torch.Tensor)
+            else float(loss_components["mask_loss"]),
+        }
         losses_history.append(epoch_losses)
 
-        # Print epoch summary
-        print(
-            f"\n{'':13} ├─ Total Loss: {epoch_losses['total_loss']:8.4f} "
-            f"(Class: {epoch_losses['class_loss']:6.4f}, "
-            f"MaskEmbed: {epoch_losses['mask_embed_loss']:6.4f}, "
-            f"Coord: {epoch_losses['coord_loss']:6.4f})"
-        )
+        # Log every log_interval epochs (and the first/last)
+        if epoch == 0 or (epoch + 1) % args.log_interval == 0 or epoch == args.num_epochs - 1:
+            print(
+                f"[Epoch {epoch + 1:4d}/{args.num_epochs}] "
+                f"Total: {epoch_losses['total_loss']:8.4f} "
+                f"(Class: {epoch_losses['class_loss']:6.4f}, "
+                f"Mask(Dice+BCE): {epoch_losses['mask_loss']:7.4f}) "
+                f"Matches: {loss_components['num_matches']}"
+            )
 
         # Check for divergence
-        if epoch_losses["total_loss"] > 1e6:
-            print("⚠ Warning: Loss is diverging!")
+        if epoch_losses["total_loss"] > 1e6 or np.isnan(epoch_losses["total_loss"]):
+            print("⚠ Warning: Loss is diverging or NaN!")
             break
 
     # Summary
@@ -512,6 +576,12 @@ def main():
     print(f"\nInitial loss: {initial_loss:.4f}")
     print(f"Final loss:   {final_loss:.4f}")
     print(f"Reduction:    {loss_reduction:.2f}%")
+
+    # Final instance-segmentation metrics (item 8.4 eval metric).
+    final_metrics = evaluate_model(model, images, coordinates, view_ids, gt)
+    print("\n--- Instance Segmentation Metrics ---")
+    print(f"  Before training: {_format_metrics(init_metrics)}")
+    print(f"  After training:  {_format_metrics(final_metrics)}")
 
     if loss_reduction > 50:
         print("\n✅ SUCCESS: Loss decreased significantly!")

@@ -13,7 +13,7 @@ class FourierPositionalEncoding(nn.Module):
     Fourier positional encoding for 2D coordinates.
 
     Encodes (u, v) coordinates using sine and cosine at different frequencies.
-    Output dimension is 2 * num_freqs.
+    Output dimension is 4 * num_freqs (sin & cos for each of u and v).
 
     Args:
         num_freqs (int): Number of frequency bands
@@ -37,7 +37,7 @@ class FourierPositionalEncoding(nn.Module):
             coords (torch.Tensor): Coordinates with shape [B, N, 2] where last dim is (u, v)
 
         Returns:
-            torch.Tensor: Fourier encoded features with shape [B, N, 2 * num_freqs]
+            torch.Tensor: Fourier encoded features with shape [B, N, 4 * num_freqs]
         """
         B, N, _ = coords.shape
 
@@ -287,8 +287,23 @@ class InstanceDecoder(nn.Module):
         self.num_classes = num_classes
         self.mask_embed_dim = mask_embed_dim
 
-        # Project memory from VGGT (2048-dim) to decoder hidden dim (256-dim)
+        # Project memory from VGGT (2048-dim) to decoder hidden dim (256-dim).
+        # The LayerNorm is essential: raw VGGT features have a very large magnitude, so without
+        # it the cross-attention output dwarfs the query residual in the decoder and every query
+        # collapses to the same memory average (identical outputs for all instances).
         self.memory_proj = nn.Linear(memory_dim, hidden_dim)
+        self.memory_norm = nn.LayerNorm(hidden_dim)
+
+        # Pixel decoder for dense mask prediction (Mask2Former-style): projects the VGGT
+        # patch tokens to a per-pixel feature map of dimension `mask_embed_dim`. A dense mask
+        # for each query is the COSINE similarity between its mask embedding and this feature
+        # map, scaled by a learnable temperature and shifted by a learnable bias. Cosine
+        # (rather than a raw dot-product) keeps the mask logits well-scaled regardless of the
+        # (large, un-normalized) VGGT feature norms, which otherwise saturate the sigmoid and
+        # stall the gradients.
+        self.mask_feature_proj = nn.Linear(memory_dim, mask_embed_dim)
+        self.mask_logit_scale = nn.Parameter(torch.tensor(10.0))
+        self.mask_logit_bias = nn.Parameter(torch.tensor(0.0))
 
         # Transformer decoder
         decoder_layer = nn.TransformerDecoderLayer(
@@ -324,7 +339,7 @@ class InstanceDecoder(nn.Module):
         global_features: torch.Tensor,
         images: Optional[torch.Tensor] = None,
         patch_start_idx: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Decode instance predictions using cross-attention.
 
@@ -333,12 +348,16 @@ class InstanceDecoder(nn.Module):
             global_features (torch.Tensor): Global scene features from VGGT [B, S, P, 2*embed_dim]
                 where B=batch, S=num_frames, P=num_patches, 2*embed_dim=2048
             images (torch.Tensor, optional): Original images [B, S, 3, H, W] (for reference)
-            patch_start_idx (int, optional): Index where patch tokens start (for coordinate recovery)
+            patch_start_idx (int, optional): Index where the patch tokens start. The first
+                `patch_start_idx` tokens are special (camera/register) tokens and are skipped
+                when building the dense per-pixel feature map. Defaults to 0.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]:
-                - class_logits: [B, N, num_classes] - class predictions for each query
-                - mask_embeddings: [B, N, mask_embed_dim] - mask embeddings for matching/generation
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                - class_logits:    [B, N, num_classes] class predictions per query
+                - mask_embeddings: [B, N, mask_embed_dim] per-query mask kernels
+                - pred_masks:      [B, N, S, h, w] dense mask LOGITS per query per frame, at
+                  the VGGT patch-grid resolution (h = w = sqrt(num_patch_tokens))
         """
         B, N, _ = queries.shape
         B_feat, S, P, _ = global_features.shape
@@ -347,8 +366,8 @@ class InstanceDecoder(nn.Module):
 
         # Project memory features to decoder dimension
         # Reshape global_features from [B, S, P, 2048] to [B, S*P, 256]
-        global_features_flat = global_features.view(B, S * P, -1)  # [B, S*P, 2048]
-        memory = self.memory_proj(global_features_flat)  # [B, S*P, hidden_dim]
+        global_features_flat = global_features.reshape(B, S * P, -1)  # [B, S*P, 2048]
+        memory = self.memory_norm(self.memory_proj(global_features_flat))  # [B, S*P, hidden_dim]
 
         # Cross-attention decoder
         # tgt: queries [B, N, hidden_dim]
@@ -358,11 +377,36 @@ class InstanceDecoder(nn.Module):
             memory=memory,
         )  # [B, N, hidden_dim]
 
+        # Skip connection from the (distinct) input queries. The cross-attention tends to
+        # collapse all queries toward the same memory-attended average; adding the queries back
+        # preserves each instance's identity so the per-query class/mask outputs stay distinct.
+        decoded = decoded + queries
+
         # Output heads
         class_logits = self.class_head(decoded)  # [B, N, num_classes]
         mask_embeddings = self.mask_embed_head(decoded)  # [B, N, mask_embed_dim]
 
-        return class_logits, mask_embeddings
+        # Dense mask prediction (Mask2Former-style): build a per-pixel feature map from the
+        # patch tokens and take its dot-product with each query's mask embedding.
+        start = patch_start_idx if patch_start_idx is not None else 0
+        num_patch = P - start
+        h = w = int(round(num_patch ** 0.5))
+        assert h * w == num_patch, (
+            f"Patch tokens ({num_patch}) do not form a square grid; "
+            f"check patch_start_idx ({start}) and P ({P})."
+        )
+
+        patch_tokens = global_features[:, :, start:start + h * w, :]  # [B, S, h*w, memory_dim]
+        pixel_feats = self.mask_feature_proj(patch_tokens)            # [B, S, h*w, mask_embed_dim]
+        pixel_feats = pixel_feats.reshape(B, S, h, w, self.mask_embed_dim)
+
+        # pred_masks[b, n, s, i, j] = scale * cos(mask_embeddings[b, n], pixel_feats[b, s, i, j]) + bias
+        emb_n = F.normalize(mask_embeddings, dim=-1)
+        pix_n = F.normalize(pixel_feats, dim=-1)
+        pred_masks = torch.einsum("bnc,bshwc->bnshw", emb_n, pix_n)
+        pred_masks = self.mask_logit_scale * pred_masks + self.mask_logit_bias
+
+        return class_logits, mask_embeddings, pred_masks
 
 
 class D4RTInstanceSegmentationHead(nn.Module):
@@ -390,6 +434,7 @@ class D4RTInstanceSegmentationHead(nn.Module):
         patch_size: int = 9,
         mask_embed_dim: int = 256,
         memory_dim: int = 2048,
+        dropout: float = 0.1,
     ):
         super().__init__()
         self.query_generator = QueryGenerator(
@@ -403,6 +448,7 @@ class D4RTInstanceSegmentationHead(nn.Module):
             num_decoder_layers=num_decoder_layers,
             mask_embed_dim=mask_embed_dim,
             memory_dim=memory_dim,
+            dropout=dropout,
         )
 
     def forward(
@@ -412,7 +458,7 @@ class D4RTInstanceSegmentationHead(nn.Module):
         images: torch.Tensor,
         global_features: torch.Tensor,
         patch_start_idx: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Generate queries and decode instance predictions.
 
@@ -424,16 +470,17 @@ class D4RTInstanceSegmentationHead(nn.Module):
             patch_start_idx (int, optional): Index where patch tokens start
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]:
-                - class_logits: [B, N, num_classes]
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                - class_logits:    [B, N, num_classes]
                 - mask_embeddings: [B, N, mask_embed_dim]
+                - pred_masks:      [B, N, S, h, w] dense mask logits at patch resolution
         """
         # Generate queries
         queries = self.query_generator(coordinates, view_ids, images)
 
         # Decode predictions
-        class_logits, mask_embeddings = self.instance_decoder(
+        class_logits, mask_embeddings, pred_masks = self.instance_decoder(
             queries, global_features, images, patch_start_idx
         )
 
-        return class_logits, mask_embeddings
+        return class_logits, mask_embeddings, pred_masks

@@ -37,25 +37,31 @@ def test_instance_decoder():
     global_features = torch.randn(B, S, P, memory_dim)
 
     # Forward pass
-    class_logits, mask_embeddings = decoder(queries, global_features)
+    class_logits, mask_embeddings, pred_masks = decoder(queries, global_features)
+
+    h = w = int(round((P) ** 0.5))  # patch_start_idx defaults to 0 here -> 37x37 grid
 
     print(f"Queries shape: {queries.shape}")
     print(f"Global features shape: {global_features.shape}")
     print(f"Class logits shape: {class_logits.shape}")
     print(f"Mask embeddings shape: {mask_embeddings.shape}")
+    print(f"Pred masks shape: {pred_masks.shape}")
 
     # Validate shapes
     assert class_logits.shape == (B, N, 20), f"Expected [2, 12, 20], got {class_logits.shape}"
     assert mask_embeddings.shape == (B, N, 256), f"Expected [2, 12, 256], got {mask_embeddings.shape}"
+    assert pred_masks.shape == (B, N, S, h, w), f"Expected [{B}, {N}, {S}, {h}, {w}], got {pred_masks.shape}"
 
     # Validate value ranges
     assert not torch.isnan(class_logits).any(), "Class logits contain NaN!"
     assert not torch.isinf(class_logits).any(), "Class logits contain Inf!"
     assert not torch.isnan(mask_embeddings).any(), "Mask embeddings contain NaN!"
     assert not torch.isinf(mask_embeddings).any(), "Mask embeddings contain Inf!"
+    assert not torch.isnan(pred_masks).any(), "Pred masks contain NaN!"
 
     print(f"Class logits stats: min={class_logits.min():.4f}, max={class_logits.max():.4f}")
     print(f"Mask embeddings stats: min={mask_embeddings.min():.4f}, max={mask_embeddings.max():.4f}")
+    print(f"Pred masks stats: min={pred_masks.min():.4f}, max={pred_masks.max():.4f}")
     print("✅ InstanceDecoder test passed!\n")
 
     return True
@@ -69,7 +75,7 @@ def test_class_head():
     B, N = 3, 10
     queries = torch.randn(B, N, 256)
 
-    class_logits, _ = decoder(
+    class_logits, _, _ = decoder(
         queries, torch.randn(B, 4, 1369, 2048)
     )
 
@@ -96,7 +102,7 @@ def test_mask_embedding_head():
     B, N = 2, 8
     queries = torch.randn(B, N, 256)
 
-    _, mask_embeddings = decoder(
+    _, mask_embeddings, _ = decoder(
         queries, torch.randn(B, 3, 1369, 2048)
     )
 
@@ -134,11 +140,13 @@ def test_full_pipeline():
     images = torch.rand(B, S, 3, H, W)
     coordinates = torch.rand(B, N, 2)  # [0, 1]
     view_ids = torch.randint(0, S, (B, N))
-    global_features = torch.randn(B, S, (H // 14) ** 2 + 5, 2048)  # (518/14)^2 + special tokens
+    patch_start_idx = 5  # 1 camera + 4 register special tokens precede the patch tokens
+    h = w = H // 14  # 37
+    global_features = torch.randn(B, S, h * w + patch_start_idx, 2048)  # patches + special tokens
 
     # Forward pass
-    class_logits, mask_embeddings = pipeline(
-        coordinates, view_ids, images, global_features
+    class_logits, mask_embeddings, pred_masks = pipeline(
+        coordinates, view_ids, images, global_features, patch_start_idx
     )
 
     print(f"Images shape: {images.shape}")
@@ -147,11 +155,14 @@ def test_full_pipeline():
     print(f"Global features shape: {global_features.shape}")
     print(f"Class logits shape: {class_logits.shape}")
     print(f"Mask embeddings shape: {mask_embeddings.shape}")
+    print(f"Pred masks shape: {pred_masks.shape}")
 
     assert class_logits.shape == (B, N, 20)
     assert mask_embeddings.shape == (B, N, 256)
+    assert pred_masks.shape == (B, N, S, h, w)
     assert not torch.isnan(class_logits).any()
     assert not torch.isnan(mask_embeddings).any()
+    assert not torch.isnan(pred_masks).any()
 
     print("✅ Complete pipeline test passed!\n")
 
@@ -167,10 +178,10 @@ def test_gradient_flow():
     global_features = torch.randn(2, 4, 1369, 2048, requires_grad=True)
 
     # Forward pass
-    class_logits, mask_embeddings = decoder(queries, global_features)
+    class_logits, mask_embeddings, pred_masks = decoder(queries, global_features)
 
-    # Create a simple loss
-    loss = class_logits.sum() + mask_embeddings.sum()
+    # Create a simple loss (include the dense masks so their head gets gradients too)
+    loss = class_logits.sum() + mask_embeddings.sum() + pred_masks.sum()
 
     # Backward
     loss.backward()
@@ -195,10 +206,11 @@ def test_different_batch_sizes():
             queries = torch.randn(B, N, 256)
             global_features = torch.randn(B, 3, 1369, 2048)
 
-            class_logits, mask_embeddings = decoder(queries, global_features)
+            class_logits, mask_embeddings, pred_masks = decoder(queries, global_features)
 
             assert class_logits.shape == (B, N, 20)
             assert mask_embeddings.shape == (B, N, 256)
+            assert pred_masks.shape == (B, N, 3, 37, 37)
 
     print("✅ Tested batch sizes: B=[1,2,4], N=[5,10,20]")
     print("✅ Different batch sizes test passed!\n")
@@ -217,10 +229,11 @@ def test_memory_projection():
         queries = torch.randn(2, 8, 256)
         global_features = torch.randn(2, 4, 1369, memory_dim)
 
-        class_logits, mask_embeddings = decoder(queries, global_features)
+        class_logits, mask_embeddings, pred_masks = decoder(queries, global_features)
 
         assert class_logits.shape == (2, 8, 20)
         assert mask_embeddings.shape == (2, 8, 256)
+        assert pred_masks.shape == (2, 8, 4, 37, 37)
 
     print("✅ Tested memory dims: [1024, 2048, 4096]")
     print("✅ Memory projection test passed!\n")
@@ -245,10 +258,11 @@ if __name__ == "__main__":
         print("  1. Projects VGGT memory (2048-dim) to decoder dim (256-dim)")
         print("  2. Uses Transformer decoder for cross-attention (4 layers, 8 heads)")
         print("  3. Outputs class logits for 20 ScanNet classes")
-        print("  4. Outputs mask embeddings for instance matching")
-        print("  5. Supports variable batch sizes and query counts")
-        print("  6. Handles different memory dimensions via projection")
-        print("  7. Supports full gradient flow for end-to-end training")
+        print("  4. Outputs mask embeddings (per-query mask kernels)")
+        print("  5. Outputs DENSE per-frame mask logits [B, N, S, h, w] (Mask2Former-style)")
+        print("  6. Supports variable batch sizes and query counts")
+        print("  7. Handles different memory dimensions via projection")
+        print("  8. Supports full gradient flow for end-to-end training")
 
     except Exception as e:
         print(f"\n❌ Test failed: {e}")

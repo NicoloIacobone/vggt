@@ -89,6 +89,8 @@ def test_dataset():
         print(f"  masks: {batch['masks'].shape}")
         print(f"  classes: {batch['classes'].shape}")
         print(f"  coordinates: {batch['coordinates'].shape}")
+        print(f"  frame_ids: {batch['frame_ids'].shape}")
+        print(f"  instance_ids: {batch['instance_ids'].shape}")
         print(f"  num_instances: {batch['num_instances']}")
 
         # Verify shapes
@@ -104,6 +106,33 @@ def test_dataset():
         assert batch["classes"].shape[0] == batch["num_instances"], "Classes should match num_instances"
         assert batch["coordinates"].shape[0] == batch["num_instances"], "Coordinates should match num_instances"
         assert batch["coordinates"].shape[1] == 2, "Coordinates should be (u, v) pairs"
+        assert batch["frame_ids"].shape[0] == batch["num_instances"], "frame_ids should match num_instances"
+        assert batch["instance_ids"].shape[0] == batch["num_instances"], "instance_ids should match num_instances"
+
+        # --- Cross-view instance identity (item 8.3) -------------------------------------
+        # The synthetic scene has 3 classes (wall/floor/chair) each present in all 4 frames,
+        # so it must yield exactly 3 GLOBAL instances, each appearing in multiple frames with
+        # ONE consistent ID, not 12 per-(frame, class) instances.
+        print("\n=== Cross-view instance identity ===")
+        masks = batch["masks"]
+        nonzero_ids = torch.unique(masks[masks > 0])
+        print(f"  unique instance IDs in masks: {nonzero_ids.tolist()}")
+        print(f"  instance_ids returned:        {batch['instance_ids'].tolist()}")
+
+        assert batch["num_instances"] == 3, (
+            f"Expected 3 cross-view instances (one per class), got {batch['num_instances']}"
+        )
+        # The IDs painted into the mask map must equal the returned instance_ids (1..G).
+        assert set(nonzero_ids.tolist()) == set(batch["instance_ids"].tolist()), (
+            "Mask IDs must match the returned instance_ids"
+        )
+        # Each instance ID must appear in MORE THAN ONE frame (proves cross-view linking).
+        for inst_id in batch["instance_ids"].tolist():
+            frames_with_id = [f for f in range(masks.shape[0]) if (masks[f] == inst_id).any()]
+            print(f"  instance {inst_id}: present in frames {frames_with_id}")
+            assert len(frames_with_id) > 1, (
+                f"Instance {inst_id} appears in only one frame — cross-view identity broken"
+            )
 
         # Validate value ranges
         print("\nValue ranges:")
@@ -124,7 +153,7 @@ def test_dataset():
         print(f"  coordinates: {batch['coordinates'].dtype}")
 
         assert batch["images"].dtype == torch.float32, "Images should be float32"
-        assert batch["masks"].dtype == torch.uint8, "Masks should be uint8"
+        assert batch["masks"].dtype == torch.int32, "Masks should be int32 (instance-ID map)"
         assert batch["classes"].dtype == torch.long, "Classes should be long"
         assert batch["coordinates"].dtype == torch.float32, "Coordinates should be float32"
 

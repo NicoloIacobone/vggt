@@ -59,29 +59,33 @@ class DiceLoss(nn.Module):
     Args:
         smooth (float): Smoothing constant to avoid division by zero
         reduction (str): 'none' | 'mean' | 'sum'
+        apply_sigmoid (bool): If True, treat `pred_masks` as logits and apply sigmoid before
+            computing the Dice coefficient. Set False if `pred_masks` are already probabilities
+            in [0, 1]. (Replaces the old, unreliable `pred_masks.max() > 1.0` heuristic.)
     """
 
-    def __init__(self, smooth: float = 1e-5, reduction: str = "mean"):
+    def __init__(self, smooth: float = 1e-5, reduction: str = "mean", apply_sigmoid: bool = True):
         super().__init__()
         self.smooth = smooth
         self.reduction = reduction
+        self.apply_sigmoid = apply_sigmoid
 
     def forward(self, pred_masks: torch.Tensor, target_masks: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            pred_masks (torch.Tensor): [N, H, W] predicted masks (logits or probabilities)
-            target_masks (torch.Tensor): [N, H, W] target masks (binary: 0 or 1)
+            pred_masks (torch.Tensor): [N, ...] predicted masks (logits if apply_sigmoid=True,
+                else probabilities). All dims after the first are flattened.
+            target_masks (torch.Tensor): [N, ...] target masks (binary: 0 or 1)
 
         Returns:
             torch.Tensor: Dice loss
         """
-        # Convert logits to probabilities if needed
-        if pred_masks.max() > 1.0:
+        if self.apply_sigmoid:
             pred_masks = torch.sigmoid(pred_masks)
 
-        # Flatten spatial dimensions
-        pred_masks = pred_masks.view(pred_masks.size(0), -1)  # [N, H*W]
-        target_masks = target_masks.view(target_masks.size(0), -1).float()  # [N, H*W]
+        # Flatten all dims after the instance dim (supports [N, H, W], [N, S, h, w], ...).
+        pred_masks = pred_masks.reshape(pred_masks.size(0), -1)  # [N, K]
+        target_masks = target_masks.reshape(target_masks.size(0), -1).float()  # [N, K]
 
         # Compute Dice coefficient
         intersection = (pred_masks * target_masks).sum(dim=1)  # [N]
@@ -95,6 +99,48 @@ class DiceLoss(nn.Module):
             return dice.sum()
         else:
             return dice
+
+
+def batch_dice_cost(pred_masks: torch.Tensor, gt_masks: torch.Tensor, smooth: float = 1e-5) -> torch.Tensor:
+    """
+    Pairwise Dice cost between every predicted and every GT mask (for bipartite matching).
+
+    Args:
+        pred_masks (torch.Tensor): [N_pred, K] mask LOGITS (flattened spatial dims)
+        gt_masks (torch.Tensor): [N_gt, K] binary masks (flattened)
+
+    Returns:
+        torch.Tensor: [N_pred, N_gt] Dice cost in [0, 1] (lower = better overlap)
+    """
+    pred = torch.sigmoid(pred_masks)                      # [N_pred, K]
+    gt = gt_masks.float()                                 # [N_gt, K]
+    intersection = pred @ gt.t()                          # [N_pred, N_gt]
+    union = pred.sum(dim=1, keepdim=True) + gt.sum(dim=1)[None, :]  # [N_pred, N_gt]
+    dice = 1 - (2 * intersection + smooth) / (union + smooth)
+    return dice
+
+
+def batch_bce_cost(pred_masks: torch.Tensor, gt_masks: torch.Tensor) -> torch.Tensor:
+    """
+    Pairwise binary-cross-entropy cost between every predicted and every GT mask.
+
+    Args:
+        pred_masks (torch.Tensor): [N_pred, K] mask LOGITS (flattened)
+        gt_masks (torch.Tensor): [N_gt, K] binary masks (flattened)
+
+    Returns:
+        torch.Tensor: [N_pred, N_gt] mean BCE cost (lower = better)
+    """
+    gt = gt_masks.float()
+    # BCE-with-logits decomposed so it can be computed for all (pred, gt) pairs at once.
+    pos = F.binary_cross_entropy_with_logits(
+        pred_masks, torch.ones_like(pred_masks), reduction="none"
+    )  # [N_pred, K]
+    neg = F.binary_cross_entropy_with_logits(
+        pred_masks, torch.zeros_like(pred_masks), reduction="none"
+    )  # [N_pred, K]
+    cost = pos @ gt.t() + neg @ (1 - gt).t()  # [N_pred, N_gt]
+    return cost / pred_masks.shape[1]
 
 
 class PointBipartiteMatcher(nn.Module):
@@ -137,6 +183,8 @@ class PointBipartiteMatcher(nn.Module):
         gt_classes: torch.Tensor,
         gt_mask_embeddings: torch.Tensor,
         gt_coordinates: torch.Tensor,
+        pred_masks: Optional[torch.Tensor] = None,
+        gt_masks: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Match predictions to ground truth instances.
@@ -148,6 +196,10 @@ class PointBipartiteMatcher(nn.Module):
             gt_classes (torch.Tensor): [N_gt] ground truth class labels
             gt_mask_embeddings (torch.Tensor): [N_gt, mask_dim] ground truth mask embeddings
             gt_coordinates (torch.Tensor): [N_gt, 2] ground truth coordinates
+            pred_masks (torch.Tensor, optional): [N_pred, ...] dense predicted mask LOGITS. If
+                given together with `gt_masks`, the mask matching cost is the dense Dice+BCE
+                cost (Mask2Former-style) instead of the mask-embedding L2 distance.
+            gt_masks (torch.Tensor, optional): [N_gt, ...] dense binary GT masks.
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -171,9 +223,15 @@ class PointBipartiteMatcher(nn.Module):
             gt_class_id = int(gt_class_id.item()) if isinstance(gt_class_id, torch.Tensor) else int(gt_class_id)
             class_cost[:, j] = 1 - probs[:, gt_class_id]
 
-        # Compute mask embedding distance (L2)
-        # [N_pred, 1, mask_dim] - [1, N_gt, mask_dim] → [N_pred, N_gt]
-        mask_cost = torch.cdist(mask_embeddings, gt_mask_embeddings, p=2)  # [N_pred, N_gt]
+        # Mask matching cost: prefer the dense Dice+BCE cost when masks are available,
+        # otherwise fall back to the mask-embedding L2 distance.
+        if pred_masks is not None and gt_masks is not None:
+            pred_flat = pred_masks.reshape(N_pred, -1)  # [N_pred, K] logits
+            gt_flat = gt_masks.reshape(N_gt, -1)        # [N_gt, K] binary
+            mask_cost = batch_dice_cost(pred_flat, gt_flat) + batch_bce_cost(pred_flat, gt_flat)
+        else:
+            # [N_pred, 1, mask_dim] - [1, N_gt, mask_dim] → [N_pred, N_gt]
+            mask_cost = torch.cdist(mask_embeddings, gt_mask_embeddings, p=2)  # [N_pred, N_gt]
 
         # Compute coordinate distance (L2)
         coord_cost = torch.cdist(coordinates, gt_coordinates, p=2)  # [N_pred, N_gt]
@@ -226,6 +284,7 @@ class D4RTLoss(nn.Module):
         mask_embed_loss_weight: float = 1.0,
         coord_loss_weight: float = 1.0,
         mask_loss_weight: float = 1.0,
+        bce_pos_weight_cap: float = 20.0,
         matcher_kwargs: Optional[Dict] = None,
     ):
         super().__init__()
@@ -239,6 +298,9 @@ class D4RTLoss(nn.Module):
         self.mask_embed_loss_weight = mask_embed_loss_weight
         self.coord_loss_weight = coord_loss_weight
         self.mask_loss_weight = mask_loss_weight
+        # Upper bound on the BCE positive-class weight (neg/pos ratio) to avoid huge weights
+        # when an instance's foreground is tiny at the patch resolution.
+        self.bce_pos_weight_cap = bce_pos_weight_cap
 
     def forward(
         self,
@@ -246,8 +308,8 @@ class D4RTLoss(nn.Module):
         mask_embeddings: torch.Tensor,
         coordinates: torch.Tensor,
         gt_classes: torch.Tensor,
-        gt_mask_embeddings: torch.Tensor,
-        gt_coordinates: torch.Tensor,
+        gt_mask_embeddings: Optional[torch.Tensor] = None,
+        gt_coordinates: Optional[torch.Tensor] = None,
         gt_masks: Optional[torch.Tensor] = None,
         pred_masks: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
@@ -272,14 +334,17 @@ class D4RTLoss(nn.Module):
         # Flatten batch dimension if present
         if class_logits.dim() == 3:  # [B, N, num_classes]
             B = class_logits.shape[0]
-            class_logits = class_logits.view(B * class_logits.shape[1], -1)  # [B*N, num_classes]
-            mask_embeddings = mask_embeddings.view(B * mask_embeddings.shape[1], -1)  # [B*N, mask_dim]
-            coordinates = coordinates.view(B * coordinates.shape[1], -1)  # [B*N, 2]
+            class_logits = class_logits.reshape(B * class_logits.shape[1], -1)  # [B*N, num_classes]
+            mask_embeddings = mask_embeddings.reshape(B * mask_embeddings.shape[1], -1)  # [B*N, mask_dim]
+            coordinates = coordinates.reshape(B * coordinates.shape[1], -1)  # [B*N, 2]
+            if pred_masks is not None and pred_masks.dim() >= 4:  # [B, N, ...]
+                pred_masks = pred_masks.reshape(B * pred_masks.shape[1], *pred_masks.shape[2:])
 
-        # Match predictions to ground truth
+        # Match predictions to ground truth (mask-aware when dense masks are available)
         pred_indices, gt_indices, cost_matrix = self.matcher(
             class_logits, mask_embeddings, coordinates,
-            gt_classes, gt_mask_embeddings, gt_coordinates
+            gt_classes, gt_mask_embeddings, gt_coordinates,
+            pred_masks, gt_masks,
         )
 
         # If no matches, return zero loss
@@ -295,12 +360,7 @@ class D4RTLoss(nn.Module):
 
         # Extract matched predictions and targets
         matched_pred_classes = class_logits[pred_indices]  # [N_matched, num_classes]
-        matched_pred_mask_embed = mask_embeddings[pred_indices]  # [N_matched, mask_dim]
-        matched_pred_coords = coordinates[pred_indices]  # [N_matched, 2]
-
         matched_gt_classes = gt_classes[gt_indices]  # [N_matched]
-        matched_gt_mask_embed = gt_mask_embeddings[gt_indices]  # [N_matched, mask_dim]
-        matched_gt_coords = gt_coordinates[gt_indices]  # [N_matched, 2]
 
         # Compute individual losses
         losses = {}
@@ -309,20 +369,39 @@ class D4RTLoss(nn.Module):
         class_loss = self.focal_loss(matched_pred_classes, matched_gt_classes)
         losses["class_loss"] = class_loss
 
-        # 2. Mask embedding loss (L2 distance)
-        mask_embed_loss = torch.norm(matched_pred_mask_embed - matched_gt_mask_embed, dim=-1).mean()
+        # 2. Mask embedding loss (L2 distance) - only when descriptor targets are provided.
+        # With dense-mask supervision (item 8.4) the mask embeddings are trained purely via the
+        # dense mask loss, so this proxy term is typically disabled (gt_mask_embeddings=None).
+        if gt_mask_embeddings is not None:
+            matched_pred_mask_embed = mask_embeddings[pred_indices]  # [N_matched, mask_dim]
+            matched_gt_mask_embed = gt_mask_embeddings[gt_indices]  # [N_matched, mask_dim]
+            mask_embed_loss = torch.norm(matched_pred_mask_embed - matched_gt_mask_embed, dim=-1).mean()
+        else:
+            mask_embed_loss = torch.tensor(0.0, device=class_logits.device)
         losses["mask_embed_loss"] = mask_embed_loss
 
         # 3. Coordinate loss (L2 distance)
+        matched_pred_coords = coordinates[pred_indices]  # [N_matched, 2]
+        matched_gt_coords = gt_coordinates[gt_indices]  # [N_matched, 2]
         coord_loss = torch.norm(matched_pred_coords - matched_gt_coords, dim=-1).mean()
         losses["coord_loss"] = coord_loss
 
-        # 4. Mask generation loss (Dice Loss) - optional
+        # 4. Mask generation loss (Dice + foreground-weighted BCE on dense masks) - optional.
+        # Instance masks are sparse (mostly background), so an unweighted BCE collapses to
+        # predicting empty masks. We weight the positive (foreground) term by the neg/pos ratio
+        # so foreground pixels are not drowned out, and combine it with the scale-invariant Dice.
         mask_loss = torch.tensor(0.0, device=class_logits.device)
         if gt_masks is not None and pred_masks is not None:
-            matched_gt_masks = gt_masks[gt_indices]  # [N_matched, H, W]
-            matched_pred_masks = pred_masks[pred_indices]  # [N_matched, H, W]
-            mask_loss = self.dice_loss(matched_pred_masks, matched_gt_masks)
+            matched_gt_masks = gt_masks[gt_indices].float()  # [N_matched, ...]
+            matched_pred_masks = pred_masks[pred_indices]    # [N_matched, ...] (logits)
+            num_pos = matched_gt_masks.sum().clamp(min=1.0)
+            num_neg = matched_gt_masks.numel() - matched_gt_masks.sum()
+            pos_weight = (num_neg / num_pos).clamp(max=self.bce_pos_weight_cap)
+            dice = self.dice_loss(matched_pred_masks, matched_gt_masks)
+            bce = F.binary_cross_entropy_with_logits(
+                matched_pred_masks, matched_gt_masks, pos_weight=pos_weight
+            )
+            mask_loss = dice + bce
 
         losses["mask_loss"] = mask_loss
         losses["num_matches"] = len(pred_indices)

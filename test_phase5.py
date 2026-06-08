@@ -168,6 +168,69 @@ def test_d4rt_loss():
     return True
 
 
+def test_dense_mask_loss():
+    """Test the dense mask path (item 8.4): mask-aware matcher + Dice+BCE on [N, S, h, w]."""
+    print("=== Testing Dense Mask Loss (8.4) ===")
+    loss_fn = D4RTLoss(
+        num_classes=20,
+        class_loss_weight=1.0,
+        mask_embed_loss_weight=0.0,  # descriptor proxy disabled
+        coord_loss_weight=0.0,
+        mask_loss_weight=1.0,
+    )
+
+    N_pred, N_gt = 10, 6
+    S, h, w = 4, 37, 37
+
+    pred_classes = torch.randn(1, N_pred, 20, requires_grad=True)
+    pred_mask_embed = torch.randn(1, N_pred, 256)
+    pred_coords = torch.rand(1, N_pred, 2)
+    pred_masks = torch.randn(1, N_pred, S, h, w, requires_grad=True)  # dense logits
+
+    gt_classes = torch.randint(1, 20, (N_gt,))
+    gt_coords = torch.rand(N_gt, 2)
+    gt_masks = (torch.rand(N_gt, S, h, w) > 0.7).float()  # binary
+
+    total_loss, loss_dict = loss_fn(
+        pred_classes, pred_mask_embed, pred_coords,
+        gt_classes,
+        gt_mask_embeddings=None,
+        gt_coordinates=gt_coords,
+        gt_masks=gt_masks,
+        pred_masks=pred_masks,
+    )
+
+    print(f"Total loss: {total_loss.item():.6f}")
+    for k, v in loss_dict.items():
+        print(f"  {k}: {v.item() if isinstance(v, torch.Tensor) else v}")
+
+    assert not torch.isnan(total_loss), "Loss should not be NaN"
+    assert loss_dict["mask_loss"].item() > 0, "Dense mask loss should be positive"
+    assert loss_dict["mask_embed_loss"].item() == 0.0, "Embed proxy should be disabled"
+    assert loss_dict["num_matches"] == min(N_pred, N_gt)
+
+    # Gradients must reach the dense mask logits and the class logits.
+    total_loss.backward()
+    assert pred_masks.grad is not None and pred_masks.grad.norm() > 0, "Masks need gradients"
+    assert pred_classes.grad is not None and pred_classes.grad.norm() > 0, "Classes need gradients"
+
+    # Perfect masks should drive the Dice term toward 0.
+    perfect_logits = (gt_masks * 20.0 - 10.0)[None]  # large +/- logits matching GT
+    pl_classes = torch.zeros(1, N_gt, 20)
+    for i, c in enumerate(gt_classes):
+        pl_classes[0, i, c] = 10.0
+    tl, ld = loss_fn(
+        pl_classes, torch.randn(1, N_gt, 256), gt_coords[None],
+        gt_classes, gt_mask_embeddings=None, gt_coordinates=gt_coords,
+        gt_masks=gt_masks, pred_masks=perfect_logits,
+    )
+    print(f"Perfect-mask total loss: {tl.item():.6f}, mask_loss: {ld['mask_loss'].item():.6f}")
+    assert ld["mask_loss"].item() < 0.2, "Perfect masks should give low Dice+BCE loss"
+
+    print("✅ Dense mask loss test passed!\n")
+    return True
+
+
 def test_gradient_flow():
     """Test gradient flow through loss."""
     print("=== Testing Gradient Flow ===")
@@ -358,6 +421,7 @@ if __name__ == "__main__":
         test_dice_loss()
         test_bipartite_matcher()
         test_d4rt_loss()
+        test_dense_mask_loss()
         test_gradient_flow()
         test_empty_ground_truth()
         test_empty_predictions()
