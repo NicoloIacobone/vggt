@@ -595,8 +595,30 @@ def main():
 
     # Save checkpoint
     if args.save_checkpoint:
-        print(f"\nSaving checkpoint to {args.save_checkpoint}")
-        torch.save(model.state_dict(), args.save_checkpoint)
+        ckpt_path = Path(args.save_checkpoint)
+        ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"\nSaving checkpoint to {ckpt_path}")
+        # Self-contained checkpoint: only the trainable decoder head (the ~1.26B frozen VGGT
+        # backbone is reloaded from `facebook/VGGT-1B`), plus the exact fixed overfit batch
+        # (images, queries, dense GT, patch layout) so visualization/eval reproduces precisely
+        # what was trained — no dependence on re-deriving RNG state.
+        torch.save(
+            {
+                "decoder_head_state_dict": model.decoder_head.state_dict(),
+                "images": images.cpu(),
+                "coordinates": coordinates.cpu(),
+                "view_ids": view_ids.cpu(),
+                "gt": {k: v.cpu() for k, v in gt.items()},
+                "patch_start_idx": int(patch_start_idx),
+                "num_patch_tokens": int(num_patch_tokens),
+                "frame_names": fixed_batch.get("frame_names", None),
+                "args": vars(args),
+                "init_metrics": init_metrics,
+                "final_metrics": final_metrics,
+            },
+            ckpt_path,
+        )
+        print(f"✓ Saved decoder head + fixed batch ({ckpt_path.stat().st_size / 1e6:.1f} MB)")
 
     return 0 if loss_reduction > 50 else 1
 

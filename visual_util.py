@@ -15,6 +15,23 @@ import os
 import requests
 
 
+# Perceptually-distinct RGB palette (uint8) for coloring predicted instances in 3D.
+# Shared with demo_gradio.py / visualize_masks.py so 2D and 3D views use the same colors.
+INSTANCE_PALETTE = (
+    np.array(
+        [
+            [0.90, 0.10, 0.10], [0.10, 0.60, 0.90], [0.20, 0.80, 0.20],
+            [0.95, 0.70, 0.10], [0.70, 0.20, 0.90], [0.10, 0.85, 0.85],
+            [0.95, 0.45, 0.75], [0.55, 0.35, 0.15], [0.50, 0.90, 0.30],
+            [0.30, 0.30, 0.95], [0.95, 0.55, 0.20], [0.60, 0.60, 0.60],
+            [0.80, 0.85, 0.20], [0.40, 0.75, 0.95], [0.85, 0.20, 0.50],
+            [0.20, 0.50, 0.40],
+        ]
+    )
+    * 255
+).astype(np.uint8)
+
+
 def predictions_to_glb(
     predictions,
     conf_thres=50.0,
@@ -25,6 +42,7 @@ def predictions_to_glb(
     mask_sky=False,
     target_dir=None,
     prediction_mode="Predicted Pointmap",
+    color_mode="Image",
 ) -> trimesh.Scene:
     """
     Converts VGGT predictions to a 3D scene represented as a GLB file.
@@ -134,11 +152,16 @@ def predictions_to_glb(
             sky_mask_binary = (sky_mask_array > 0.1).astype(np.float32)
             pred_world_points_conf = pred_world_points_conf * sky_mask_binary
 
+    # Optional per-pixel instance colors (NHWC uint8) for the "Predicted Instances" color mode.
+    seg_colors = predictions.get("seg_colors") if isinstance(predictions, dict) else None
+
     if selected_frame_idx is not None:
         pred_world_points = pred_world_points[selected_frame_idx][None]
         pred_world_points_conf = pred_world_points_conf[selected_frame_idx][None]
         images = images[selected_frame_idx][None]
         camera_matrices = camera_matrices[selected_frame_idx][None]
+        if seg_colors is not None:
+            seg_colors = seg_colors[selected_frame_idx][None]
 
     vertices_3d = pred_world_points.reshape(-1, 3)
     # Handle different image formats - check if images need transposing
@@ -147,6 +170,12 @@ def predictions_to_glb(
     else:  # Assume already in NHWC format
         colors_rgb = images
     colors_rgb = (colors_rgb.reshape(-1, 3) * 255).astype(np.uint8)
+
+    # Override with predicted-instance colors when requested and available.
+    if "Instance" in color_mode and seg_colors is not None:
+        if seg_colors.ndim == 4 and seg_colors.shape[1] == 3:  # NCHW -> NHWC
+            seg_colors = np.transpose(seg_colors, (0, 2, 3, 1))
+        colors_rgb = seg_colors.reshape(-1, 3).astype(np.uint8)
 
     conf = pred_world_points_conf.reshape(-1)
     # Convert percentage threshold to actual confidence value

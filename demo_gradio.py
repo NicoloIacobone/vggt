@@ -11,18 +11,23 @@ import numpy as np
 import gradio as gr
 import sys
 import shutil
+import argparse
 from datetime import datetime
 import glob
 import gc
 import time
 
+import torch.nn.functional as F
+
 sys.path.append("vggt/")
 
-from visual_util import predictions_to_glb
+from visual_util import predictions_to_glb, INSTANCE_PALETTE
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from vggt.utils.geometry import unproject_depth_map_to_point_map
+from models.d4rt_decoder import D4RTInstanceSegmentationHead
+from data.scannet_overfit import IDX_TO_CLASS
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -36,6 +41,160 @@ model.load_state_dict(torch.hub.load_state_dict_from_url(_URL))
 
 model.eval()
 model = model.to(device)
+
+
+# -------------------------------------------------------------------------
+# 0) Optional D4RT instance-segmentation head (for coloring the 3D cloud by
+#    predicted instances). Loaded from a checkpoint produced by
+#    `train_overfit.py --save_checkpoint ...`, which bundles the trained
+#    decoder head together with the exact fixed overfit batch (scene frames +
+#    query coordinates + view ids). See `visualize_masks.py` for the 2D version.
+# -------------------------------------------------------------------------
+SEG = {
+    "head": None,       # D4RTInstanceSegmentationHead
+    "coords": None,     # [1, N, 2] saved query coordinates
+    "view_ids": None,   # [1, N] saved query view ids
+    "gt_classes": None, # [Ng] GT classes (for reference)
+    "images": None,     # [1, S, 3, H, W] the exact scene frames that were trained on
+    "frame_names": None,
+}
+
+
+def _find_default_seg_checkpoint():
+    """Auto-discover the most recent training checkpoint, if any."""
+    pattern = "/cluster/work/igp_psr/niacobone/distillation/output/*/checkpoint.pth"
+    candidates = sorted(glob.glob(pattern), key=os.path.getmtime)
+    return candidates[-1] if candidates else None
+
+
+def load_seg_checkpoint(ckpt_path: str):
+    """Load the trained decoder head + its fixed query batch into the global SEG dict."""
+    print(f"Loading D4RT segmentation checkpoint: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    head = D4RTInstanceSegmentationHead(
+        num_views=10,
+        hidden_dim=256,
+        num_classes=20,
+        num_decoder_layers=4,
+        patch_size=9,
+        mask_embed_dim=256,
+        memory_dim=2048,
+        dropout=0.0,
+    )
+    head.load_state_dict(ckpt["decoder_head_state_dict"])
+    head.eval().to(device)
+
+    SEG["head"] = head
+    SEG["coords"] = ckpt["coordinates"]            # [1, N, 2]
+    SEG["view_ids"] = ckpt["view_ids"]             # [1, N]
+    SEG["gt_classes"] = ckpt["gt"]["classes"]      # [Ng]
+    SEG["images"] = ckpt["images"]                 # [1, S, 3, H, W]
+    SEG["frame_names"] = ckpt.get("frame_names", None)
+    m = ckpt.get("final_metrics", {})
+    print(
+        f"✓ Segmentation head ready: {SEG['images'].shape[1]} frames, "
+        f"{SEG['coords'].shape[1]} queries; checkpoint mIoU="
+        f"{m.get('mIoU', float('nan')):.3f}, class_acc={m.get('class_acc', float('nan')):.3f}"
+    )
+
+
+@torch.no_grad()
+def compute_seg_colors(images_dev: torch.Tensor, mask_thr: float = 0.5, score_thr: float = 0.5):
+    """
+    Run the D4RT decoder head on `images_dev` and build a per-pixel instance-colored image.
+
+    Args:
+        images_dev (torch.Tensor): [1, S, 3, H, W] preprocessed scene frames (on device).
+        mask_thr: sigmoid threshold for a pixel to belong to an instance's mask.
+        score_thr: min class confidence for a query to count as a real instance.
+
+    Returns:
+        (seg_colors, legend_str):
+          seg_colors: np.uint8 [S, H, W, 3] — instance-colored image (background keeps RGB).
+          legend_str: human-readable "color -> class" legend.
+    """
+    _, S, _, H, W = images_dev.shape
+
+    agg_list, patch_start_idx = model.aggregator(images_dev)
+    global_features = agg_list[-1]
+
+    coords = SEG["coords"].to(device)
+    view_ids = SEG["view_ids"].to(device).clamp_max(S - 1)  # guard if scene has fewer frames
+
+    class_logits, _, pred_masks = SEG["head"](
+        coords, view_ids, images_dev, global_features, patch_start_idx
+    )
+    class_logits = class_logits[0]   # [N, C]
+    pred_masks = pred_masks[0]       # [N, S, h, w]
+    N = class_logits.shape[0]
+
+    probs = torch.softmax(class_logits, dim=-1)
+    labels = probs.argmax(dim=-1)            # [N]
+    scores = probs.max(dim=-1).values        # [N]
+
+    # The fixed overfit queries are ordered [real instances ..., background points ...] (see
+    # generate_query_points in train_overfit.py), so the first Ng queries ARE the real
+    # instances, in GT order. Coloring only those reproduces the validated 11-instance result
+    # and avoids the background query points — which this overfit head does not push to the
+    # background class — painting spurious overlapping masks over most of the image.
+    n_inst = int(SEG["gt_classes"].shape[0]) if SEG.get("gt_classes") is not None else N
+    keep = list(range(min(n_inst, N)))
+
+    # Upsample mask probabilities to full image resolution.
+    mask_prob = torch.sigmoid(pred_masks)                                   # [N, S, h, w]
+    mask_prob = F.interpolate(
+        mask_prob.reshape(N * S, 1, *pred_masks.shape[-2:]),
+        size=(H, W), mode="bilinear", align_corners=False,
+    ).reshape(N, S, H, W).cpu().numpy()
+
+    base_rgb = images_dev[0].permute(0, 2, 3, 1).clamp(0, 1).cpu().numpy()  # [S, H, W, 3]
+    seg = base_rgb.copy()
+
+    # Per-pixel winner-takes-all over kept instances (above mask threshold).
+    best_val = np.full((S, H, W), mask_thr, dtype=np.float32)
+    best_k = np.full((S, H, W), -1, dtype=np.int64)
+    for color_i, i in enumerate(keep):
+        pv = mask_prob[i]
+        better = pv > best_val
+        best_val[better] = pv[better]
+        best_k[better] = color_i
+
+    legend_lines = []
+    for color_i, i in enumerate(keep):
+        col = INSTANCE_PALETTE[color_i % len(INSTANCE_PALETTE)].astype(np.float32) / 255.0
+        seg[best_k == color_i] = col
+        cls_name = IDX_TO_CLASS.get(int(labels[i]), str(int(labels[i])))
+        legend_lines.append(f"{cls_name} ({float(scores[i]):.2f})")
+
+    seg_colors = (np.clip(seg, 0, 1) * 255).astype(np.uint8)
+    legend_str = "Predicted instances: " + ", ".join(legend_lines) if legend_lines else "No instances detected."
+    return seg_colors, legend_str
+
+
+# Parse the optional segmentation checkpoint and load it before the UI is built
+# (the "Load D4RT Checkpoint Scene" button is only shown when a checkpoint is available).
+_arg_parser = argparse.ArgumentParser(description="VGGT Gradio demo (+ optional D4RT masks in 3D)")
+_arg_parser.add_argument(
+    "--seg_checkpoint", type=str, default=None,
+    help="Path to a D4RT checkpoint.pth (from train_overfit.py) to enable 3D instance "
+         "segmentation coloring. If omitted, the most recent checkpoint under the output dir "
+         "is auto-discovered.",
+)
+_arg_parser.add_argument(
+    "--no_seg", action="store_true", help="Disable segmentation coloring even if a checkpoint exists.",
+)
+_cli_args, _ = _arg_parser.parse_known_args()
+
+if not _cli_args.no_seg:
+    _seg_ckpt = _cli_args.seg_checkpoint or _find_default_seg_checkpoint()
+    if _seg_ckpt and os.path.exists(_seg_ckpt):
+        try:
+            load_seg_checkpoint(_seg_ckpt)
+        except Exception as e:  # pragma: no cover - demo robustness
+            print(f"⚠ Could not load segmentation checkpoint ({_seg_ckpt}): {e}")
+    else:
+        print("No D4RT segmentation checkpoint found; 3D mask coloring disabled. "
+              "Pass --seg_checkpoint /path/to/checkpoint.pth to enable it.")
 
 
 # -------------------------------------------------------------------------
@@ -91,6 +250,15 @@ def run_model(target_dir, model) -> dict:
     depth_map = predictions["depth"]  # (S, H, W, 1)
     world_points = unproject_depth_map_to_point_map(depth_map, predictions["extrinsic"], predictions["intrinsic"])
     predictions["world_points_from_depth"] = world_points
+
+    # Predicted instance segmentation colors (item: 3D mask visualization). Computed here so
+    # they are cached in predictions.npz and can be toggled in the viewer without recompute.
+    if SEG["head"] is not None:
+        images_dev = images.unsqueeze(0) if images.dim() == 4 else images
+        seg_colors, seg_legend = compute_seg_colors(images_dev)
+        predictions["seg_colors"] = seg_colors
+        predictions["seg_legend"] = np.array(seg_legend)
+        print(seg_legend)
 
     # Clean up
     torch.cuda.empty_cache()
@@ -180,6 +348,49 @@ def update_gallery_on_upload(input_video, input_images):
     return None, target_dir, image_paths, "Upload complete. Click 'Reconstruct' to begin 3D processing."
 
 
+def load_checkpoint_scene():
+    """
+    Populate the gallery with the exact scene frames stored in the loaded D4RT checkpoint
+    (written as lossless PNGs so VGGT reconstructs them at the same 518x518 resolution the
+    decoder head was trained on). Lets the user reconstruct that scene and then color the 3D
+    point cloud by the predicted instances ("Color By: Predicted Instances").
+    """
+    if SEG["images"] is None:
+        return None, "None", None, (
+            "No segmentation checkpoint loaded. Start the demo with "
+            "`--seg_checkpoint /path/to/checkpoint.pth`."
+        )
+
+    from PIL import Image
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    target_dir = f"input_images_{timestamp}"
+    target_dir_images = os.path.join(target_dir, "images")
+    os.makedirs(target_dir_images, exist_ok=True)
+
+    imgs = SEG["images"][0]  # [S, 3, H, W] in [0, 1]
+    names = SEG["frame_names"]
+    image_paths = []
+    for s in range(imgs.shape[0]):
+        arr = (imgs[s].permute(1, 2, 0).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
+        name = None
+        if names is not None:
+            name = names[s]
+            if isinstance(name, (list, tuple)):
+                name = name[0]
+        stem = os.path.splitext(str(name))[0] if name else f"frame_{s:05d}"
+        dst = os.path.join(target_dir_images, f"{stem}.png")
+        Image.fromarray(arr).save(dst)
+        image_paths.append(dst)
+
+    image_paths = sorted(image_paths)
+    msg = (
+        f"Loaded checkpoint scene ({len(image_paths)} frames). Click 'Reconstruct', then set "
+        "'Color By' = 'Predicted Instances' to see the masks in 3D."
+    )
+    return None, target_dir, image_paths, msg
+
+
 # -------------------------------------------------------------------------
 # 4) Reconstruction: uses the target_dir plus any viz parameters
 # -------------------------------------------------------------------------
@@ -192,6 +403,7 @@ def gradio_demo(
     show_cam=True,
     mask_sky=False,
     prediction_mode="Pointmap Regression",
+    color_mode="Image",
 ):
     """
     Perform reconstruction using the already-created target_dir/images.
@@ -224,7 +436,7 @@ def gradio_demo(
     # Build a GLB file name
     glbfile = os.path.join(
         target_dir,
-        f"glbscene_{conf_thres}_{frame_filter.replace('.', '_').replace(':', '').replace(' ', '_')}_maskb{mask_black_bg}_maskw{mask_white_bg}_cam{show_cam}_sky{mask_sky}_pred{prediction_mode.replace(' ', '_')}.glb",
+        f"glbscene_{conf_thres}_{frame_filter.replace('.', '_').replace(':', '').replace(' ', '_')}_maskb{mask_black_bg}_maskw{mask_white_bg}_cam{show_cam}_sky{mask_sky}_pred{prediction_mode.replace(' ', '_')}_color{color_mode.replace(' ', '_')}.glb",
     )
 
     # Convert predictions to GLB
@@ -238,8 +450,12 @@ def gradio_demo(
         mask_sky=mask_sky,
         target_dir=target_dir,
         prediction_mode=prediction_mode,
+        color_mode=color_mode,
     )
     glbscene.export(file_obj=glbfile)
+
+    seg_legend = predictions.get("seg_legend")
+    seg_legend = str(seg_legend) if seg_legend is not None else None
 
     # Cleanup
     del predictions
@@ -249,6 +465,8 @@ def gradio_demo(
     end_time = time.time()
     print(f"Total time: {end_time - start_time:.2f} seconds (including IO)")
     log_msg = f"Reconstruction Success ({len(all_files)} frames). Waiting for visualization."
+    if "Instance" in color_mode and seg_legend:
+        log_msg += f"  |  {seg_legend}"
 
     return glbfile, log_msg, gr.Dropdown(choices=frame_filter_choices, value=frame_filter, interactive=True)
 
@@ -271,7 +489,8 @@ def update_log():
 
 
 def update_visualization(
-    target_dir, conf_thres, frame_filter, mask_black_bg, mask_white_bg, show_cam, mask_sky, prediction_mode, is_example
+    target_dir, conf_thres, frame_filter, mask_black_bg, mask_white_bg, show_cam, mask_sky,
+    prediction_mode, color_mode, is_example
 ):
     """
     Reload saved predictions from npz, create (or reuse) the GLB for new parameters,
@@ -301,12 +520,15 @@ def update_visualization(
         "world_points_from_depth",
     ]
 
-    loaded = np.load(predictions_path)
-    predictions = {key: np.array(loaded[key]) for key in key_list}
+    loaded = np.load(predictions_path, allow_pickle=True)
+    predictions = {key: np.array(loaded[key]) for key in key_list if key in loaded.files}
+    # Optional predicted-instance colors (present only when a seg checkpoint was loaded).
+    if "seg_colors" in loaded.files:
+        predictions["seg_colors"] = np.array(loaded["seg_colors"])
 
     glbfile = os.path.join(
         target_dir,
-        f"glbscene_{conf_thres}_{frame_filter.replace('.', '_').replace(':', '').replace(' ', '_')}_maskb{mask_black_bg}_maskw{mask_white_bg}_cam{show_cam}_sky{mask_sky}_pred{prediction_mode.replace(' ', '_')}.glb",
+        f"glbscene_{conf_thres}_{frame_filter.replace('.', '_').replace(':', '').replace(' ', '_')}_maskb{mask_black_bg}_maskw{mask_white_bg}_cam{show_cam}_sky{mask_sky}_pred{prediction_mode.replace(' ', '_')}_color{color_mode.replace(' ', '_')}.glb",
     )
 
     if not os.path.exists(glbfile):
@@ -320,6 +542,7 @@ def update_visualization(
             mask_sky=mask_sky,
             target_dir=target_dir,
             prediction_mode=prediction_mode,
+            color_mode=color_mode,
         )
         glbscene.export(file_obj=glbfile)
 
@@ -457,6 +680,10 @@ with gr.Blocks(
 
             with gr.Row():
                 submit_btn = gr.Button("Reconstruct", scale=1, variant="primary")
+                load_ckpt_btn = gr.Button(
+                    "Load D4RT Checkpoint Scene", scale=1,
+                    variant="secondary", visible=SEG["head"] is not None,
+                )
                 clear_btn = gr.ClearButton(
                     [input_video, input_images, reconstruction_output, log_output, target_dir_output, image_gallery],
                     scale=1,
@@ -467,6 +694,15 @@ with gr.Blocks(
                     ["Depthmap and Camera Branch", "Pointmap Branch"],
                     label="Select a Prediction Mode",
                     value="Depthmap and Camera Branch",
+                    scale=1,
+                    elem_id="my_radio",
+                )
+
+            with gr.Row():
+                color_mode = gr.Radio(
+                    ["Image", "Predicted Instances"],
+                    label="Color By",
+                    value="Image",
                     scale=1,
                     elem_id="my_radio",
                 )
@@ -559,10 +795,18 @@ with gr.Blocks(
             show_cam,
             mask_sky,
             prediction_mode,
+            color_mode,
         ],
         outputs=[reconstruction_output, log_output, frame_filter],
     ).then(
         fn=lambda: "False", inputs=[], outputs=[is_example]  # set is_example to "False"
+    )
+
+    # Load the D4RT checkpoint scene into the gallery (only when a checkpoint is loaded).
+    load_ckpt_btn.click(
+        fn=load_checkpoint_scene,
+        inputs=[],
+        outputs=[reconstruction_output, target_dir_output, image_gallery, log_output],
     )
 
     # -------------------------------------------------------------------------
@@ -579,6 +823,7 @@ with gr.Blocks(
             show_cam,
             mask_sky,
             prediction_mode,
+            color_mode,
             is_example,
         ],
         [reconstruction_output, log_output],
@@ -594,6 +839,7 @@ with gr.Blocks(
             show_cam,
             mask_sky,
             prediction_mode,
+            color_mode,
             is_example,
         ],
         [reconstruction_output, log_output],
@@ -609,6 +855,7 @@ with gr.Blocks(
             show_cam,
             mask_sky,
             prediction_mode,
+            color_mode,
             is_example,
         ],
         [reconstruction_output, log_output],
@@ -624,6 +871,7 @@ with gr.Blocks(
             show_cam,
             mask_sky,
             prediction_mode,
+            color_mode,
             is_example,
         ],
         [reconstruction_output, log_output],
@@ -639,6 +887,7 @@ with gr.Blocks(
             show_cam,
             mask_sky,
             prediction_mode,
+            color_mode,
             is_example,
         ],
         [reconstruction_output, log_output],
@@ -654,6 +903,7 @@ with gr.Blocks(
             show_cam,
             mask_sky,
             prediction_mode,
+            color_mode,
             is_example,
         ],
         [reconstruction_output, log_output],
@@ -669,6 +919,24 @@ with gr.Blocks(
             show_cam,
             mask_sky,
             prediction_mode,
+            color_mode,
+            is_example,
+        ],
+        [reconstruction_output, log_output],
+    )
+
+    color_mode.change(
+        update_visualization,
+        [
+            target_dir_output,
+            conf_thres,
+            frame_filter,
+            mask_black_bg,
+            mask_white_bg,
+            show_cam,
+            mask_sky,
+            prediction_mode,
+            color_mode,
             is_example,
         ],
         [reconstruction_output, log_output],
