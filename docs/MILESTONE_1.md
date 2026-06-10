@@ -1,8 +1,9 @@
 # Milestone 1 — D4RT Multi-View Instance Segmentation Prototype on VGGT
 
-**Status:** ✅ Complete — end-to-end pipeline implemented and validated; the model now predicts
-**dense multi-view instance masks** and is scored with real metrics (mIoU 0.90 / AP50 0.96 on the
-overfit scene).
+**Status:** ✅ Complete — end-to-end pipeline implemented and validated, **including multi-scene
+training**: the model predicts **dense multi-view instance masks**, trains on 4 ScanNet scenes
+simultaneously (mean mIoU **0.967**, class_acc 0.94), and is evaluated on a 5th scene it never
+saw (see §9). All open issues of §8 are resolved.
 **Goal:** Attach a novel D4RT-style / DETR-like cross-attention decoder for multi-view
 instance segmentation to the global feature output of the frozen VGGT backbone, and prove
 that gradients flow correctly from (pseudo-)labels back through the decoder.
@@ -59,13 +60,14 @@ backward() → updates QueryGenerator + InstanceDecoder (backbone frozen)
 
 | File | Purpose |
 |------|---------|
-| `HOOK_PLAN.md` | Phase 1 analysis: where/how to hook into VGGT |
-| `data/scannet_overfit.py` | Phase 2: single-scene ScanNet dataset loader |
+| `docs/HOOK_PLAN.md` | Phase 1 analysis: where/how to hook into VGGT |
+| `data/scannet_overfit.py` | Phase 2: single-scene ScanNet loader + `ScanNetMultiSceneDataset` (item 8.7) |
 | `models/d4rt_decoder.py` | Phases 3 & 4: QueryGenerator + InstanceDecoder (+ dense mask head) + wrapper |
-| `train/loss.py` | Phase 5: Focal/Dice/BCE losses, mask-aware Hungarian matcher, combined `D4RTLoss` |
+| `train/loss.py` | Phase 5: Focal/Dice/BCE losses, mask-aware Hungarian matcher, batch-aware `D4RTLoss` |
 | `train/eval_metrics.py` | Item 8.4: instance-segmentation metrics (mIoU / AP50 / AP75 / mAP / class_acc) |
-| `train_overfit.py` | Phase 6: end-to-end overfit training loop + evaluation |
-| `test_phase2.py … test_phase5.py`, `test_eval.py` | Standalone validation scripts per phase + metrics |
+| `scripts/train_overfit.py` | Phase 6: end-to-end single-scene overfit loop + evaluation |
+| `scripts/train_multiscene.py` | Item 8.7 / §9: multi-scene training + held-out-scene evaluation, LR schedule, checkpoint/resume |
+| `tests/test_phase2.py … test_phase5.py`, `tests/test_eval.py` | Standalone validation scripts per phase + metrics |
 
 ---
 
@@ -303,31 +305,46 @@ through the decoder and query generator, while the VGGT backbone stays frozen.
 
 ```bash
 # Per-phase unit validation
-python test_phase2.py
-python test_phase3.py
-python test_phase4.py
-python test_phase5.py
-python test_eval.py     # instance-segmentation metrics
+python tests/test_phase2.py
+python tests/test_phase3.py
+python tests/test_phase4.py
+python tests/test_phase5.py
+python tests/test_eval.py     # instance-segmentation metrics
 
-# End-to-end overfit (uses the real scene by default)
-python train_overfit.py \
+# Single-scene end-to-end overfit (uses the real scene by default)
+python scripts/train_overfit.py \
     --num_epochs 400 \
     --num_frames 4 \
     --num_queries 16 \
     --learning_rate 2e-3 \
     --scene_dir /cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans/scene0000_00/raw_data
+
+# Multi-scene training (train on 4 scenes, evaluate on a held-out 5th — see §9)
+python scripts/train_multiscene.py \
+    --train_scenes scene0000_00,scene0001_00,scene0002_00,scene0003_00 \
+    --val_scenes scene0004_00 \
+    --num_epochs 2000 --num_frames 8 --num_queries 32 --learning_rate 2e-3 \
+    --save_checkpoint /cluster/work/igp_psr/niacobone/distillation/output/<run_name>/checkpoint.pth
 ```
 
-Key flags: `--dropout` (0 by default for a clean overfit), `--unfreeze_backbone` (train the
-backbone too), `--save_checkpoint PATH`, `--device {cuda,cpu}`. If the scene directory is
-unavailable the script falls back to an auto-generated synthetic scene.
+Key flags (`train_overfit.py`): `--dropout` (0 by default for a clean overfit),
+`--unfreeze_backbone`, `--save_checkpoint PATH`, `--device {cuda,cpu}`. If the scene directory
+is unavailable the script falls back to an auto-generated synthetic scene.
+Key flags (`train_multiscene.py`): `--warmup_epochs`, `--eval_interval`, `--resume CKPT`
+(restores head + optimizer + scheduler), `--num_views` (view-embedding table size,
+defaults to `max(num_frames, 10)`). Scene names are resolved under `--scans_root`.
+
+To visualize a trained checkpoint in 3D: `python demos/demo_gradio.py --seg_checkpoint
+<path>` (auto-discovers the latest checkpoint if omitted). With a multi-scene checkpoint a
+dropdown lets you load any bundled scene — including the held-out validation scene — then
+"Reconstruct" and set *Color By: Predicted Instances*.
 
 ---
 
-## 8. Next Steps — Open Issues to Address First
+## 8. Open Issues — all resolved
 
-These were identified during review. Item 8.1 has since been **completed** (see below); the
-rest are intentionally left for the next pipeline and are the recommended starting points.
+These were identified during review. All items have since been **completed**; the details of
+each resolution are kept below for reference.
 
 ### 8.1 Replace synthetic targets with real SAM3 supervision — ✅ DONE
 `create_dummy_gt` (random class/embedding/coordinate targets) was replaced by a target builder
@@ -343,11 +360,15 @@ its view embedding and local RGB patch come from a frame where the instance is a
 With this (and the cross-view fix of §8.3), all real instances are matched every epoch and the
 overfit reaches ~89% loss reduction (§6).
 
-### 8.2 Make `D4RTLoss` batch-aware
-`D4RTLoss.forward` flattens `[B, N, …] → [B·N, …]` and matches against a single GT set. This
-is correct only for `B=1`; for `B>1` it conflates samples. The matcher must run **per batch
-item** with per-sample GT lists (DETR-style), and the loss averaged over the batch. This
-also requires a custom `collate_fn` since per-sample instance counts vary.
+### 8.2 Make `D4RTLoss` batch-aware — ✅ DONE
+`D4RTLoss.forward` no longer flattens `[B, N, …] → [B·N, …]`: the Hungarian matcher now runs
+**per batch sample** against that sample's own GT set (DETR-style) via an internal
+`_forward_single`, and the loss components are averaged over the samples that have at least one
+GT instance (`num_matches` is summed). For `B > 1` the GT arguments are **lists of per-sample
+tensors** (instance counts may differ per sample); for `B == 1` or 2D predictions the old
+single-tensor call signature still works, so all phase tests pass unchanged. Passing a single
+GT tensor with `B > 1` now raises an explicit error instead of silently conflating samples.
+Verified: the `B=2` batched loss equals the mean of the two single-sample losses.
 
 ### 8.3 Fix cross-view instance identity in the dataset — ✅ DONE
 Previously every `(frame, class)` with foreground became a *separate* instance ID, so the same
@@ -391,19 +412,75 @@ instance-segmentation metrics — **mIoU, AP50, AP75, mAP (0.50:0.95), and class
 the dense mask + class logits vs. the GT, and `train_overfit.py` reports them before/after
 training. This replaces "raw loss reduction" as the success signal (partially addresses §8.7).
 
-### 8.5 Add a coordinate-refinement head (or drop the coord loss)
-There is no coordinate-regression head, so the coordinate loss has no gradient path and was
-disabled (`coord_loss_weight=0`). Either add a head that refines `(u, v)` (so the term
-becomes learnable) or keep coordinates for matching only.
+### 8.5 Coordinate loss — ✅ DONE (resolved as "matching only")
+Decision: **no coordinate-refinement head**; coordinates are query *prompts*, not predictions.
+They participate in the Hungarian matcher cost (where they help disambiguate same-class
+instances) but carry no loss term (`coord_loss_weight=0`); the reported `coord_loss` is a
+diagnostic of the matched coordinate error only. `D4RTLoss`/the matcher now also tolerate
+`gt_coordinates=None`. A learnable refinement head remains possible future work if predicted
+point tracks are ever needed (true D4RT-style trajectory readout).
 
-### 8.6 Robustness & performance
-- **View embedding bound:** `nn.Embedding(num_views=10)` will index out of range if
-  `num_frames > num_views`; size it to the max sequence length.
-- **Vectorize patch extraction:** `LocalPatchFeatureExtractor` loops `B·N` individual
-  `grid_sample` calls; batch them into a single call before scaling up query counts.
-- **Use `reshape` over `view`** on backbone outputs to avoid contiguity assumptions.
+### 8.6 Robustness & performance — ✅ DONE
+- **View embedding bound:** `QueryGenerator` now raises a clear `ValueError` when
+  `view_ids >= num_views`, and `train_multiscene.py` sizes the table via `--num_views`
+  (default `max(num_frames, 10)`). The head config is stored in the checkpoint and the demo
+  rebuilds the head from it, so changed sizes stay loadable.
+- **Vectorized patch extraction:** `LocalPatchFeatureExtractor` now gathers each query's
+  source frame and runs **one** batched `grid_sample` over all `B·N` patches (verified
+  numerically identical to the old loop).
+- **`reshape` over `view`** on image/backbone tensors (no contiguity assumptions).
 
-### 8.7 Training realism — partially addressed
-Evaluation metrics (mAP / mIoU / class accuracy) are now in place (§8.4). Still open: multi-scene
-loading, train/val split, learning-rate schedule, optional partial backbone unfreezing, and
-checkpointing/resume.
+### 8.7 Training realism — ✅ DONE
+Delivered by `scripts/train_multiscene.py` + `ScanNetMultiSceneDataset` (see §9 for results):
+- **Multi-scene loading:** one fixed, deterministic bundle per scene
+  (`frame_sampling="even"` picks evenly-spaced frames; seeded background queries).
+- **Train/val split:** `--train_scenes` / `--val_scenes`; the val scene is never trained on.
+- **LR schedule:** linear warmup → cosine decay (`--warmup_epochs`, floor at 5% of base LR).
+- **Checkpointing/resume:** checkpoints carry head weights + head config + optimizer +
+  scheduler + per-scene data/metrics; `--resume` restores all of them.
+- **Efficiency:** the frozen backbone runs **once per scene up front** and its global features
+  are cached, so every epoch only runs the ~6.5M-param head (2000 epochs × 4 scenes ≈ 4 min
+  on one RTX 4090).
+- *Not needed for this milestone:* partial backbone unfreezing (the head overfits the training
+  scenes without it); revisit when scaling the dataset.
+
+---
+
+## 9. Multi-Scene Training Result (4 train scenes + 1 held-out scene)
+
+**Run:** `scripts/train_multiscene.py`, 2000 epochs, 8 frames/scene (evenly spaced from the
+100 masked `subset/` frames), 32 queries, lr 2e-3 (50-epoch warmup → cosine), dropout 0,
+frozen backbone. Checkpoint:
+`/cluster/work/igp_psr/niacobone/distillation/output/d4rt_multiscene_4train_20260610_123647/checkpoint.pth`
+(bundles the trained head + all 5 scene batches; loadable by `demos/demo_gradio.py`).
+
+Loss/scene fell **2.82 → 0.067 (-97.6%)** with all **37** cross-view training instances matched
+every epoch.
+
+| Scene | Split | mIoU | AP50 | AP75 | mAP | class_acc |
+|-------|-------|------|------|------|-----|-----------|
+| scene0000_00 | train | 0.949 | 0.463 | 0.463 | 0.413 | 1.000 |
+| scene0001_00 | train | 0.971 | 0.570 | 0.570 | 0.535 | 1.000 |
+| scene0002_00 | train | 0.967 | 0.539 | 0.539 | 0.487 | 0.909 |
+| scene0003_00 | train | 0.982 | 0.597 | 0.597 | 0.592 | 0.833 |
+| **mean (train)** | | **0.967** | **0.542** | | | **0.936** |
+| scene0004_00 | **val (never seen)** | 0.027 | 0.000 | 0.000 | 0.000 | 0.286 |
+
+**Reading the numbers.**
+- The head fits **four scenes at once** almost perfectly (mIoU ≥ 0.95 per scene, near-perfect
+  classification of matched instances), confirming that a single set of decoder weights can
+  represent multiple scenes' instances simultaneously — the multi-scene pipeline works.
+- Train AP50 (~0.54) is much lower than mIoU because AP also penalizes the extra background
+  query points, which the head does not push to the background class (no "no-object"
+  supervision is applied to unmatched queries yet — see below).
+- **Generalization is not there yet, as expected with only 4 training scenes.** On the held-out
+  scene the final checkpoint reaches mIoU 0.03 / class_acc 0.29. Interestingly, val mIoU
+  *peaked* mid-training (~0.13 around epoch 600) and then decayed as the head kept memorizing
+  the training scenes — classic overfitting, visible thanks to the held-out-scene evaluation.
+
+**What this implies for Milestone 2:** to obtain real generalization the next iteration should
+(a) scale the number of training scenes (tens-to-hundreds, not 4), (b) supervise unmatched
+queries toward the background class (DETR's "no-object" loss) so AP becomes meaningful and
+inference doesn't need GT-ordered queries, (c) add data augmentation / random frame sampling
+as regularization instead of the fixed overfit batch, and (d) consider early stopping on val
+mIoU (the mid-training peak shows the signal exists).

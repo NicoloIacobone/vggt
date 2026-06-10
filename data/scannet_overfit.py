@@ -35,6 +35,9 @@ class ScanNetSingleSceneDataset(Dataset):
         image_ext (str): Image extension (default: '.jpg')
         mask_ext (str): Mask extension (default: '.png')
         img_size (int): Target image size for resizing (default: 518)
+        frame_sampling (str): "random" samples num_frames frames anew on every __getitem__;
+            "even" picks num_frames evenly-spaced frames (deterministic — required for a
+            stable multi-scene overfit where the same frames must be revisited every epoch)
 
     Cross-view instance identity (item 8.3): a given ScanNet class present in the scene is
     treated as ONE multi-view instance with a single global ID that is consistent across all
@@ -65,6 +68,7 @@ class ScanNetSingleSceneDataset(Dataset):
         mask_ext: str = ".png",
         img_size: int = 518,
         images_subdir: Optional[str] = None,
+        frame_sampling: str = "random",
     ):
         super().__init__()
         self.scene_dir = Path(scene_dir)
@@ -72,6 +76,9 @@ class ScanNetSingleSceneDataset(Dataset):
         self.image_ext = image_ext
         self.mask_ext = mask_ext
         self.img_size = img_size
+        if frame_sampling not in ("random", "even"):
+            raise ValueError(f"frame_sampling must be 'random' or 'even', got {frame_sampling!r}")
+        self.frame_sampling = frame_sampling
 
         # Locate the image directory.
         # IMPORTANT: masks are only computed for the subsampled set of frames (e.g. a
@@ -124,10 +131,15 @@ class ScanNetSingleSceneDataset(Dataset):
         return 1  # Single scene dataset - always returns 1 sample
 
     def __getitem__(self, idx):
-        # Sample num_frames random frames
-        sampled_indices = random.sample(range(len(self.image_files)),
-                                       min(self.num_frames, len(self.image_files)))
-        sampled_indices.sort()
+        k = min(self.num_frames, len(self.image_files))
+        if self.frame_sampling == "even":
+            # Deterministic, evenly-spaced frames spanning the scene (stable across epochs).
+            sampled_indices = np.unique(
+                np.linspace(0, len(self.image_files) - 1, k).round().astype(int)
+            ).tolist()
+        else:
+            sampled_indices = random.sample(range(len(self.image_files)), k)
+            sampled_indices.sort()
 
         sampled_images = [self.image_files[i] for i in sampled_indices]
         frame_names = [f.stem for f in sampled_images]
@@ -248,3 +260,36 @@ class ScanNetSingleSceneDataset(Dataset):
         v = centroid_row / (H - 1)
 
         return (float(u), float(v))
+
+
+class ScanNetMultiSceneDataset(Dataset):
+    """
+    Multi-scene wrapper (item 8.7): one item per scene, each loaded by its own
+    ScanNetSingleSceneDataset. Per-scene instance counts differ, so use batch_size=1
+    (or a custom collate_fn) and let the batch-aware D4RTLoss match per sample.
+
+    Args:
+        scene_dirs: list of scene directories (each as accepted by ScanNetSingleSceneDataset)
+        **kwargs: forwarded to every ScanNetSingleSceneDataset (num_frames, img_size,
+            frame_sampling, ...)
+    """
+
+    def __init__(self, scene_dirs: List[str], **kwargs):
+        super().__init__()
+        if not scene_dirs:
+            raise ValueError("scene_dirs must contain at least one scene directory")
+        self.scenes = [ScanNetSingleSceneDataset(str(d), **kwargs) for d in scene_dirs]
+        # Human-readable scene names: the scene folder, not the trailing 'raw_data'.
+        self.scene_names = []
+        for d in scene_dirs:
+            p = Path(d)
+            self.scene_names.append(p.parent.name if p.name == "raw_data" else p.name)
+
+    def __len__(self):
+        return len(self.scenes)
+
+    def __getitem__(self, idx):
+        sample = self.scenes[idx][0]
+        sample["scene_name"] = self.scene_names[idx]
+        sample["scene_idx"] = idx
+        return sample

@@ -53,12 +53,24 @@ model = model.to(device)
 # -------------------------------------------------------------------------
 SEG = {
     "head": None,       # D4RTInstanceSegmentationHead
-    "coords": None,     # [1, N, 2] saved query coordinates
+    "coords": None,     # [1, N, 2] saved query coordinates (currently selected scene)
     "view_ids": None,   # [1, N] saved query view ids
     "gt_classes": None, # [Ng] GT classes (for reference)
-    "images": None,     # [1, S, 3, H, W] the exact scene frames that were trained on
+    "images": None,     # [1, S, 3, H, W] the exact scene frames of the selected scene
     "frame_names": None,
+    "scenes": None,        # list of per-scene dicts (multi-scene checkpoints)
+    "scene_labels": [],    # human-readable labels for the scene dropdown
 }
+
+
+def _select_seg_scene(idx: int):
+    """Point the active SEG fields at scene `idx` of the loaded checkpoint."""
+    s = SEG["scenes"][idx]
+    SEG["coords"] = s["coordinates"]
+    SEG["view_ids"] = s["view_ids"]
+    SEG["gt_classes"] = s["gt"]["classes"]
+    SEG["images"] = s["images"]
+    SEG["frame_names"] = s.get("frame_names", None)
 
 
 def _find_default_seg_checkpoint():
@@ -72,31 +84,41 @@ def load_seg_checkpoint(ckpt_path: str):
     """Load the trained decoder head + its fixed query batch into the global SEG dict."""
     print(f"Loading D4RT segmentation checkpoint: {ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    head = D4RTInstanceSegmentationHead(
-        num_views=10,
-        hidden_dim=256,
-        num_classes=20,
-        num_decoder_layers=4,
-        patch_size=9,
-        mask_embed_dim=256,
-        memory_dim=2048,
-        dropout=0.0,
+    head_config = ckpt.get("head_config") or dict(
+        num_views=10, hidden_dim=256, num_classes=20, num_decoder_layers=4,
+        patch_size=9, mask_embed_dim=256, memory_dim=2048, dropout=0.0,
     )
+    head = D4RTInstanceSegmentationHead(**head_config)
     head.load_state_dict(ckpt["decoder_head_state_dict"])
     head.eval().to(device)
-
     SEG["head"] = head
-    SEG["coords"] = ckpt["coordinates"]            # [1, N, 2]
-    SEG["view_ids"] = ckpt["view_ids"]             # [1, N]
-    SEG["gt_classes"] = ckpt["gt"]["classes"]      # [Ng]
-    SEG["images"] = ckpt["images"]                 # [1, S, 3, H, W]
-    SEG["frame_names"] = ckpt.get("frame_names", None)
-    m = ckpt.get("final_metrics", {})
-    print(
-        f"✓ Segmentation head ready: {SEG['images'].shape[1]} frames, "
-        f"{SEG['coords'].shape[1]} queries; checkpoint mIoU="
-        f"{m.get('mIoU', float('nan')):.3f}, class_acc={m.get('class_acc', float('nan')):.3f}"
-    )
+
+    # Multi-scene checkpoints (train_multiscene.py) carry a "scenes" list; single-scene
+    # checkpoints (train_overfit.py) are adapted into a one-entry list.
+    scenes = ckpt.get("scenes")
+    if not scenes:
+        scenes = [{
+            "name": "checkpoint scene",
+            "split": "train",
+            "images": ckpt["images"],
+            "coordinates": ckpt["coordinates"],
+            "view_ids": ckpt["view_ids"],
+            "gt": ckpt["gt"],
+            "frame_names": ckpt.get("frame_names", None),
+            "metrics": ckpt.get("final_metrics", {}),
+        }]
+    SEG["scenes"] = scenes
+    SEG["scene_labels"] = [f"{s['name']} ({s.get('split', 'train')})" for s in scenes]
+    _select_seg_scene(0)
+
+    print(f"✓ Segmentation head ready: {len(scenes)} scene(s)")
+    for s in scenes:
+        m = s.get("metrics", {}) or {}
+        print(
+            f"    {s['name']} [{s.get('split', 'train')}]: {s['images'].shape[1]} frames, "
+            f"{s['coordinates'].shape[1]} queries, mIoU={m.get('mIoU', float('nan')):.3f}, "
+            f"class_acc={m.get('class_acc', float('nan')):.3f}"
+        )
 
 
 @torch.no_grad()
@@ -349,18 +371,25 @@ def update_gallery_on_upload(input_video, input_images):
     return None, target_dir, image_paths, "Upload complete. Click 'Reconstruct' to begin 3D processing."
 
 
-def load_checkpoint_scene():
+def load_checkpoint_scene(scene_label=None):
     """
     Populate the gallery with the exact scene frames stored in the loaded D4RT checkpoint
     (written as lossless PNGs so VGGT reconstructs them at the same 518x518 resolution the
     decoder head was trained on). Lets the user reconstruct that scene and then color the 3D
     point cloud by the predicted instances ("Color By: Predicted Instances").
+
+    `scene_label` selects which checkpoint scene to load (multi-scene checkpoints store the
+    training scenes AND the held-out validation scene); it also switches the query points /
+    GT used by `compute_seg_colors` to that scene's.
     """
-    if SEG["images"] is None:
+    if SEG["scenes"] is None:
         return None, "None", None, (
             "No segmentation checkpoint loaded. Start the demo with "
             "`--seg_checkpoint /path/to/checkpoint.pth`."
         )
+
+    if scene_label and scene_label in SEG["scene_labels"]:
+        _select_seg_scene(SEG["scene_labels"].index(scene_label))
 
     from PIL import Image
 
@@ -681,6 +710,12 @@ with gr.Blocks(
 
             with gr.Row():
                 submit_btn = gr.Button("Reconstruct", scale=1, variant="primary")
+                seg_scene_dd = gr.Dropdown(
+                    choices=SEG["scene_labels"],
+                    value=SEG["scene_labels"][0] if SEG["scene_labels"] else None,
+                    label="Checkpoint Scene (train/val)", scale=1,
+                    visible=SEG["head"] is not None and len(SEG["scene_labels"]) > 1,
+                )
                 load_ckpt_btn = gr.Button(
                     "Load D4RT Checkpoint Scene", scale=1,
                     variant="secondary", visible=SEG["head"] is not None,
@@ -806,7 +841,7 @@ with gr.Blocks(
     # Load the D4RT checkpoint scene into the gallery (only when a checkpoint is loaded).
     load_ckpt_btn.click(
         fn=load_checkpoint_scene,
-        inputs=[],
+        inputs=[seg_scene_dd],
         outputs=[reconstruction_output, target_dir_output, image_gallery, log_output],
     )
 

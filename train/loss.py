@@ -229,12 +229,17 @@ class PointBipartiteMatcher(nn.Module):
             pred_flat = pred_masks.reshape(N_pred, -1)  # [N_pred, K] logits
             gt_flat = gt_masks.reshape(N_gt, -1)        # [N_gt, K] binary
             mask_cost = batch_dice_cost(pred_flat, gt_flat) + batch_bce_cost(pred_flat, gt_flat)
-        else:
+        elif gt_mask_embeddings is not None:
             # [N_pred, 1, mask_dim] - [1, N_gt, mask_dim] → [N_pred, N_gt]
             mask_cost = torch.cdist(mask_embeddings, gt_mask_embeddings, p=2)  # [N_pred, N_gt]
+        else:
+            mask_cost = torch.zeros((N_pred, N_gt), device=device)
 
-        # Compute coordinate distance (L2)
-        coord_cost = torch.cdist(coordinates, gt_coordinates, p=2)  # [N_pred, N_gt]
+        # Compute coordinate distance (L2); zero if no GT coordinates are provided
+        if gt_coordinates is not None:
+            coord_cost = torch.cdist(coordinates, gt_coordinates, p=2)  # [N_pred, N_gt]
+        else:
+            coord_cost = torch.zeros((N_pred, N_gt), device=device)
 
         # Combine costs
         cost_matrix = (
@@ -307,49 +312,88 @@ class D4RTLoss(nn.Module):
         class_logits: torch.Tensor,
         mask_embeddings: torch.Tensor,
         coordinates: torch.Tensor,
-        gt_classes: torch.Tensor,
-        gt_mask_embeddings: Optional[torch.Tensor] = None,
-        gt_coordinates: Optional[torch.Tensor] = None,
-        gt_masks: Optional[torch.Tensor] = None,
+        gt_classes,
+        gt_mask_embeddings=None,
+        gt_coordinates=None,
+        gt_masks=None,
         pred_masks: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
-        Compute D4RT loss.
+        Compute D4RT loss (batch-aware, item 8.2).
+
+        The Hungarian matcher runs PER BATCH SAMPLE against that sample's own GT set
+        (DETR-style); the loss components are averaged over the samples that have at least
+        one GT instance. For B > 1 the GT arguments must therefore be lists of per-sample
+        tensors (per-sample instance counts may differ); for B == 1 (or 2D predictions) a
+        plain tensor per GT argument is accepted as before.
 
         Args:
             class_logits (torch.Tensor): [B, N, num_classes] or [N, num_classes] predicted class logits
             mask_embeddings (torch.Tensor): [B, N, mask_dim] or [N, mask_dim] predicted mask embeddings
             coordinates (torch.Tensor): [B, N, 2] or [N, 2] predicted coordinates (normalized)
-            gt_classes (torch.Tensor): [N_gt] ground truth class labels
-            gt_mask_embeddings (torch.Tensor): [N_gt, mask_dim] ground truth mask embeddings
-            gt_coordinates (torch.Tensor): [N_gt, 2] ground truth coordinates (normalized)
-            gt_masks (torch.Tensor, optional): [N_gt, H, W] ground truth instance masks
-            pred_masks (torch.Tensor, optional): [N_pred, H, W] predicted instance masks
+            gt_classes: [N_gt] tensor, or list of B such tensors
+            gt_mask_embeddings: [N_gt, mask_dim] tensor or list of B such tensors (optional)
+            gt_coordinates: [N_gt, 2] tensor or list of B such tensors
+            gt_masks: [N_gt, ...] dense binary masks, or list of B such tensors (optional)
+            pred_masks (torch.Tensor, optional): [B, N, ...] or [N, ...] dense mask logits
 
         Returns:
             Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
                 - total_loss: scalar loss
-                - loss_dict: dictionary with individual loss components
+                - loss_dict: dictionary with individual loss components (averaged over batch)
         """
-        # Flatten batch dimension if present
-        if class_logits.dim() == 3:  # [B, N, num_classes]
-            B = class_logits.shape[0]
-            class_logits = class_logits.reshape(B * class_logits.shape[1], -1)  # [B*N, num_classes]
-            mask_embeddings = mask_embeddings.reshape(B * mask_embeddings.shape[1], -1)  # [B*N, mask_dim]
-            coordinates = coordinates.reshape(B * coordinates.shape[1], -1)  # [B*N, 2]
-            if pred_masks is not None and pred_masks.dim() >= 4:  # [B, N, ...]
-                pred_masks = pred_masks.reshape(B * pred_masks.shape[1], *pred_masks.shape[2:])
+        # Normalize predictions to have an explicit batch dimension.
+        if class_logits.dim() == 2:
+            class_logits = class_logits.unsqueeze(0)
+            mask_embeddings = mask_embeddings.unsqueeze(0)
+            coordinates = coordinates.unsqueeze(0)
+            if pred_masks is not None:
+                pred_masks = pred_masks.unsqueeze(0)
+        B = class_logits.shape[0]
 
-        # Match predictions to ground truth (mask-aware when dense masks are available)
-        pred_indices, gt_indices, cost_matrix = self.matcher(
-            class_logits, mask_embeddings, coordinates,
-            gt_classes, gt_mask_embeddings, gt_coordinates,
-            pred_masks, gt_masks,
-        )
+        def _as_per_sample_list(gt, name):
+            """GT may be one tensor (B==1) or a list of B per-sample tensors (B>1)."""
+            if gt is None:
+                return [None] * B
+            if isinstance(gt, (list, tuple)):
+                if len(gt) != B:
+                    raise ValueError(f"{name}: expected {B} per-sample tensors, got {len(gt)}")
+                return list(gt)
+            if B == 1:
+                return [gt]
+            raise ValueError(
+                f"{name} must be a list of {B} per-sample tensors when batch size > 1 "
+                f"(per-sample instance counts may differ)."
+            )
 
-        # If no matches, return zero loss
-        if len(pred_indices) == 0:
-            total_loss = torch.tensor(0.0, device=class_logits.device, requires_grad=True)
+        gt_classes_list = _as_per_sample_list(gt_classes, "gt_classes")
+        gt_embed_list = _as_per_sample_list(gt_mask_embeddings, "gt_mask_embeddings")
+        gt_coord_list = _as_per_sample_list(gt_coordinates, "gt_coordinates")
+        gt_mask_list = _as_per_sample_list(gt_masks, "gt_masks")
+
+        device = class_logits.device
+        zero = torch.tensor(0.0, device=device)
+        sums = {"class_loss": zero.clone(), "mask_embed_loss": zero.clone(),
+                "coord_loss": zero.clone(), "mask_loss": zero.clone()}
+        total_matches = 0
+        num_valid_samples = 0
+
+        for b in range(B):
+            sample_losses, n_matches = self._forward_single(
+                class_logits[b], mask_embeddings[b], coordinates[b],
+                gt_classes_list[b], gt_embed_list[b], gt_coord_list[b],
+                gt_mask_list[b],
+                pred_masks[b] if pred_masks is not None else None,
+            )
+            if n_matches == 0:
+                continue
+            num_valid_samples += 1
+            total_matches += n_matches
+            for k in sums:
+                sums[k] = sums[k] + sample_losses[k]
+
+        if num_valid_samples == 0:
+            total_loss = torch.tensor(0.0, device=device, requires_grad=True)
             return total_loss, {
                 "class_loss": torch.tensor(0.0),
                 "mask_embed_loss": torch.tensor(0.0),
@@ -357,6 +401,47 @@ class D4RTLoss(nn.Module):
                 "mask_loss": torch.tensor(0.0),
                 "num_matches": 0,
             }
+
+        losses = {k: v / num_valid_samples for k, v in sums.items()}
+        losses["num_matches"] = total_matches
+
+        total_loss = (
+            self.class_loss_weight * losses["class_loss"]
+            + self.mask_embed_loss_weight * losses["mask_embed_loss"]
+            + self.coord_loss_weight * losses["coord_loss"]
+            + self.mask_loss_weight * losses["mask_loss"]
+        )
+
+        return total_loss, losses
+
+    def _forward_single(
+        self,
+        class_logits: torch.Tensor,
+        mask_embeddings: torch.Tensor,
+        coordinates: torch.Tensor,
+        gt_classes: torch.Tensor,
+        gt_mask_embeddings: Optional[torch.Tensor],
+        gt_coordinates: Optional[torch.Tensor],
+        gt_masks: Optional[torch.Tensor],
+        pred_masks: Optional[torch.Tensor],
+    ) -> Tuple[Dict[str, torch.Tensor], int]:
+        """Match and compute the loss terms for ONE sample (un-batched tensors)."""
+        # Match predictions to ground truth (mask-aware when dense masks are available)
+        pred_indices, gt_indices, cost_matrix = self.matcher(
+            class_logits, mask_embeddings, coordinates,
+            gt_classes, gt_mask_embeddings, gt_coordinates,
+            pred_masks, gt_masks,
+        )
+
+        # If no matches, this sample contributes nothing (handled by the caller)
+        if len(pred_indices) == 0:
+            zero = torch.tensor(0.0, device=class_logits.device)
+            return {
+                "class_loss": zero,
+                "mask_embed_loss": zero,
+                "coord_loss": zero,
+                "mask_loss": zero,
+            }, 0
 
         # Extract matched predictions and targets
         matched_pred_classes = class_logits[pred_indices]  # [N_matched, num_classes]
@@ -380,10 +465,17 @@ class D4RTLoss(nn.Module):
             mask_embed_loss = torch.tensor(0.0, device=class_logits.device)
         losses["mask_embed_loss"] = mask_embed_loss
 
-        # 3. Coordinate loss (L2 distance)
-        matched_pred_coords = coordinates[pred_indices]  # [N_matched, 2]
-        matched_gt_coords = gt_coordinates[gt_indices]  # [N_matched, 2]
-        coord_loss = torch.norm(matched_pred_coords - matched_gt_coords, dim=-1).mean()
+        # 3. Coordinate term (item 8.5 — resolved as "matching only"): there is no
+        # coordinate-regression head, so the "predicted" coordinates are the fixed input query
+        # points and a coordinate loss would have no gradient path. Coordinates participate in
+        # the matcher cost; this value is a diagnostic of the matched coordinate error and is
+        # excluded from the total loss by keeping coord_loss_weight=0.
+        if gt_coordinates is not None:
+            matched_pred_coords = coordinates[pred_indices]  # [N_matched, 2]
+            matched_gt_coords = gt_coordinates[gt_indices]  # [N_matched, 2]
+            coord_loss = torch.norm(matched_pred_coords - matched_gt_coords, dim=-1).mean()
+        else:
+            coord_loss = torch.tensor(0.0, device=class_logits.device)
         losses["coord_loss"] = coord_loss
 
         # 4. Mask generation loss (Dice + foreground-weighted BCE on dense masks) - optional.
@@ -404,17 +496,8 @@ class D4RTLoss(nn.Module):
             mask_loss = dice + bce
 
         losses["mask_loss"] = mask_loss
-        losses["num_matches"] = len(pred_indices)
 
-        # Combine losses
-        total_loss = (
-            self.class_loss_weight * class_loss
-            + self.mask_embed_loss_weight * mask_embed_loss
-            + self.coord_loss_weight * coord_loss
-            + self.mask_loss_weight * mask_loss
-        )
-
-        return total_loss, losses
+        return losses, len(pred_indices)
 
 
 def create_dummy_targets(

@@ -107,8 +107,15 @@ class LocalPatchFeatureExtractor(nn.Module):
             # Use first view for all queries
             view_ids = torch.zeros((B, N), dtype=torch.long, device=images.device)
 
-        # Flatten batch and sequence dimensions for grid_sample
-        images_flat = images.view(B * S, C, H, W)  # [B*S, 3, H, W]
+        if torch.any(view_ids >= S) or torch.any(view_ids < 0):
+            raise ValueError(
+                f"view_ids out of range: values must be in [0, {S}) but got "
+                f"[{int(view_ids.min())}, {int(view_ids.max())}]"
+            )
+
+        # Flatten batch and sequence dimensions (reshape, not view: backbone-adjacent tensors
+        # are not guaranteed contiguous)
+        images_flat = images.reshape(B * S, C, H, W)  # [B*S, 3, H, W]
 
         # Convert normalized coords [0, 1] to grid_sample format [-1, 1]
         grid_coords = coords * 2 - 1  # [B, N, 2]
@@ -128,36 +135,25 @@ class LocalPatchFeatureExtractor(nn.Module):
         grid_u, grid_v = torch.meshgrid(offset_u, offset_v, indexing="ij")
         patch_grid = torch.stack([grid_u, grid_v], dim=-1)  # [patch_size, patch_size, 2]
 
-        # Patches list
-        patches = []
+        # Vectorized extraction (item 8.6): gather each query's source image and run ONE
+        # grid_sample over all B*N patches instead of a Python loop of B*N calls.
+        batch_offsets = torch.arange(B, device=images.device).unsqueeze(1) * S  # [B, 1]
+        img_indices = (batch_offsets + view_ids).reshape(-1)                    # [B*N]
+        imgs_q = images_flat[img_indices]                                       # [B*N, 3, H, W]
 
-        for b in range(B):
-            for n in range(N):
-                view_id = view_ids[b, n].item()
-                img_idx = b * S + view_id
-                img = images_flat[img_idx : img_idx + 1]  # [1, 3, H, W]
+        # Per-query sampling grid centered at the query point.
+        centers = grid_coords.reshape(B * N, 1, 1, 2)                # [B*N, 1, 1, 2]
+        sample_grid = patch_grid.unsqueeze(0) + centers              # [B*N, ps, ps, 2]
 
-                # Center point in normalized coords
-                center = grid_coords[b : b + 1, n : n + 1, :]  # [1, 1, 2]
+        patches = F.grid_sample(
+            imgs_q,
+            sample_grid,
+            align_corners=False,
+            padding_mode="border",
+            mode="bilinear",
+        )  # [B*N, 3, patch_size, patch_size]
 
-                # Create the grid for this patch centered at the query point
-                sample_grid = patch_grid.unsqueeze(0) + center.unsqueeze(2)  # [1, patch_size, patch_size, 2]
-
-                # Sample patch using grid_sample (expects 4D grid)
-                patch = F.grid_sample(
-                    img,
-                    sample_grid,
-                    align_corners=False,
-                    padding_mode="border",
-                    mode="bilinear",
-                )  # [1, 3, patch_size, patch_size]
-
-                patch = patch.squeeze(0)  # [3, patch_size, patch_size]
-                patch = patch.flatten()  # [3 * patch_size^2]
-                patches.append(patch)
-
-        # Stack and encode patches
-        patches = torch.stack(patches, dim=0)  # [B*N, 3*patch_size^2]
+        patches = patches.reshape(B * N, -1)  # [B*N, 3*patch_size^2]
         patch_features = self.patch_encoder(patches)  # [B*N, hidden_dim]
         patch_features = patch_features.view(B, N, self.hidden_dim)  # [B, N, hidden_dim]
 
@@ -233,6 +229,16 @@ class QueryGenerator(nn.Module):
         """
         B = coordinates.shape[0]
         N = coordinates.shape[1]
+
+        # Guard the view-embedding table bound (item 8.6): a frame index beyond num_views
+        # would silently raise an opaque CUDA indexing error inside nn.Embedding. Size
+        # `num_views` to the maximum sequence length you intend to train/evaluate with.
+        if torch.any(view_ids >= self.num_views) or torch.any(view_ids < 0):
+            raise ValueError(
+                f"view_ids must be in [0, num_views={self.num_views}) but got "
+                f"[{int(view_ids.min())}, {int(view_ids.max())}]; construct the "
+                f"QueryGenerator with num_views >= the max number of frames."
+            )
 
         # 1. Fourier positional encoding
         pos_encoding = self.pos_encoder(coordinates)  # [B, N, 4*num_freqs]
