@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.d4rt_decoder import InstanceDecoder, QueryGenerator, D4RTInstanceSegmentationHead
 

@@ -23,7 +23,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from vggt.models.vggt import VGGT
 from models.d4rt_decoder import D4RTInstanceSegmentationHead

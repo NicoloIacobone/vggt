@@ -5,11 +5,15 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
+import sys
 import glob
 import time
 import threading
 import argparse
+from pathlib import Path
 from typing import List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root
 
 import numpy as np
 import torch

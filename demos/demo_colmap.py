@@ -17,10 +17,13 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.deterministic = False
 
+import sys
 import argparse
 from pathlib import Path
 import trimesh
 import pycolmap
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root
 
 
 from vggt.models.vggt import VGGT

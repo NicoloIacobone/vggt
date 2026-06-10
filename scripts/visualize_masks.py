@@ -26,7 +26,8 @@ matplotlib.use("Agg")  # headless cluster node
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # scripts/ for sibling train_overfit
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root
 
 from train_overfit import D4RTModel
 from train.loss import PointBipartiteMatcher

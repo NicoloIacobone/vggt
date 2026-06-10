@@ -19,7 +19,8 @@ import time
 
 import torch.nn.functional as F
 
-sys.path.append("vggt/")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root
 
 from visual_util import predictions_to_glb, INSTANCE_PALETTE
 from vggt.models.vggt import VGGT

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 import torch
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from train.eval_metrics import compute_instance_segmentation_metrics, mask_iou_matrix
 
