@@ -25,6 +25,7 @@ python tests/test_phase4.py      # InstanceDecoder + dense mask head
 python tests/test_phase5.py      # matcher + losses
 python tests/test_eval.py        # instance-segmentation metrics
 python tests/test_milestone2.py  # no-object loss, grid queries, augmentation
+python tests/test_visualize_masks.py  # visualize_masks checkpoint-format handling + overlays
 
 # Single-scene overfit (sanity check for gradient flow / new components)
 python scripts/train_overfit.py --num_epochs 400 --num_frames 4 --num_queries 16 \
@@ -41,7 +42,7 @@ python scripts/train_multiscene.py \
     --save_checkpoint /cluster/work/igp_psr/niacobone/distillation/output/<run_name>/checkpoint.pth
 
 # Visualize predictions
-python scripts/visualize_masks.py --checkpoint <run_dir>/checkpoint.pth   # 2D overlays → <run_dir>/visualizations/
+python scripts/visualize_masks.py --checkpoint <run_dir>/checkpoint.pth   # 2D overlays → <run_dir>/visualizations/ (multi-scene ckpt: one subfolder per train/val scene; --scenes to filter)
 python demos/demo_gradio.py --seg_checkpoint <path>   # 3D viewer; auto-discovers latest checkpoint, scene dropdown, "Color By: Predicted Instances"
 ```
 

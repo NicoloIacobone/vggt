@@ -2,15 +2,20 @@
 """
 Visualize the dense instance masks predicted by a trained D4RT head.
 
-Loads a checkpoint produced by `train_overfit.py --save_checkpoint ...` (which stores the
-trainable decoder head plus the exact fixed overfit batch), runs one forward pass through the
-frozen VGGT backbone + decoder, Hungarian-matches each prediction to a GT instance (the same
-matcher used in training), upsamples the patch-resolution mask logits to full image resolution,
-and writes per-frame RGB overlays comparing the predicted masks against the ground truth.
+Loads a checkpoint produced by `train_overfit.py --save_checkpoint ...` or
+`train_multiscene.py --save_checkpoint ...` (both store the trainable decoder head plus the
+exact training batch(es)), runs one forward pass through the frozen VGGT backbone + decoder,
+Hungarian-matches each prediction to a GT instance (the same matcher used in training),
+upsamples the patch-resolution mask logits to full image resolution, and writes per-frame RGB
+overlays comparing the predicted masks against the ground truth.
+
+Single-scene (overfit) checkpoints write PNGs directly into the output dir; multi-scene
+checkpoints get one subfolder per scene (train and val), e.g. `visualizations/val_scene0004_00/`.
 
 Usage:
     python visualize_masks.py --checkpoint /path/to/run/checkpoint.pth
     # outputs go to <run dir>/visualizations/ by default
+    python visualize_masks.py --checkpoint <run>/checkpoint_best.pth --scenes scene0004_00
 """
 
 import argparse
@@ -66,53 +71,44 @@ def overlay_mask(rgb: np.ndarray, mask: np.ndarray, color: np.ndarray, alpha: fl
     return np.clip(out, 0, 1)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Visualize D4RT predicted instance masks")
-    parser.add_argument("--checkpoint", type=str, required=True, help="Path to checkpoint.pth")
-    parser.add_argument("--output_dir", type=str, default=None,
-                        help="Output dir for PNGs (default: <checkpoint dir>/visualizations)")
-    parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--mask_threshold", type=float, default=0.5,
-                        help="Sigmoid threshold for a predicted mask pixel")
-    parser.add_argument("--score_threshold", type=float, default=0.5,
-                        help="Min class confidence for a prediction to be drawn")
-    parser.add_argument("--alpha", type=float, default=0.5, help="Mask overlay opacity")
-    args = parser.parse_args()
+def scenes_from_checkpoint(ckpt: dict) -> list:
+    """
+    Normalize a checkpoint into a list of (label, scene_dict) to visualize.
 
-    device = args.device if (args.device != "cuda" or torch.cuda.is_available()) else "cpu"
-    ckpt_path = Path(args.checkpoint)
-    out_dir = Path(args.output_dir) if args.output_dir else ckpt_path.parent / "visualizations"
+    Multi-scene checkpoints (train_multiscene.py) carry a "scenes" list; each entry becomes
+    ("<split>_<name>", scene). Single-scene checkpoints (train_overfit.py) yield one entry
+    with label None, built from the top-level keys.
+    """
+    if ckpt.get("scenes"):
+        return [(f"{s.get('split', 'train')}_{s['name']}", s) for s in ckpt["scenes"]]
+    return [(None, {
+        "images": ckpt["images"],
+        "coordinates": ckpt["coordinates"],
+        "view_ids": ckpt["view_ids"],
+        "gt": ckpt["gt"],
+        "frame_names": ckpt.get("frame_names"),
+        "metrics": ckpt.get("final_metrics") or {},
+    })]
+
+
+def visualize_scene(model, scene: dict, out_dir: Path, device: str, args) -> int:
+    """Forward + match + per-frame overlay figures for one stored scene batch. Returns #frames."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading checkpoint: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    ck_args = ckpt.get("args", {})
-
-    # --- Rebuild model (frozen backbone from HF + trained decoder head) -----------------------
-    model = D4RTModel(
-        freeze_backbone=True,
-        num_views=ck_args.get("num_views", 10) if isinstance(ck_args.get("num_views", 10), int) else 10,
-        decoder_hidden_dim=256,
-        mask_embed_dim=256,
-        dropout=0.0,
-    ).to(device)
-    model.decoder_head.load_state_dict(ckpt["decoder_head_state_dict"])
-    model.eval()
-
-    images = ckpt["images"].to(device)          # [1, S, 3, H, W]
-    coordinates = ckpt["coordinates"].to(device)  # [1, N, 2]
-    view_ids = ckpt["view_ids"].to(device)        # [1, N]
-    gt = {k: v.to(device) for k, v in ckpt["gt"].items()}
+    images = scene["images"].to(device)            # [1, S, 3, H, W]
+    coordinates = scene["coordinates"].to(device)  # [1, N, 2]
+    view_ids = scene["view_ids"].to(device)        # [1, N]
+    gt = {k: v.to(device) for k, v in scene["gt"].items()}
     gt_masks = gt["masks"]      # [Ng, S, h, w]
     gt_classes = gt["classes"]  # [Ng]
-    frame_names = ckpt.get("frame_names", None)
+    frame_names = scene.get("frame_names", None)
 
     S = images.shape[1]
     H, W = images.shape[-2:]
 
     print(f"Scene: S={S} frames, {gt_classes.shape[0]} GT instances, image {H}x{W}")
-    if ckpt.get("final_metrics"):
-        m = ckpt["final_metrics"]
+    m = scene.get("metrics") or {}
+    if m.get("mIoU") is not None:
         print(f"Checkpoint metrics: mIoU={m.get('mIoU'):.3f} AP50={m.get('AP50'):.3f} "
               f"class_acc={m.get('class_acc'):.3f}")
 
@@ -205,7 +201,60 @@ def main():
         plt.close(fig)
         print(f"  saved {out_path}")
 
-    print(f"\n✓ Wrote {S} overlay figures to {out_dir}")
+    return S
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Visualize D4RT predicted instance masks")
+    parser.add_argument("--checkpoint", type=str, required=True, help="Path to checkpoint.pth")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Output dir for PNGs (default: <checkpoint dir>/visualizations)")
+    parser.add_argument("--scenes", type=str, default=None,
+                        help="Comma-separated scene names to render from a multi-scene "
+                             "checkpoint (default: all stored scenes)")
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--mask_threshold", type=float, default=0.5,
+                        help="Sigmoid threshold for a predicted mask pixel")
+    parser.add_argument("--score_threshold", type=float, default=0.5,
+                        help="Min class confidence for a prediction to be drawn")
+    parser.add_argument("--alpha", type=float, default=0.5, help="Mask overlay opacity")
+    args = parser.parse_args()
+
+    device = args.device if (args.device != "cuda" or torch.cuda.is_available()) else "cpu"
+    ckpt_path = Path(args.checkpoint)
+    out_dir = Path(args.output_dir) if args.output_dir else ckpt_path.parent / "visualizations"
+
+    print(f"Loading checkpoint: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    ck_args = ckpt.get("args", {})
+
+    scenes = scenes_from_checkpoint(ckpt)
+    if args.scenes:
+        wanted = {s.strip() for s in args.scenes.split(",") if s.strip()}
+        scenes = [(label, sc) for label, sc in scenes if sc.get("name") in wanted]
+        if not scenes:
+            raise SystemExit(f"None of {sorted(wanted)} found in this checkpoint")
+
+    # --- Rebuild model (frozen backbone from HF + trained decoder head) -----------------------
+    num_views = ck_args.get("num_views", 10)
+    model = D4RTModel(
+        freeze_backbone=True,
+        num_views=num_views if isinstance(num_views, int) else 10,
+        decoder_hidden_dim=256,
+        mask_embed_dim=256,
+        dropout=0.0,
+    ).to(device)
+    model.decoder_head.load_state_dict(ckpt["decoder_head_state_dict"])
+    model.eval()
+
+    total = 0
+    for label, scene in scenes:
+        scene_dir = out_dir / label if label is not None else out_dir
+        if label is not None:
+            print(f"\n=== {label} ===")
+        total += visualize_scene(model, scene, scene_dir, device, args)
+
+    print(f"\n✓ Wrote {total} overlay figures to {out_dir}")
 
 
 if __name__ == "__main__":

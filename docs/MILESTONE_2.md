@@ -105,7 +105,9 @@ for evaluation/demos.
 | `train/loss.py` | `no_object_weight` / `background_class` options in `D4RTLoss` (default off → M1-identical) |
 | `scripts/train_overfit.py` | `generate_grid_queries` (unprompted query lattice) |
 | `scripts/train_multiscene.py` | multi-bundle scene cache, per-step query augmentation, photometric jitter, unprompted eval, best-checkpoint + early stopping, `--cache_device` |
+| `scripts/visualize_masks.py` | multi-scene checkpoint support: renders every stored scene (train + val) to `visualizations/<split>_<scene>/`, optional `--scenes` filter; single-scene checkpoints unchanged |
 | `tests/test_milestone2.py` | standalone tests for all of the above (CPU, no backbone weights) |
+| `tests/test_visualize_masks.py` | checkpoint-format dispatch + overlay blending (CPU, no backbone weights) |
 
 New CLI flags (`train_multiscene.py`): `--no_object_weight` (default 0.1), `--grid_size`
 (default 6), `--bundles_per_scene` (default 1), `--query_jitter`, `--fixed_bg`,
@@ -128,6 +130,11 @@ python scripts/train_multiscene.py \
     --learning_rate 2e-3 --bundles_per_scene 3 --query_jitter 0.02 --color_jitter 0.2 \
     --no_object_weight 0.1 --grid_size 6 --eval_interval 50 \
     --save_checkpoint /cluster/work/igp_psr/niacobone/distillation/output/<run>/checkpoint.pth
+
+# 2D overlays (RGB | GT | prediction) for every scene stored in the checkpoint
+python scripts/visualize_masks.py --checkpoint <run>/checkpoint_best.pth
+# → <run>/visualizations/train_scene0000_00/, ..., val_scene0004_00/
+python scripts/visualize_masks.py --checkpoint <run>/checkpoint_best.pth --scenes scene0004_00
 ```
 
 ## 6. Validation Run (5 available scenes)
