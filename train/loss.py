@@ -277,6 +277,13 @@ class D4RTLoss(nn.Module):
         mask_embed_loss_weight (float): Weight for mask embedding loss
         coord_loss_weight (float): Weight for coordinate loss
         mask_loss_weight (float): Weight for mask generation loss
+        no_object_weight (float, optional): DETR-style "no-object" supervision. If set, the
+            class loss is computed over ALL queries (not only the matched ones): unmatched
+            queries are supervised toward `background_class`, with their per-query loss
+            down-weighted by this factor (DETR's eos_coef, typically 0.1) so the many
+            background queries do not drown out the matched ones. If None (default), only
+            matched queries receive a class loss (Milestone-1 behavior).
+        background_class (int): class index used as the "no-object" target (default: 0)
         matcher_kwargs (dict): Keyword arguments for PointBipartiteMatcher
     """
 
@@ -289,13 +296,18 @@ class D4RTLoss(nn.Module):
         mask_embed_loss_weight: float = 1.0,
         coord_loss_weight: float = 1.0,
         mask_loss_weight: float = 1.0,
+        no_object_weight: Optional[float] = None,
+        background_class: int = 0,
         bce_pos_weight_cap: float = 20.0,
         matcher_kwargs: Optional[Dict] = None,
     ):
         super().__init__()
         self.num_classes = num_classes
+        self.no_object_weight = no_object_weight
+        self.background_class = background_class
 
         self.focal_loss = FocalLoss(alpha=focal_alpha, gamma=focal_gamma, reduction="mean")
+        self.focal_loss_per_query = FocalLoss(alpha=focal_alpha, gamma=focal_gamma, reduction="none")
         self.dice_loss = DiceLoss(reduction="mean")
         self.matcher = PointBipartiteMatcher(**(matcher_kwargs or {}))
 
@@ -451,7 +463,21 @@ class D4RTLoss(nn.Module):
         losses = {}
 
         # 1. Class loss (Focal Loss)
-        class_loss = self.focal_loss(matched_pred_classes, matched_gt_classes)
+        if self.no_object_weight is not None:
+            # DETR-style no-object supervision: every query gets a class target — its matched
+            # GT class, or `background_class` if unmatched — so at inference time unmatched
+            # queries predict background and can be filtered without GT-ordered queries.
+            N = class_logits.shape[0]
+            target_classes = torch.full(
+                (N,), self.background_class, dtype=torch.long, device=class_logits.device
+            )
+            target_classes[pred_indices] = matched_gt_classes
+            per_query = self.focal_loss_per_query(class_logits, target_classes)  # [N]
+            weights = torch.full_like(per_query, self.no_object_weight)
+            weights[pred_indices] = 1.0
+            class_loss = (per_query * weights).sum() / weights.sum()
+        else:
+            class_loss = self.focal_loss(matched_pred_classes, matched_gt_classes)
         losses["class_loss"] = class_loss
 
         # 2. Mask embedding loss (L2 distance) - only when descriptor targets are provided.

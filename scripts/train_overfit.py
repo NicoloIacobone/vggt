@@ -256,6 +256,33 @@ def generate_query_points(
     return coordinates, view_ids
 
 
+def generate_grid_queries(
+    num_frames: int,
+    grid_size: int = 6,
+    device: str = "cpu",
+    batch_size: int = 1,
+) -> tuple:
+    """
+    Uniform grid of query points over every frame, for UNPROMPTED inference/eval.
+
+    Unlike `generate_query_points` (which seeds queries at GT instance centroids — a point
+    *prompt*), these queries carry no GT information: one query per cell center of a
+    grid_size x grid_size lattice in each frame, so the model must detect instances on its
+    own and push empty cells to the background class (no-object supervision).
+
+    Returns:
+        coordinates [B, S*grid_size^2, 2] in [0, 1], view_ids [B, S*grid_size^2]
+    """
+    centers = (torch.arange(grid_size, dtype=torch.float32, device=device) + 0.5) / grid_size
+    vv, uu = torch.meshgrid(centers, centers, indexing="ij")
+    cell_coords = torch.stack([uu.reshape(-1), vv.reshape(-1)], dim=-1)  # [g*g, 2] as (u, v)
+    coordinates = cell_coords.repeat(num_frames, 1)  # [S*g*g, 2]
+    view_ids = torch.arange(num_frames, device=device).repeat_interleave(grid_size * grid_size)
+    coordinates = coordinates.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+    view_ids = view_ids.unsqueeze(0).expand(batch_size, -1).contiguous()
+    return coordinates, view_ids
+
+
 def _squeeze_batch_dim(t: torch.Tensor) -> torch.Tensor:
     """Drop the leading (size-1) batch dim added by the default DataLoader collate."""
     return t.squeeze(0) if t.dim() > 0 and t.shape[0] == 1 and t.dim() > 1 else t
