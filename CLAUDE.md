@@ -40,8 +40,16 @@ python scripts/train_multiscene.py \
     --learning_rate 2e-3 --bundles_per_scene 3 --query_jitter 0.02 --color_jitter 0.2 \
     --no_object_weight 0.1 --grid_size 6 --eval_interval 50 \
     --save_checkpoint /cluster/work/igp_psr/niacobone/distillation/output/<run_name>/checkpoint.pth
+# After training it auto-renders the 2D overlays into <run_dir>/visualizations/ from
+# checkpoint_best.pth (final checkpoint if no best was saved); opt out with --no_visualize.
 
-# Visualize predictions
+# Scaling experiments (MILESTONE_2.md §7.1) as SLURM jobs — submit from anywhere, they cd
+# to the repo and use myenv/. Val scenes 0080-0082 are held out of every train set.
+sbatch slurm/train_scale10.sh   # scenes 0000-0009
+sbatch slurm/train_scale25.sh   # scenes 0000-0024 (--cache_device cpu)
+sbatch slurm/train_scale50.sh   # scenes 0000-0049 (--cache_device cpu)
+
+# Visualize predictions manually (re-render or filter scenes)
 python scripts/visualize_masks.py --checkpoint <run_dir>/checkpoint.pth   # 2D overlays → <run_dir>/visualizations/ (multi-scene ckpt: one subfolder per train/val scene; --scenes to filter)
 python demos/demo_gradio.py --seg_checkpoint <path>   # 3D viewer; auto-discovers latest checkpoint, scene dropdown, "Color By: Predicted Instances"
 ```

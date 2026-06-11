@@ -4,11 +4,14 @@ Validation for the checkpoint-format handling in scripts/visualize_masks.py.
 
 Checks that scenes_from_checkpoint normalizes both checkpoint flavors — single-scene
 (train_overfit.py, top-level keys) and multi-scene (train_multiscene.py, "scenes" list) —
-into the same (label, scene_dict) interface, and that overlay_mask blends/contours correctly.
-Runs on CPU without backbone weights (no model is instantiated).
+into the same (label, scene_dict) interface, that overlay_mask blends/contours correctly,
+and that train_multiscene.run_visualizations (the automatic post-training rendering)
+writes the per-scene overlay PNGs. Runs on CPU without backbone weights (the rendering
+test uses stub backbone/head modules instead of the real D4RTModel).
 """
 
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -86,9 +89,64 @@ def test_overlay_mask():
     print("✅ overlay_mask test passed!\n")
 
 
+def test_run_visualizations():
+    print("=== Testing train_multiscene.run_visualizations ===")
+    from train_multiscene import run_visualizations
+
+    class _StubAggregator(torch.nn.Module):
+        def forward(self, images):
+            B, S = images.shape[:2]
+            return [torch.zeros(B, S, 6, 16)], 5  # (aggregated_tokens_list, patch_start_idx)
+
+    class _StubBackbone(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.aggregator = _StubAggregator()
+
+    class _StubHead(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.bias = torch.nn.Parameter(torch.zeros(20))
+
+        def forward(self, coordinates, view_ids, images, features, patch_start_idx):
+            B, N = coordinates.shape[:2]
+            S = images.shape[1]
+            class_logits = torch.randn(B, N, 20) + self.bias
+            mask_embeddings = torch.randn(B, N, 8)
+            pred_masks = torch.randn(B, N, S, 1, 1)  # h=w=1 matches _fake_batch GT masks
+            return class_logits, mask_embeddings, pred_masks
+
+    class _StubModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.backbone = _StubBackbone()
+            self.decoder_head = _StubHead()
+
+    model = _StubModel()
+    model.train()
+    entry = dict(_fake_batch())
+    entry.update(name="scene0000_00", split="train", metrics={})
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ckpt_path = Path(tmp) / "checkpoint_best.pth"
+        torch.save({"decoder_head_state_dict": _StubHead().state_dict(),
+                    "scenes": [entry]}, ckpt_path)
+
+        out_dir = run_visualizations(model, ckpt_path, "cpu")
+
+        assert out_dir == ckpt_path.parent / "visualizations", \
+            "overlays must land next to the checkpoint"
+        pngs = sorted(p.name for p in (out_dir / "train_scene0000_00").glob("*.png"))
+        assert pngs == ["frame_00_overlay.png", "frame_01_overlay.png"], \
+            f"expected one overlay per frame, got {pngs}"
+        assert not model.training, "run_visualizations must leave the model in eval mode"
+    print("✅ run_visualizations test passed!\n")
+
+
 if __name__ == "__main__":
     test_single_scene_checkpoint()
     test_multi_scene_checkpoint()
     test_missing_metrics()
     test_overlay_mask()
+    test_run_visualizations()
     print("All visualize_masks tests passed! ✅")

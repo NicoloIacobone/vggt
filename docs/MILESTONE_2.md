@@ -98,20 +98,26 @@ existed but the final checkpoint had already overfit past it. Now, at every `--e
 The final checkpoint is still written at the end; `checkpoint_best.pth` is the one to use
 for evaluation/demos.
 
+After the final save, the training script **automatically renders the visualize_masks.py
+overlays** into `<run dir>/visualizations/` (one subfolder per stored train/val scene),
+using `checkpoint_best.pth` when it exists (final checkpoint otherwise) — disable with
+`--no_visualize`. Rendering reuses the in-memory backbone and only reloads the best head
+weights; a rendering failure prints the manual command instead of failing the run.
+
 ## 5. Files Changed / Added
 
 | File | Change |
 |------|--------|
 | `train/loss.py` | `no_object_weight` / `background_class` options in `D4RTLoss` (default off → M1-identical) |
 | `scripts/train_overfit.py` | `generate_grid_queries` (unprompted query lattice) |
-| `scripts/train_multiscene.py` | multi-bundle scene cache, per-step query augmentation, photometric jitter, unprompted eval, best-checkpoint + early stopping, `--cache_device` |
+| `scripts/train_multiscene.py` | multi-bundle scene cache, per-step query augmentation, photometric jitter, unprompted eval, best-checkpoint + early stopping, `--cache_device`, automatic post-training visualizations (`run_visualizations`, opt out with `--no_visualize`) |
 | `scripts/visualize_masks.py` | multi-scene checkpoint support: renders every stored scene (train + val) to `visualizations/<split>_<scene>/`, optional `--scenes` filter; single-scene checkpoints unchanged |
 | `tests/test_milestone2.py` | standalone tests for all of the above (CPU, no backbone weights) |
 | `tests/test_visualize_masks.py` | checkpoint-format dispatch + overlay blending (CPU, no backbone weights) |
 
 New CLI flags (`train_multiscene.py`): `--no_object_weight` (default 0.1), `--grid_size`
 (default 6), `--bundles_per_scene` (default 1), `--query_jitter`, `--fixed_bg`,
-`--color_jitter`, `--early_stop_patience`, `--cache_device`.
+`--color_jitter`, `--early_stop_patience`, `--cache_device`, `--no_visualize`.
 Milestone-1 behavior is exactly recovered with
 `--no_object_weight 0 --bundles_per_scene 1 --query_jitter 0 --fixed_bg`.
 
@@ -131,7 +137,9 @@ python scripts/train_multiscene.py \
     --no_object_weight 0.1 --grid_size 6 --eval_interval 50 \
     --save_checkpoint /cluster/work/igp_psr/niacobone/distillation/output/<run>/checkpoint.pth
 
-# 2D overlays (RGB | GT | prediction) for every scene stored in the checkpoint
+# 2D overlays (RGB | GT | prediction). train_multiscene.py renders these automatically
+# after training (from checkpoint_best.pth; skip with --no_visualize) — the manual command
+# is only needed to re-render or filter scenes:
 python scripts/visualize_masks.py --checkpoint <run>/checkpoint_best.pth
 # → <run>/visualizations/train_scene0000_00/, ..., val_scene0004_00/
 python scripts/visualize_masks.py --checkpoint <run>/checkpoint_best.pth --scenes scene0004_00

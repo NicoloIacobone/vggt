@@ -312,6 +312,29 @@ def save_checkpoint(path: Path, model, optimizer, scheduler, epoch, args,
     print(f"✓ Checkpoint saved to {path} ({path.stat().st_size / 1e6:.1f} MB)")
 
 
+def run_visualizations(model, ckpt_path: Path, device: str) -> Path:
+    """
+    Render the standard visualize_masks.py overlays for a saved checkpoint into
+    <checkpoint dir>/visualizations/ (one subfolder per stored scene). Reuses the
+    in-memory backbone; only the decoder-head weights are (re)loaded from the
+    checkpoint, since the best-val head can differ from the last-epoch head.
+    """
+    from visualize_masks import scenes_from_checkpoint, visualize_scene
+
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    model.decoder_head.load_state_dict(ckpt["decoder_head_state_dict"])
+    model.eval()
+    out_dir = ckpt_path.parent / "visualizations"
+    vis_args = argparse.Namespace(mask_threshold=0.5, score_threshold=0.5, alpha=0.5)
+    total = 0
+    for label, scene in scenes_from_checkpoint(ckpt):
+        print(f"\n--- {label or 'scene'} ---")
+        total += visualize_scene(model, scene, out_dir / label if label else out_dir,
+                                 device, vis_args)
+    print(f"✓ Wrote {total} overlay figures to {out_dir}")
+    return out_dir
+
+
 def main():
     parser = argparse.ArgumentParser(description="D4RT multi-scene training (Milestone 2)")
     parser.add_argument("--train_scenes", type=str,
@@ -339,6 +362,10 @@ def main():
     parser.add_argument("--save_checkpoint", type=str, default=None)
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to a checkpoint to resume head/optimizer/scheduler from")
+    parser.add_argument("--no_visualize", action="store_true",
+                        help="Skip the automatic mask-overlay rendering into "
+                             "<run dir>/visualizations/ after training (on by default "
+                             "whenever --save_checkpoint is set)")
     # --- Milestone 2: no-object loss + unprompted eval ---
     parser.add_argument("--no_object_weight", type=float, default=0.1,
                         help="DETR eos coefficient: weight of the background class loss on "
@@ -549,6 +576,16 @@ def main():
         save_checkpoint(Path(args.save_checkpoint), model, optimizer, scheduler,
                         args.num_epochs, args, train_scenes, val_scenes,
                         train_metrics, val_metrics, train_unprompted, val_unprompted, best)
+
+    if args.save_checkpoint and not args.no_visualize:
+        vis_ckpt = best_path if (best_path is not None and best_path.exists()) \
+            else Path(args.save_checkpoint)
+        print(f"\n=== Visualizations from {vis_ckpt.name} (skip with --no_visualize) ===")
+        try:
+            run_visualizations(model, vis_ckpt, device)
+        except Exception as e:  # training already succeeded — don't fail the run on rendering
+            print(f"⚠ Visualization failed ({e}). Render manually with:\n"
+                  f"  python scripts/visualize_masks.py --checkpoint {vis_ckpt}")
 
     ok = mean_metric(train_metrics, "mIoU") > 0.5
     print("\n✅ SUCCESS" if ok else "\n⚠ Train mIoU below 0.5 — inspect the run.")
