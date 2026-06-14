@@ -80,13 +80,41 @@ run length no longer rescales LR decay (removes the §2.1 failure mode permanent
 
 ---
 
-## Phase 1 — Fair scaling re-runs (GPU; PENDING user compute)
+## Phase 1 — Fair scaling re-runs (GPU; DONE 2026-06-14, val set is the caveat)
 
-Pure GPU runs, no new code — the Phase-0 instrumentation (`metrics.jsonl`, the AP50
-checkpoint, the identical SLURM protocol) is what they depend on. Submit
-`slurm/train_scale{25,10,50}.sh` (now `--eval_interval 50 --early_stop_patience 0`), then
-plot val mIoU (prompted+grid) and val AP50 (grid) vs N ∈ {4,10,25,50} from each run's
-`metrics.jsonl`. See `docs/NEXT_STEPS_PLAN.md` §Phase 1.
+Full-schedule runs (1000 ep, `--early_stop_patience 0`), identical protocol, val =
+scene0080–0082. `scripts/plot_scaling.py` reads each run's `metrics.jsonl` into the curve
+(`scaling_curve_full.png`).
+
+| N  | best val mIoU (prompted) | best val[grid] AP50 (honest) | final train mIoU | train−val gap | run |
+|----|--------------------------|------------------------------|------------------|---------------|-----|
+| 4  | 0.138 | — | — | large | MILESTONE_2 §6 |
+| 10 | 0.289 @ep650 | 0.171 @ep900 | 0.610 | 0.35 | d4rt_m2_scale10_20260614_194415 |
+| 25 | 0.204 @ep600 | 0.147 @ep400 | 0.371 | 0.20 | d4rt_m2_scale25_20260614_143039 |
+| 50 | 0.347 @ep750 | 0.159 @ep650 | 0.419 | 0.16 | d4rt_m2_scale50_20260614_194415 |
+
+**Reading it (honestly):**
+1. Prompted val mIoU trends up with N (0.14→0.35) but is **non-monotonic** (N=25 dips below
+   N=10). With only **3 val scenes** the per-eval signal swings ±0.05–0.08, so the inversion
+   is mostly noise — the val set is too thin to trust point-by-point. **Action: widen val to
+   scene0080–0089 (no new preprocessing) and re-run** before drawing scaling conclusions.
+2. **Unprompted val[grid] AP50 is flat ~0.15 across N=10/25/50** — scaling alone does NOT
+   improve the honest detection number. This is the duplicate-suppression / under-confidence
+   problem (Phase 2 `--train_grid_queries`, Phase 3 query modes), not a data-volume problem.
+3. train−val gap shrinks with N (0.35→0.20→0.16) → more scenes reduce overfitting as
+   expected; N=10 overfits hardest (train 0.61), N=25/50 are mildly underfit at the fixed
+   1000-ep/LR budget.
+4. In every run the mIoU-best and AP50-best checkpoints land at different epochs — consistent
+   §3.2 evidence that the selection metric matters (Phase 0.4 was worth adding).
+
+Score-threshold sweep (no retrain, scale25 `visualizations_thr03/` at `--score_threshold
+0.3`) confirms §3.3: lowering 0.5→0.3 recovers correct-but-under-confident predictions (chair
+0.31, desk 0.54, table 0.36), but predictions where the head outputs the *background class*
+(table/desk/sofa → bg) stay undrawn — class confusion, a separate failure the threshold can't
+fix.
+
+**Next:** (a) widen val to 0080–0089 and re-run the four points; (b) Phase 2
+`--train_grid_queries` A/B on scale25/scale50 — target metric is the flat unprompted AP50.
 
 ## Phase 2 — `--train_grid_queries` (CODE DONE, 2026-06-14; experiment PENDING GPU)
 

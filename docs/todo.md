@@ -30,3 +30,6 @@
 [ ] Per-instance loader + tests once instance-mask data lands — data/scannet_overfit.py ID-per-(class,instance), update tests/test_phase2.py (§4) — BLOCKED on SAM3
 [X] MaskDINO-style pixel decoder CODE: models/mask_upsampler.py upsamples patch features before the cosine-sim mask product (--mask_upsample) — [ ] train + (if dense OOM) point-sampled mask loss (§2)
 [X] Viz polish: legend "{class} #{k}" for same-class instances; caption "one color = one predicted instance (mask spans all frames jointly)" (§1)
+
+# Data management
+[ ] Since data on cluster must be as small as possible in terms of number of files, before running the new per-instance segmentation GT generation, I need to decide how to manage data (i.e. process all and zip the entire folder and, at the beginning of each job, copy it in the temporary folder of the node and unzip it there). Also, I should consider to execute this process after moving the scenes in the /scratch folder, there, I/O operations are faster.
