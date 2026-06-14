@@ -24,8 +24,9 @@ python tests/test_phase3.py      # QueryGenerator
 python tests/test_phase4.py      # InstanceDecoder + dense mask head
 python tests/test_phase5.py      # matcher + losses
 python tests/test_eval.py        # instance-segmentation metrics
-python tests/test_milestone2.py  # no-object loss, grid queries, augmentation
-python tests/test_visualize_masks.py  # visualize_masks checkpoint-format handling + overlays
+python tests/test_milestone2.py  # no-object loss, grid queries, augmentation, metrics.jsonl, early-stop, train-grid/query-mode queries
+python tests/test_visualize_masks.py  # visualize_masks checkpoint-format handling (float/uint8/light) + overlays
+python tests/test_mask_upsampler.py   # Phase-5 MaskUpsampler pixel decoder + GT-resolution match
 
 # Single-scene overfit (sanity check for gradient flow / new components)
 python scripts/train_overfit.py --num_epochs 400 --num_frames 4 --num_queries 16 \
@@ -60,8 +61,9 @@ Milestone-1 behavior is exactly recovered with `--no_object_weight 0 --bundles_p
 
 - Repo: `/cluster/scratch/niacobone/vggt`
 - ScanNet scenes: `/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans/<scene>/raw_data` (default `--scans_root`)
-- Training runs/checkpoints: `/cluster/work/igp_psr/niacobone/distillation/output/<run_name>/checkpoint.pth` (timestamped run names, e.g. `d4rt_m2_5scenes_20260610_133100`). `checkpoint_best.pth` (best val mIoU) is the one to use for eval/demos.
-- Checkpoints are self-contained: head weights + head config + the scene batches + optimizer/scheduler (for `--resume`). The frozen backbone is reloaded from HF (`facebook/VGGT-1B`), never stored.
+- Training runs/checkpoints: `/cluster/work/igp_psr/niacobone/distillation/output/<run_name>/checkpoint.pth` (timestamped run names, e.g. `d4rt_m2_5scenes_20260610_133100`). `checkpoint_best.pth` (best val mIoU) is the one to use for eval/demos; `checkpoint_best_ap50.pth` is the same run selected on the honest unprompted val[grid] AP50 instead.
+- Each run dir also gets `metrics.jsonl` — one JSON line per eval (epoch, lr, loss, prompted+grid train/val mIoU & AP50). Scaling plots read this, not the logs.
+- Checkpoints are self-contained: head weights + head config + the scene batches + optimizer/scheduler (for `--resume`). The frozen backbone is reloaded from HF (`facebook/VGGT-1B`), never stored. Scene images are stored as **uint8** (4× smaller than float; decoded back via `data/scannet_overfit.py::decode_checkpoint_images`); `--checkpoint_light` drops the pixels entirely and stores `frame_names` + `scene_dir`, so the visualizer/demo reload frames from `--scans_root`.
 
 ## Architecture
 
@@ -76,7 +78,7 @@ The hook point is `aggregated_tokens_list[-1]` from the aggregator: global scene
 Pipeline (one component per file, each with its phase test):
 
 1. `data/scannet_overfit.py` — `ScanNetSingleSceneDataset` / `ScanNetMultiSceneDataset`. Loads frames from the scene's `subset/` dir (the ~100 stride-5 frames that actually have masks — **not** `color/`, which has >5500 unmasked frames) and per-class binary mask PNGs from `masks/<class>/`. Assigns one **global, cross-view-consistent instance ID per class** (the binary per-class masks can't separate same-class objects — data limitation, not code). Image size 518 (must be divisible by VGGT's patch size 14); mask/eval resolution is the 37×37 patch grid.
-2. `models/d4rt_decoder.py` — `QueryGenerator` (Fourier-encoded (u,v) + learned view embedding + 9×9 RGB patch MLP, summed → `[B, N, 256]`) and `InstanceDecoder` (4-layer/8-head `nn.TransformerDecoder`, queries as tgt, projected F as memory) with `class_head` (20 logits = 19 ScanNet classes + background at index 0), `mask_embed_head`, and a dense Mask2Former-style mask head → `pred_masks [B, N, S, h, w]`. `D4RTInstanceSegmentationHead` chains them.
+2. `models/d4rt_decoder.py` — `QueryGenerator` (Fourier-encoded (u,v) + learned view embedding + 9×9 RGB patch MLP, summed → `[B, N, 256]`) and `InstanceDecoder` (4-layer/8-head `nn.TransformerDecoder`, queries as tgt, projected F as memory) with `class_head` (20 logits = 19 ScanNet classes + background at index 0), `mask_embed_head`, and a dense Mask2Former-style mask head → `pred_masks [B, N, S, h, w]`. `D4RTInstanceSegmentationHead` chains them. `query_mode` (`point` default / `learned` DETR object queries / `hybrid`) and `mask_upsample` (1 default = 37×37 patch grid; 2/4 route through `models/mask_upsampler.py::MaskUpsampler` for sharper masks, with GT built at the matching resolution) are constructor + `head_config` options — keep the round-trip intact.
 3. `train/loss.py` — `PointBipartiteMatcher` (Hungarian, mask-aware Dice+BCE cost) + `D4RTLoss` (Focal class loss + Dice + fg-weighted BCE; optional DETR-style no-object loss on unmatched queries via `no_object_weight`). Batch-aware: for `B > 1`, GT args are lists of per-sample tensors.
 4. `train/eval_metrics.py` — mIoU / AP50 / AP75 / mAP / class_acc. Evaluation reports **prompted** (queries at GT centroids) and **unprompted** (uniform grid, no GT) metrics; unprompted is the honest detection number.
 5. `scripts/train_multiscene.py` — caches frozen-backbone features **once per scene bundle up front**, then every epoch runs only the head (this is why training is minutes, not hours). `--cache_device cpu` lifts the GPU-memory bound on scene count.

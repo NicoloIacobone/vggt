@@ -32,6 +32,7 @@ Usage:
 """
 
 import argparse
+import json
 import random
 import sys
 import time
@@ -132,7 +133,8 @@ def prepare_scene_bundles(
         agg_list, patch_start_idx = model.backbone.aggregator(images)
         features = agg_list[-1].detach()  # [1, S, P, 2048] — cached; backbone never reruns
         num_patch_tokens = features.shape[2] - patch_start_idx
-        gt = build_gt_targets(batch, patch_start_idx, num_patch_tokens, device)
+        gt = build_gt_targets(batch, patch_start_idx, num_patch_tokens, device,
+                              mask_upsample=args.mask_upsample)
         return {
             "images": images,
             "coordinates": coordinates,
@@ -146,14 +148,14 @@ def prepare_scene_bundles(
         }
 
     scenes = []
-    for batch in even_loader:
+    for idx, batch in enumerate(even_loader):
         name = batch["scene_name"][0] if isinstance(batch["scene_name"], (list, tuple)) else str(batch["scene_name"])
         t0 = time.time()
         bundle = build_bundle(batch, jitter=False)
         S = bundle["images"].shape[1]
         bundle["grid_coordinates"], bundle["grid_view_ids"] = generate_grid_queries(
             S, args.grid_size, device)
-        scenes.append({"name": name, "split": split,
+        scenes.append({"name": name, "split": split, "scene_dir": scene_dirs[idx],
                        "bundles": [bundle_to_device(bundle, args.cache_device)]})
         print(
             f"  [{split}] {name}: frames={S}, queries={bundle['coordinates'].shape[1]} "
@@ -174,12 +176,26 @@ def prepare_scene_bundles(
     return scenes
 
 
+def learned_placeholder(B: int, M: int, device: str):
+    """Zero (u,v)/view placeholders for the M learned-query slots (their values are ignored
+    by the QueryGenerator; they only keep the query count aligned with the matcher/loss)."""
+    return (torch.zeros(B, M, 2, device=device),
+            torch.zeros(B, M, dtype=torch.long, device=device))
+
+
 def make_train_queries(b: Dict, args, device: str):
     """
     Per-step query augmentation on a (device-resident) bundle:
       - Gaussian jitter (std --query_jitter) on the instance-centroid queries.
       - Fresh random background query points + view ids (unless --fixed_bg).
+      - Phase 3 query modes: 'learned' replaces all queries with M placeholders; 'hybrid'
+        prepends M placeholders to the point queries (head turns them into learned queries).
     """
+    query_mode = getattr(args, "query_mode", "point")
+    B = b["coordinates"].shape[0]
+    if query_mode == "learned":
+        return learned_placeholder(B, args.num_learned_queries, device)
+
     coords = b["coordinates"].clone()
     view_ids = b["view_ids"].clone()
     ni = b["num_inst_queries"]
@@ -191,6 +207,21 @@ def make_train_queries(b: Dict, args, device: str):
     if nbg > 0 and not args.fixed_bg:
         coords[:, ni:] = torch.rand(coords.shape[0], nbg, 2, device=device)
         view_ids[:, ni:] = torch.randint(0, S, (view_ids.shape[0], nbg), device=device)
+    # Phase 2: optionally append the eval grid (random-offset to avoid overfitting cell
+    # positions) so training exercises DETR-style duplicate suppression — when several grid
+    # cells fire on one object, Hungarian keeps the single best and no_object_weight pushes
+    # the rest to background. Matcher/loss already handle the larger query count.
+    if getattr(args, "train_grid_queries", False):
+        grid_size = getattr(args, "grid_size", 6)
+        gcoords, gview = generate_grid_queries(S, grid_size, device)  # [1, S*g^2, 2], [1, S*g^2]
+        offset = (torch.rand(1, 1, 2, device=device) - 0.5) / grid_size  # < half a cell
+        gcoords = (gcoords + offset).clamp(0.0, 1.0)
+        coords = torch.cat([coords, gcoords.expand(coords.shape[0], -1, -1)], dim=1)
+        view_ids = torch.cat([view_ids, gview.expand(view_ids.shape[0], -1)], dim=1)
+    if query_mode == "hybrid":
+        pc, pv = learned_placeholder(B, args.num_learned_queries, device)
+        coords = torch.cat([pc, coords], dim=1)      # learned slots first, then point queries
+        view_ids = torch.cat([pv, view_ids], dim=1)
     return coords, view_ids
 
 
@@ -209,10 +240,20 @@ def eval_scene(model: D4RTModel, scene: Dict, device: str, unprompted: bool = Fa
     was_training = model.training
     model.eval()
     b = bundle_to_device(scene["bundles"][0], device)
-    if unprompted:
-        class_logits, _, pred_masks = head_forward(model, b, b["grid_coordinates"], b["grid_view_ids"])
+    mode = getattr(model.decoder_head, "query_mode", "point")
+    M = getattr(model.decoder_head, "num_learned_queries", 0)
+    if mode == "learned":
+        # Coordinates are ignored; prompted == unprompted (report under the unprompted column).
+        coords, view_ids = learned_placeholder(b["coordinates"].shape[0], M, device)
+        class_logits, _, pred_masks = head_forward(model, b, coords, view_ids)
     else:
-        class_logits, _, pred_masks = head_forward(model, b)
+        base_c = b["grid_coordinates"] if unprompted else b["coordinates"]
+        base_v = b["grid_view_ids"] if unprompted else b["view_ids"]
+        if mode == "hybrid":
+            pc, pv = learned_placeholder(base_c.shape[0], M, device)
+            base_c = torch.cat([pc, base_c], dim=1)
+            base_v = torch.cat([pv, base_v], dim=1)
+        class_logits, _, pred_masks = head_forward(model, b, base_c, base_v)
     metrics = compute_instance_segmentation_metrics(
         pred_masks=pred_masks[0],
         class_logits=class_logits[0],
@@ -235,6 +276,59 @@ def mean_metric(per_scene: Dict[str, Dict[str, float]], key: str) -> float:
     return float(np.mean(vals)) if vals else 0.0
 
 
+def append_jsonl(path: Path, record: Dict) -> None:
+    """Append one JSON object as a line to `path` (parent dirs created on demand).
+
+    Used to persist one record per eval to <run_dir>/metrics.jsonl, so scaling plots come
+    from a machine-readable file rather than scraping the training log.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def moving_average(history: List[float], window: int) -> float:
+    """Mean of the last `window` values (the whole history if shorter)."""
+    window = max(1, window)
+    return float(np.mean(history[-window:])) if history else 0.0
+
+
+def early_stop_should_stop(evals_no_improve: int, patience: int,
+                           epoch: int, num_epochs: int) -> bool:
+    """
+    Noise-robust early-stop gate (SCALING_RUNS_ANALYSIS §4.3): only stop when early stopping
+    is enabled (`patience > 0`), there have been `patience` consecutive evals without a
+    moving-average improvement, AND we are at least halfway through the schedule (so a run
+    that is still warming up / at peak LR is never cut — the §2.1 failure that invalidated
+    the first scale25 run). `epoch` is 0-based; the run has completed `epoch + 1` epochs.
+    """
+    if patience <= 0:
+        return False
+    if (epoch + 1) < 0.5 * num_epochs:
+        return False
+    return evals_no_improve >= patience
+
+
+def build_eval_record(epoch: int, lr: float, loss_comps: Dict[str, float],
+                      tr, va, tr_un, va_un) -> Dict:
+    """One flat metrics record (epoch, lr, mean loss, prompted+grid train/val mIoU & AP50)."""
+    return {
+        "epoch": int(epoch),
+        "lr": float(lr),
+        "loss": float(loss_comps["total"]),
+        "class_loss": float(loss_comps["class"]),
+        "mask_loss": float(loss_comps["mask"]),
+        "train_mIoU": mean_metric(tr, "mIoU"),
+        "train_AP50": mean_metric(tr, "AP50"),
+        "train_grid_mIoU": mean_metric(tr_un, "mIoU"),
+        "train_grid_AP50": mean_metric(tr_un, "AP50"),
+        "val_mIoU": mean_metric(va, "mIoU"),
+        "val_AP50": mean_metric(va, "AP50"),
+        "val_grid_mIoU": mean_metric(va_un, "mIoU"),
+        "val_grid_AP50": mean_metric(va_un, "AP50"),
+    }
+
+
 def build_scheduler(optimizer, num_epochs: int, warmup_epochs: int, min_lr_ratio: float = 0.05):
     """Linear warmup followed by cosine decay to min_lr_ratio * base_lr."""
     def lr_lambda(epoch):
@@ -254,12 +348,21 @@ def save_checkpoint(path: Path, model, optimizer, scheduler, epoch, args,
     (pointing at the FIRST training scene) so older tooling keeps working; the full
     per-scene data lives under "scenes" (bundle 0 of each scene only).
     """
+    light = bool(getattr(args, "checkpoint_light", False))
+
+    def encode_images(t):
+        """uint8 [0,255] is 4x smaller than float; dropped entirely for --checkpoint_light."""
+        if light:
+            return None
+        return (t.detach().cpu().clamp(0, 1) * 255).round().to(torch.uint8)
+
     def scene_entry(s, metrics):
         b = s["bundles"][0]
         return {
             "name": s["name"],
             "split": s["split"],
-            "images": b["images"].cpu(),
+            "scene_dir": s.get("scene_dir"),
+            "images": encode_images(b["images"]),
             "coordinates": b["coordinates"].cpu(),
             "view_ids": b["view_ids"].cpu(),
             "gt": {k: v.cpu() for k, v in b["gt"].items()},
@@ -279,6 +382,9 @@ def save_checkpoint(path: Path, model, optimizer, scheduler, epoch, args,
         "mask_embed_dim": 256,
         "memory_dim": 2048,
         "dropout": float(args.dropout),
+        "query_mode": getattr(args, "query_mode", "point"),
+        "num_learned_queries": int(getattr(args, "num_learned_queries", 0)),
+        "mask_upsample": int(getattr(args, "mask_upsample", 1)),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -290,7 +396,8 @@ def save_checkpoint(path: Path, model, optimizer, scheduler, epoch, args,
             "epoch": epoch,
             "args": vars(args),
             # Back-compat single-scene view (first training scene)
-            "images": first["images"].cpu(),
+            "images": encode_images(first["images"]),
+            "scene_dir": train_scenes[0].get("scene_dir"),
             "coordinates": first["coordinates"].cpu(),
             "view_ids": first["view_ids"].cpu(),
             "gt": {k: v.cpu() for k, v in first["gt"].items()},
@@ -312,7 +419,8 @@ def save_checkpoint(path: Path, model, optimizer, scheduler, epoch, args,
     print(f"✓ Checkpoint saved to {path} ({path.stat().st_size / 1e6:.1f} MB)")
 
 
-def run_visualizations(model, ckpt_path: Path, device: str) -> Path:
+def run_visualizations(model, ckpt_path: Path, device: str,
+                       scans_root: str = DEFAULT_SCANS_ROOT) -> Path:
     """
     Render the standard visualize_masks.py overlays for a saved checkpoint into
     <checkpoint dir>/visualizations/ (one subfolder per stored scene). Reuses the
@@ -325,7 +433,8 @@ def run_visualizations(model, ckpt_path: Path, device: str) -> Path:
     model.decoder_head.load_state_dict(ckpt["decoder_head_state_dict"])
     model.eval()
     out_dir = ckpt_path.parent / "visualizations"
-    vis_args = argparse.Namespace(mask_threshold=0.5, score_threshold=0.5, alpha=0.5)
+    vis_args = argparse.Namespace(mask_threshold=0.5, score_threshold=0.5, alpha=0.5,
+                                  scans_root=scans_root)
     total = 0
     for label, scene in scenes_from_checkpoint(ckpt):
         print(f"\n--- {label or 'scene'} ---")
@@ -344,9 +453,24 @@ def main():
                         help="Held-out scene(s), same format as --train_scenes")
     parser.add_argument("--scans_root", type=str, default=DEFAULT_SCANS_ROOT)
     parser.add_argument("--num_epochs", type=int, default=600)
+    parser.add_argument("--schedule_epochs", type=int, default=None,
+                        help="Cosine-schedule length in epochs (defaults to --num_epochs). "
+                             "Decouples LR decay from run length so changing --num_epochs no "
+                             "longer rescales the schedule (SCALING_RUNS_ANALYSIS §2.1).")
     parser.add_argument("--warmup_epochs", type=int, default=20)
     parser.add_argument("--num_frames", type=int, default=8, help="Frames per scene per bundle")
     parser.add_argument("--num_queries", type=int, default=32)
+    parser.add_argument("--query_mode", type=str, default="point",
+                        choices=["point", "learned", "hybrid"],
+                        help="Query type (Phase 3 ablation): 'point' = (u,v) prompts (default); "
+                             "'learned' = DETR object queries (coords ignored, matcher "
+                             "coord_weight=0); 'hybrid' = learned queries + centroid prompts.")
+    parser.add_argument("--num_learned_queries", type=int, default=64,
+                        help="Number of learned object queries for --query_mode learned/hybrid")
+    parser.add_argument("--mask_upsample", type=int, default=1,
+                        help="Pixel-decoder upsampling factor (power of two) for the dense mask "
+                             "head (Phase 5). 1 = current 37x37 patch grid (default); 2 = 74x74; "
+                             "4 = 148x148. GT masks are built at the matching resolution.")
     parser.add_argument("--num_views", type=int, default=None,
                         help="View-embedding table size; defaults to max(num_frames, 10)")
     parser.add_argument("--learning_rate", type=float, default=1e-3)
@@ -362,6 +486,10 @@ def main():
     parser.add_argument("--save_checkpoint", type=str, default=None)
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to a checkpoint to resume head/optimizer/scheduler from")
+    parser.add_argument("--checkpoint_light", action="store_true",
+                        help="Drop per-scene images from checkpoints (store frame_names + scene "
+                             "path instead); the visualizer/demo reload frames from --scans_root. "
+                             "Default stores images as uint8 (4x smaller than float).")
     parser.add_argument("--no_visualize", action="store_true",
                         help="Skip the automatic mask-overlay rendering into "
                              "<run dir>/visualizations/ after training (on by default "
@@ -372,6 +500,10 @@ def main():
                              "unmatched queries (0 disables no-object supervision)")
     parser.add_argument("--grid_size", type=int, default=6,
                         help="Unprompted eval uses a grid_size^2 query grid per frame")
+    parser.add_argument("--train_grid_queries", action="store_true",
+                        help="Also feed the eval grid (random-offset) as training queries so "
+                             "Hungarian + no-object loss learn duplicate suppression (Phase 2). "
+                             "Default off (Milestone-2 behavior).")
     # --- Milestone 2: regularization ---
     parser.add_argument("--bundles_per_scene", type=int, default=1,
                         help="Cached bundles per train scene; bundle 0 is evenly-spaced frames "
@@ -385,9 +517,17 @@ def main():
                         help="Brightness/contrast jitter strength for random bundles (0 disables)")
     # --- Milestone 2: model selection ---
     parser.add_argument("--early_stop_patience", type=int, default=0,
-                        help="Stop after this many evals without val mIoU improvement (0 disables)")
+                        help="Stop after this many evals without val mIoU improvement (0 disables). "
+                             "Never fires before half the schedule (noise-robust).")
+    parser.add_argument("--early_stop_min_delta", type=float, default=0.005,
+                        help="Min moving-average val mIoU gain to count as an improvement for "
+                             "early stopping (only used when --early_stop_patience > 0)")
+    parser.add_argument("--early_stop_window", type=int, default=3,
+                        help="Moving-average window (#evals) for the noise-robust early-stop signal")
     args = parser.parse_args()
 
+    if args.schedule_epochs is None:
+        args.schedule_epochs = args.num_epochs
     if args.num_views is None:
         args.num_views = max(args.num_frames, 10)
     if args.num_frames > args.num_views:
@@ -417,6 +557,9 @@ def main():
         decoder_hidden_dim=256,
         mask_embed_dim=256,
         dropout=args.dropout,
+        query_mode=args.query_mode,
+        num_learned_queries=args.num_learned_queries,
+        mask_upsample=args.mask_upsample,
     ).to(device)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Trainable parameters: {trainable:,}")
@@ -425,6 +568,10 @@ def main():
     train_scenes = prepare_scene_bundles(model, train_dirs, args, device, "train")
     val_scenes = prepare_scene_bundles(model, val_dirs, args, device, "val")
 
+    # Learned/hybrid queries carry no meaningful coordinates, so drop the matcher's coord cost
+    # (Phase 3); point mode keeps the default coord_weight so prompts guide the matching.
+    matcher_kwargs = ({"coord_weight": 0.0}
+                      if args.query_mode in ("learned", "hybrid") else None)
     loss_fn = D4RTLoss(
         num_classes=20,
         class_loss_weight=1.0,
@@ -432,13 +579,14 @@ def main():
         coord_loss_weight=0.0,       # item 8.5: coordinates are matching-only
         mask_loss_weight=1.0,
         no_object_weight=args.no_object_weight if args.no_object_weight > 0 else None,
+        matcher_kwargs=matcher_kwargs,
     ).to(device)
 
     optimizer = AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=args.learning_rate, weight_decay=args.weight_decay,
     )
-    scheduler = build_scheduler(optimizer, args.num_epochs, args.warmup_epochs)
+    scheduler = build_scheduler(optimizer, args.schedule_epochs, args.warmup_epochs)
 
     start_epoch = 0
     if args.resume:
@@ -458,15 +606,22 @@ def main():
         print(f"  [val]   {name}: {_format_metrics(m)}")
 
     best_path = None
+    best_ap50_path = None
+    metrics_path = None
     if args.save_checkpoint:
         best_path = Path(args.save_checkpoint).parent / "checkpoint_best.pth"
+        best_ap50_path = Path(args.save_checkpoint).parent / "checkpoint_best_ap50.pth"
+        metrics_path = Path(args.save_checkpoint).parent / "metrics.jsonl"
 
     print("\n" + "=" * 70)
     print("TRAINING")
     print("=" * 70)
     history = []
     best = {"val_mIoU": -1.0, "epoch": -1}
-    evals_since_best = 0
+    best_ap50 = {"val_grid_AP50": -1.0, "epoch": -1}
+    val_select_history = []      # raw per-eval selection metric (val mIoU), for the smoothed signal
+    best_moving_avg = -1.0
+    evals_no_improve = 0
     t_start = time.time()
     for epoch in range(start_epoch, args.num_epochs):
         model.train()
@@ -510,26 +665,50 @@ def main():
         if (epoch + 1) % args.eval_interval == 0:
             tr = eval_all(model, train_scenes, device)
             va = eval_all(model, val_scenes, device)
+            tr_un = eval_all(model, train_scenes, device, unprompted=True)
             va_un = eval_all(model, val_scenes, device, unprompted=True)
             print(f"    train mIoU={mean_metric(tr, 'mIoU'):.3f} AP50={mean_metric(tr, 'AP50'):.3f} | "
                   f"val mIoU={mean_metric(va, 'mIoU'):.3f} AP50={mean_metric(va, 'AP50'):.3f} | "
                   f"val[grid] mIoU={mean_metric(va_un, 'mIoU'):.3f} AP50={mean_metric(va_un, 'AP50'):.3f}")
 
-            # Model selection on held-out prompted mIoU (falls back to train mIoU w/o val scenes).
+            # Persist one machine-readable record per eval (scaling plots read this, not the log).
+            record = build_eval_record(epoch + 1, scheduler.get_last_lr()[0], history[-1],
+                                       tr, va, tr_un, va_un)
+            if metrics_path is not None:
+                append_jsonl(metrics_path, record)
+
+            # Primary model selection on held-out prompted mIoU (falls back to train w/o val).
             select = mean_metric(va, "mIoU") if val_scenes else mean_metric(tr, "mIoU")
             if select > best["val_mIoU"]:
                 best = {"val_mIoU": select, "epoch": epoch + 1}
-                evals_since_best = 0
                 if best_path is not None:
-                    tr_un = eval_all(model, train_scenes, device, unprompted=True)
                     save_checkpoint(best_path, model, optimizer, scheduler, epoch + 1, args,
                                     train_scenes, val_scenes, tr, va, tr_un, va_un, best)
+
+            # Second checkpoint selected on the honest unprompted detection number, val[grid]
+            # AP50 (SCALING_RUNS_ANALYSIS §3.2: prompted-mIoU selection may pick a poor
+            # detection checkpoint). Falls back to train[grid] AP50 w/o val scenes.
+            select_ap50 = mean_metric(va_un, "AP50") if val_scenes else mean_metric(tr_un, "AP50")
+            if select_ap50 > best_ap50["val_grid_AP50"]:
+                best_ap50 = {"val_grid_AP50": select_ap50, "epoch": epoch + 1}
+                if best_ap50_path is not None:
+                    save_checkpoint(best_ap50_path, model, optimizer, scheduler, epoch + 1, args,
+                                    train_scenes, val_scenes, tr, va, tr_un, va_un, best_ap50)
+
+            # Noise-robust early stopping on a moving average of the selection metric.
+            val_select_history.append(select)
+            ma = moving_average(val_select_history, args.early_stop_window)
+            if ma > best_moving_avg + args.early_stop_min_delta:
+                best_moving_avg = ma
+                evals_no_improve = 0
             else:
-                evals_since_best += 1
-                if args.early_stop_patience > 0 and evals_since_best >= args.early_stop_patience:
-                    print(f"⏹ Early stop at epoch {epoch + 1}: no val mIoU improvement in "
-                          f"{evals_since_best} evals (best {best['val_mIoU']:.3f} @ epoch {best['epoch']}).")
-                    break
+                evals_no_improve += 1
+            if early_stop_should_stop(evals_no_improve, args.early_stop_patience,
+                                      epoch, args.num_epochs):
+                print(f"⏹ Early stop at epoch {epoch + 1}: moving-avg val mIoU flat for "
+                      f"{evals_no_improve} evals (best {best['val_mIoU']:.3f} @ epoch "
+                      f"{best['epoch']}).")
+                break
         if np.isnan(history[-1]["total"]):
             print("⚠ Loss is NaN — stopping.")
             break
@@ -566,6 +745,10 @@ def main():
     if best["epoch"] > 0:
         print(f"Best val mIoU during training: {best['val_mIoU']:.3f} @ epoch {best['epoch']}"
               + (f" (saved to {best_path})" if best_path is not None else ""))
+    if best_ap50["epoch"] > 0:
+        print(f"Best val[grid] AP50 during training: {best_ap50['val_grid_AP50']:.3f} @ epoch "
+              f"{best_ap50['epoch']}"
+              + (f" (saved to {best_ap50_path})" if best_ap50_path is not None else ""))
 
     if history:
         first, last = history[0]["total"], history[-1]["total"]
@@ -582,7 +765,7 @@ def main():
             else Path(args.save_checkpoint)
         print(f"\n=== Visualizations from {vis_ckpt.name} (skip with --no_visualize) ===")
         try:
-            run_visualizations(model, vis_ckpt, device)
+            run_visualizations(model, vis_ckpt, device, scans_root=args.scans_root)
         except Exception as e:  # training already succeeded — don't fail the run on rendering
             print(f"⚠ Visualization failed ({e}). Render manually with:\n"
                   f"  python scripts/visualize_masks.py --checkpoint {vis_ckpt}")

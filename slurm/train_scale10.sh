@@ -7,7 +7,7 @@
 #SBATCH --output=train_scale10_%j.log
 #SBATCH --error=train_scale10_%j.err
 #SBATCH --open-mode=append
-#SBATCH --time=04:00:00
+#SBATCH --time=02:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=4096
@@ -30,5 +30,5 @@ $PYTHON scripts/train_multiscene.py \
     --val_scenes $VAL \
     --num_epochs 1000 --warmup_epochs 30 --num_frames 8 --num_queries 32 \
     --learning_rate 2e-3 --bundles_per_scene 3 --query_jitter 0.02 --color_jitter 0.2 \
-    --no_object_weight 0.1 --grid_size 6 --eval_interval 50 --early_stop_patience 5 \
+    --no_object_weight 0.1 --grid_size 6 --eval_interval 50 --early_stop_patience 0 \
     --save_checkpoint $OUT/d4rt_m2_scale10_$(date +%Y%m%d_%H%M%S)/checkpoint.pth

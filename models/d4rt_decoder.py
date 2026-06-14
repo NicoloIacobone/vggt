@@ -7,6 +7,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple
 
+from models.mask_upsampler import MaskUpsampler
+
 
 class FourierPositionalEncoding(nn.Module):
     """
@@ -184,31 +186,38 @@ class QueryGenerator(nn.Module):
         patch_size: int = 9,
         num_freqs: int = 16,
         max_freq: float = 10.0,
+        query_mode: str = "point",
+        num_learned_queries: int = 0,
     ):
         super().__init__()
+        if query_mode not in ("point", "learned", "hybrid"):
+            raise ValueError(f"query_mode must be point/learned/hybrid, got {query_mode!r}")
+        if query_mode in ("learned", "hybrid") and num_learned_queries <= 0:
+            raise ValueError(f"query_mode={query_mode} needs num_learned_queries > 0")
         self.num_views = num_views
         self.hidden_dim = hidden_dim
         self.patch_size = patch_size
+        self.query_mode = query_mode
+        self.num_learned_queries = num_learned_queries
 
-        # Fourier positional encoding
+        # Point-prompt branch (Fourier pos + view embedding + local RGB patch). Always built
+        # for point/hybrid; harmless (and kept) for "learned" so the module is uniform.
         self.pos_encoder = FourierPositionalEncoding(num_freqs=num_freqs, max_freq=max_freq)
         pos_encoding_dim = 4 * num_freqs  # sin and cos for u and v
-
-        # View embeddings
         self.view_embedding = nn.Embedding(num_views, hidden_dim)
-
-        # Local RGB patch feature extraction
         self.patch_extractor = LocalPatchFeatureExtractor(
             patch_size=patch_size, hidden_dim=hidden_dim, in_channels=3
         )
-
-        # Projection layers to combine features
         self.pos_proj = nn.Linear(pos_encoding_dim, hidden_dim)
         self.view_proj = nn.Linear(hidden_dim, hidden_dim)
         self.patch_proj = nn.Linear(hidden_dim, hidden_dim)
-
-        # Final query projection
         self.query_proj = nn.Linear(hidden_dim, hidden_dim)
+
+        # Learned object-query table (true DETR queries) for learned/hybrid modes.
+        self.learned_queries = (
+            nn.Embedding(num_learned_queries, hidden_dim)
+            if query_mode in ("learned", "hybrid") else None
+        )
 
     def forward(
         self,
@@ -217,16 +226,31 @@ class QueryGenerator(nn.Module):
         images: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Generate queries for instance decoder.
-
-        Args:
-            coordinates (torch.Tensor): Normalized (u, v) coordinates with shape [B, N, 2] in [0, 1]
-            view_ids (torch.Tensor): View indices with shape [B, N] in [0, num_views)
-            images (torch.Tensor): Input images with shape [B, S, 3, H, W] in [0, 1]
-
-        Returns:
-            torch.Tensor: Query embeddings with shape [B, N, hidden_dim]
+        Generate decoder queries. Output length always equals `coordinates.shape[1]`, so the
+        downstream matcher/loss stay aligned regardless of mode:
+          - "point": every slot is a point-prompt query built from its (u, v)/view/patch.
+          - "learned": all slots are the learned object queries (coordinates ignored; the
+            caller passes a length-`num_learned_queries` placeholder).
+          - "hybrid": the first `num_learned_queries` slots are learned object queries, the
+            remaining slots are point-prompt queries from `coordinates[:, M:]`.
         """
+        B, N = coordinates.shape[0], coordinates.shape[1]
+        if self.query_mode == "learned":
+            return self.learned_queries.weight.unsqueeze(0).expand(B, -1, -1)  # [B, M, hidden]
+        if self.query_mode == "hybrid":
+            M = self.num_learned_queries
+            learned = self.learned_queries.weight.unsqueeze(0).expand(B, -1, -1)  # [B, M, hidden]
+            point = self._point_queries(coordinates[:, M:], view_ids[:, M:], images)
+            return torch.cat([learned, point], dim=1)  # [B, M + (N-M), hidden]
+        return self._point_queries(coordinates, view_ids, images)
+
+    def _point_queries(
+        self,
+        coordinates: torch.Tensor,
+        view_ids: torch.Tensor,
+        images: torch.Tensor,
+    ) -> torch.Tensor:
+        """Point-prompt queries: Fourier(u,v) + view embedding + local RGB patch, summed."""
         B = coordinates.shape[0]
         N = coordinates.shape[1]
 
@@ -287,11 +311,13 @@ class InstanceDecoder(nn.Module):
         dropout: float = 0.1,
         mask_embed_dim: int = 256,
         memory_dim: int = 2048,
+        mask_upsample: int = 1,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_classes = num_classes
         self.mask_embed_dim = mask_embed_dim
+        self.mask_upsample = mask_upsample
 
         # Project memory from VGGT (2048-dim) to decoder hidden dim (256-dim).
         # The LayerNorm is essential: raw VGGT features have a very large magnitude, so without
@@ -310,6 +336,15 @@ class InstanceDecoder(nn.Module):
         self.mask_feature_proj = nn.Linear(memory_dim, mask_embed_dim)
         self.mask_logit_scale = nn.Parameter(torch.tensor(10.0))
         self.mask_logit_bias = nn.Parameter(torch.tensor(0.0))
+
+        # Phase 5: optional MaskDINO-style pixel decoder. At mask_upsample=1 (default) the
+        # original Linear projection at the 37×37 patch grid is used (behavior unchanged);
+        # for >1 the patch-feature map is upsampled before the cosine-similarity mask product.
+        self.mask_upsampler = (
+            MaskUpsampler(memory_dim=memory_dim, mask_embed_dim=mask_embed_dim,
+                          upsample=mask_upsample)
+            if mask_upsample > 1 else None
+        )
 
         # Transformer decoder
         decoder_layer = nn.TransformerDecoderLayer(
@@ -403,8 +438,12 @@ class InstanceDecoder(nn.Module):
         )
 
         patch_tokens = global_features[:, :, start:start + h * w, :]  # [B, S, h*w, memory_dim]
-        pixel_feats = self.mask_feature_proj(patch_tokens)            # [B, S, h*w, mask_embed_dim]
-        pixel_feats = pixel_feats.reshape(B, S, h, w, self.mask_embed_dim)
+        if self.mask_upsampler is not None:
+            # Upsample the patch-feature map → [B, S, h*f, w*f, mask_embed_dim] (Phase 5).
+            pixel_feats = self.mask_upsampler(patch_tokens.reshape(B, S, h, w, -1))
+        else:
+            pixel_feats = self.mask_feature_proj(patch_tokens)        # [B, S, h*w, mask_embed_dim]
+            pixel_feats = pixel_feats.reshape(B, S, h, w, self.mask_embed_dim)
 
         # pred_masks[b, n, s, i, j] = scale * cos(mask_embeddings[b, n], pixel_feats[b, s, i, j]) + bias
         emb_n = F.normalize(mask_embeddings, dim=-1)
@@ -441,12 +480,20 @@ class D4RTInstanceSegmentationHead(nn.Module):
         mask_embed_dim: int = 256,
         memory_dim: int = 2048,
         dropout: float = 0.1,
+        query_mode: str = "point",
+        num_learned_queries: int = 0,
+        mask_upsample: int = 1,
     ):
         super().__init__()
+        self.query_mode = query_mode
+        self.num_learned_queries = num_learned_queries
+        self.mask_upsample = mask_upsample
         self.query_generator = QueryGenerator(
             num_views=num_views,
             hidden_dim=hidden_dim,
             patch_size=patch_size,
+            query_mode=query_mode,
+            num_learned_queries=num_learned_queries,
         )
         self.instance_decoder = InstanceDecoder(
             hidden_dim=hidden_dim,
@@ -455,6 +502,7 @@ class D4RTInstanceSegmentationHead(nn.Module):
             mask_embed_dim=mask_embed_dim,
             memory_dim=memory_dim,
             dropout=dropout,
+            mask_upsample=mask_upsample,
         )
 
     def forward(

@@ -160,6 +160,63 @@ def test_edge_cases():
     return True
 
 
+def test_query_modes():
+    """Phase 3: point/learned/hybrid query modes produce the right shapes, and learned
+    queries are independent of the (placeholder) coordinates."""
+    print("=== Testing query modes (point/learned/hybrid) ===")
+    B, S, N, M, hidden = 2, 3, 5, 7, 256
+    coords = torch.rand(B, N, 2)
+    view_ids = torch.randint(0, S, (B, N))
+    images = torch.rand(B, S, 3, 28, 28)
+
+    out_p = QueryGenerator(num_views=S, query_mode="point")(coords, view_ids, images)
+    assert out_p.shape == (B, N, hidden), out_p.shape
+
+    qg_l = QueryGenerator(num_views=S, query_mode="learned", num_learned_queries=M)
+    ph_c = torch.zeros(B, M, 2)
+    ph_v = torch.zeros(B, M, dtype=torch.long)
+    out_l = qg_l(ph_c, ph_v, images)
+    assert out_l.shape == (B, M, hidden), out_l.shape
+    # Learned queries ignore coordinate values entirely.
+    assert torch.equal(out_l, qg_l(torch.rand(B, M, 2), ph_v, images))
+
+    qg_h = QueryGenerator(num_views=S, query_mode="hybrid", num_learned_queries=M)
+    cat_c = torch.cat([torch.zeros(B, M, 2), coords], dim=1)
+    cat_v = torch.cat([torch.zeros(B, M, dtype=torch.long), view_ids], dim=1)
+    out_h = qg_h(cat_c, cat_v, images)
+    assert out_h.shape == (B, M + N, hidden), out_h.shape
+    # First M slots are exactly the learned object queries.
+    expect = qg_h.learned_queries.weight.unsqueeze(0).expand(B, -1, -1)
+    assert torch.allclose(out_h[:, :M], expect)
+
+    for bad in (dict(query_mode="bogus"),
+                dict(query_mode="learned", num_learned_queries=0)):
+        try:
+            QueryGenerator(**bad)
+            assert False, f"expected ValueError for {bad}"
+        except ValueError:
+            pass
+    print("✅ query modes test passed!\n")
+
+
+def test_head_config_roundtrip():
+    """Phase 3: a head's state_dict reloads into a head rebuilt from the SAME head_config,
+    for every query mode (the checkpoint→demo round-trip the demo relies on)."""
+    print("=== Testing head_config round-trip across query modes ===")
+    from models.d4rt_decoder import D4RTInstanceSegmentationHead
+
+    for mode, M in [("point", 0), ("learned", 6), ("hybrid", 6)]:
+        cfg = dict(num_views=4, hidden_dim=32, num_classes=20, num_decoder_layers=1,
+                   patch_size=5, mask_embed_dim=16, memory_dim=64, dropout=0.0,
+                   query_mode=mode, num_learned_queries=M)
+        head = D4RTInstanceSegmentationHead(**cfg)
+        rebuilt = D4RTInstanceSegmentationHead(**cfg)
+        missing = rebuilt.load_state_dict(head.state_dict())  # must not raise
+        assert not missing.missing_keys and not missing.unexpected_keys, missing
+        assert rebuilt.query_mode == mode and rebuilt.num_learned_queries == M
+    print("✅ head_config round-trip test passed!\n")
+
+
 if __name__ == "__main__":
     try:
         test_fourier_encoding()
@@ -167,6 +224,8 @@ if __name__ == "__main__":
         test_query_generator()
         test_gradients()
         test_edge_cases()
+        test_query_modes()
+        test_head_config_roundtrip()
 
         print("=" * 50)
         print("✅ Phase 3 Validation PASSED!")

@@ -50,6 +50,9 @@ class D4RTModel(nn.Module):
         decoder_hidden_dim: int = 256,
         mask_embed_dim: int = 256,
         dropout: float = 0.0,
+        query_mode: str = "point",
+        num_learned_queries: int = 0,
+        mask_upsample: int = 1,
     ):
         super().__init__()
         self.freeze_backbone = freeze_backbone
@@ -82,6 +85,9 @@ class D4RTModel(nn.Module):
             mask_embed_dim=mask_embed_dim,
             memory_dim=2048,  # 2 * embed_dim from VGGT
             dropout=dropout,
+            query_mode=query_mode,
+            num_learned_queries=num_learned_queries,
+            mask_upsample=mask_upsample,
         )
 
     def forward(
@@ -294,6 +300,7 @@ def build_gt_targets(
     patch_start_idx: int,
     num_patch_tokens: int,
     device: str,
+    mask_upsample: int = 1,
 ) -> Dict[str, torch.Tensor]:
     """
     Build dense ground-truth targets for multi-view instance segmentation (item 8.4).
@@ -327,6 +334,8 @@ def build_gt_targets(
     S = masks.shape[0]
     h = w = int(round(num_patch_tokens ** 0.5))
     assert h * w == num_patch_tokens, "patch tokens do not form a square grid"
+    # Phase 5: when the pixel decoder upsamples predictions, the GT must match that resolution.
+    out_h, out_w = h * mask_upsample, w * mask_upsample
 
     num_instances = int(classes.shape[0])
     if num_instances == 0:
@@ -334,17 +343,17 @@ def build_gt_targets(
         return {
             "classes": torch.zeros(1, dtype=torch.long, device=device),
             "coordinates": torch.full((1, 2), 0.5, device=device),
-            "masks": torch.zeros(1, S, h, w, device=device),
+            "masks": torch.zeros(1, S, out_h, out_w, device=device),
         }
 
-    gt_masks = torch.zeros(num_instances, S, h, w, device=device)
+    gt_masks = torch.zeros(num_instances, S, out_h, out_w, device=device)
     for i in range(num_instances):
         inst_id = i + 1  # i-th instance has global id (i+1) in the mask map (all frames)
         for f in range(S):
             bin_mask = (masks[f] == inst_id).float()  # [H, W]
             if bin_mask.sum() == 0:
                 continue
-            occ = F.interpolate(bin_mask[None, None], size=(h, w), mode="area")[0, 0]  # [h, w]
+            occ = F.interpolate(bin_mask[None, None], size=(out_h, out_w), mode="area")[0, 0]
             # Keep the peak patch even for small instances; exclude non-overlapping patches.
             thr = min(0.5, float(occ.max().item()))
             gt_masks[i, f] = ((occ >= thr) & (occ > 0)).float()

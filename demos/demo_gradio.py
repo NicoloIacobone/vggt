@@ -28,7 +28,10 @@ from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from vggt.utils.geometry import unproject_depth_map_to_point_map
 from models.d4rt_decoder import D4RTInstanceSegmentationHead
-from data.scannet_overfit import IDX_TO_CLASS
+from data.scannet_overfit import IDX_TO_CLASS, decode_checkpoint_images
+
+# Root for reloading frames from --checkpoint_light checkpoints (no stored pixels).
+SEG_SCANS_ROOT = "/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans"
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -69,7 +72,8 @@ def _select_seg_scene(idx: int):
     SEG["coords"] = s["coordinates"]
     SEG["view_ids"] = s["view_ids"]
     SEG["gt_classes"] = s["gt"]["classes"]
-    SEG["images"] = s["images"]
+    # Handles float / uint8 / light (reloaded from disk) checkpoint image formats.
+    SEG["images"] = decode_checkpoint_images(s, scans_root=SEG_SCANS_ROOT)
     SEG["frame_names"] = s.get("frame_names", None)
 
 
@@ -114,8 +118,10 @@ def load_seg_checkpoint(ckpt_path: str):
     print(f"✓ Segmentation head ready: {len(scenes)} scene(s)")
     for s in scenes:
         m = s.get("metrics", {}) or {}
+        n_frames = s["images"].shape[1] if s.get("images") is not None \
+            else len(s.get("frame_names") or [])
         print(
-            f"    {s['name']} [{s.get('split', 'train')}]: {s['images'].shape[1]} frames, "
+            f"    {s['name']} [{s.get('split', 'train')}]: {n_frames} frames, "
             f"{s['coordinates'].shape[1]} queries, mIoU={m.get('mIoU', float('nan')):.3f}, "
             f"class_acc={m.get('class_acc', float('nan')):.3f}"
         )

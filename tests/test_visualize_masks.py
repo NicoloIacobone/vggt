@@ -16,11 +16,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from visualize_masks import scenes_from_checkpoint, overlay_mask
+from data.scannet_overfit import decode_checkpoint_images, load_frames_by_name
 
 
 def _fake_batch():
@@ -143,10 +145,53 @@ def test_run_visualizations():
     print("✅ run_visualizations test passed!\n")
 
 
+def test_decode_checkpoint_images_formats():
+    """decode_checkpoint_images handles the three storage formats: float passthrough,
+    uint8 → /255, and light (no pixels) → reload from disk by frame name."""
+    print("=== Testing decode_checkpoint_images formats ===")
+    H = W = 14
+    flt = torch.rand(1, 2, 3, H, W)
+
+    # float passthrough (legacy)
+    out = decode_checkpoint_images({"images": flt})
+    assert out.dtype == torch.float32 and torch.equal(out, flt)
+
+    # uint8 → float in [0, 1], close to the original after the round-trip
+    u8 = (flt.clamp(0, 1) * 255).round().to(torch.uint8)
+    out_u8 = decode_checkpoint_images({"images": u8})
+    assert out_u8.dtype == torch.float32 and out_u8.max() <= 1.0
+    assert (out_u8 - flt).abs().max() < 1.5 / 255
+
+    # light: images=None, reload from a fake on-disk subset/ by frame name
+    with tempfile.TemporaryDirectory() as tmp:
+        subset = Path(tmp) / "subset"
+        subset.mkdir()
+        for name in ("00000", "00005"):
+            Image.fromarray(np.full((8, 8, 3), 100, np.uint8)).save(subset / f"{name}.jpg")
+        loaded = load_frames_by_name(tmp, ["00000", ["00005"]], img_size=H)  # mixed str/list names
+        assert loaded.shape == (2, 3, H, W) and loaded.max() <= 1.0
+        light_scene = {"images": None, "frame_names": ["00000", "00005"], "scene_dir": tmp}
+        out_light = decode_checkpoint_images(light_scene, img_size=H)
+        assert out_light.shape == (1, 2, 3, H, W)
+    print("✅ decode_checkpoint_images formats test passed!\n")
+
+
+def test_scene_dir_passthrough():
+    """Multi-scene checkpoints preserve scene_dir so light checkpoints can reload frames."""
+    print("=== Testing scene_dir passthrough ===")
+    e = dict(_fake_batch())
+    e.update(name="scene0000_00", split="train", scene_dir="/some/path/raw_data", images=None)
+    scenes = scenes_from_checkpoint({"scenes": [e]})
+    assert scenes[0][1].get("scene_dir") == "/some/path/raw_data"
+    print("✅ scene_dir passthrough test passed!\n")
+
+
 if __name__ == "__main__":
     test_single_scene_checkpoint()
     test_multi_scene_checkpoint()
     test_missing_metrics()
     test_overlay_mask()
     test_run_visualizations()
+    test_decode_checkpoint_images_formats()
+    test_scene_dir_passthrough()
     print("All visualize_masks tests passed! ✅")

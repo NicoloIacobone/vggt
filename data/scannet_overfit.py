@@ -22,6 +22,68 @@ IDX_TO_CLASS = {idx + 1: cls_name for idx, cls_name in enumerate(SCANNET_CLASSES
 IDX_TO_CLASS[0] = "background"
 
 
+def load_frames_by_name(
+    scene_dir: str,
+    frame_names: List,
+    img_size: int = 518,
+    image_ext: str = ".jpg",
+) -> torch.Tensor:
+    """
+    Load specific subset frames by their stem name into a float tensor
+    [S, 3, img_size, img_size] in [0, 1]. Mirrors ScanNetSingleSceneDataset's image
+    loading; used to rehydrate `--checkpoint_light` bundles (which store frame names +
+    the scene path instead of the pixels) at visualization/demo time.
+    """
+    scene_dir = Path(scene_dir)
+    images_dir = None
+    for cand in ("subset", "images", "color"):
+        if (scene_dir / cand).exists():
+            images_dir = scene_dir / cand
+            break
+    if images_dir is None:
+        raise ValueError(f"Images directory not found under {scene_dir}")
+
+    imgs = []
+    for name in frame_names:
+        # Collation may wrap each name in a 1-element list (batch_size=1).
+        if isinstance(name, (list, tuple)):
+            name = name[0]
+        path = images_dir / f"{name}{image_ext}"
+        img = Image.open(path).convert("RGB").resize((img_size, img_size), Image.BILINEAR)
+        arr = np.array(img, dtype=np.float32) / 255.0
+        imgs.append(torch.from_numpy(arr).permute(2, 0, 1))
+    return torch.stack(imgs, dim=0)  # [S, 3, H, W]
+
+
+def decode_checkpoint_images(
+    scene: Dict,
+    scans_root: Optional[str] = None,
+    img_size: int = 518,
+) -> torch.Tensor:
+    """
+    Return a scene's frames as a float tensor [1, S, 3, H, W] in [0, 1], handling all three
+    checkpoint storage formats:
+      - float images (legacy)            → passed through;
+      - uint8 images (compact, 4× smaller) → divided by 255;
+      - no images (`--checkpoint_light`)   → reloaded from disk via `scene_dir`/`frame_names`
+        (falling back to `<scans_root>/<name>/raw_data` when no explicit path was stored).
+    """
+    imgs = scene.get("images")
+    if imgs is not None:
+        return imgs.float() / 255.0 if imgs.dtype == torch.uint8 else imgs
+
+    frame_names = scene.get("frame_names")
+    if frame_names is None:
+        raise ValueError("Light checkpoint scene has no frame_names to reload images from")
+    scene_dir = scene.get("scene_dir")
+    if scene_dir is None:
+        if scans_root is None:
+            raise ValueError("Light checkpoint needs --scans_root (no stored scene_dir)")
+        scene_dir = str(Path(scans_root) / scene["name"] / "raw_data")
+    frames = load_frames_by_name(scene_dir, frame_names, img_size)  # [S, 3, H, W]
+    return frames.unsqueeze(0)  # [1, S, 3, H, W]
+
+
 class ScanNetSingleSceneDataset(Dataset):
     """
     Minimal ScanNet single-scene dataset for overfitting.

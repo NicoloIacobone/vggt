@@ -36,7 +36,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root
 
 from train_overfit import D4RTModel
 from train.loss import PointBipartiteMatcher
-from data.scannet_overfit import IDX_TO_CLASS
+from data.scannet_overfit import IDX_TO_CLASS, decode_checkpoint_images
+
+DEFAULT_SCANS_ROOT = "/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans"
 
 
 # A fixed, perceptually-distinct color palette (RGB in [0,1]) for instances.
@@ -82,7 +84,9 @@ def scenes_from_checkpoint(ckpt: dict) -> list:
     if ckpt.get("scenes"):
         return [(f"{s.get('split', 'train')}_{s['name']}", s) for s in ckpt["scenes"]]
     return [(None, {
+        "name": ckpt.get("args", {}).get("train_scenes"),
         "images": ckpt["images"],
+        "scene_dir": ckpt.get("scene_dir"),
         "coordinates": ckpt["coordinates"],
         "view_ids": ckpt["view_ids"],
         "gt": ckpt["gt"],
@@ -95,7 +99,8 @@ def visualize_scene(model, scene: dict, out_dir: Path, device: str, args) -> int
     """Forward + match + per-frame overlay figures for one stored scene batch. Returns #frames."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    images = scene["images"].to(device)            # [1, S, 3, H, W]
+    images = decode_checkpoint_images(
+        scene, scans_root=getattr(args, "scans_root", None)).to(device)  # [1, S, 3, H, W]
     coordinates = scene["coordinates"].to(device)  # [1, N, 2]
     view_ids = scene["view_ids"].to(device)        # [1, N]
     gt = {k: v.to(device) for k, v in scene["gt"].items()}
@@ -105,6 +110,20 @@ def visualize_scene(model, scene: dict, out_dir: Path, device: str, args) -> int
 
     S = images.shape[1]
     H, W = images.shape[-2:]
+
+    # Phase 3 query modes: learned queries ignore coordinates (use placeholders); hybrid
+    # prepends learned-query placeholders to the point queries. Keep the query count aligned
+    # with the head's output so the matcher below stays consistent.
+    mode = getattr(model.decoder_head, "query_mode", "point")
+    M = getattr(model.decoder_head, "num_learned_queries", 0)
+    if mode in ("learned", "hybrid"):
+        ph_c = torch.zeros(coordinates.shape[0], M, 2, device=device)
+        ph_v = torch.zeros(coordinates.shape[0], M, dtype=torch.long, device=device)
+        if mode == "learned":
+            coordinates, view_ids = ph_c, ph_v
+        else:
+            coordinates = torch.cat([ph_c, coordinates], dim=1)
+            view_ids = torch.cat([ph_v, view_ids], dim=1)
 
     print(f"Scene: S={S} frames, {gt_classes.shape[0]} GT instances, image {H}x{W}")
     m = scene.get("metrics") or {}
@@ -125,7 +144,9 @@ def visualize_scene(model, scene: dict, out_dir: Path, device: str, args) -> int
     pred_masks = pred_masks[0]           # [N, S, h, w]
 
     # --- Match predictions to GT (same matcher as training: weights all 1.0) ------------------
-    matcher = PointBipartiteMatcher(class_weight=1.0, mask_weight=1.0, coord_weight=1.0)
+    # Learned/hybrid coordinates are placeholders → drop the coord cost (matches training).
+    coord_weight = 0.0 if mode in ("learned", "hybrid") else 1.0
+    matcher = PointBipartiteMatcher(class_weight=1.0, mask_weight=1.0, coord_weight=coord_weight)
     pred_idx, gt_idx, _ = matcher(
         class_logits, mask_embeddings, coordinates[0],
         gt_classes, gt_mask_embeddings=None, gt_coordinates=gt["coordinates"],
@@ -188,14 +209,20 @@ def visualize_scene(model, scene: dict, out_dir: Path, device: str, args) -> int
             ax.imshow(im)
             ax.set_title(title, fontsize=12)
             ax.axis("off")
-        legend = [
-            Patch(facecolor=_color(ci), label=f"{IDX_TO_CLASS.get(gc, gc)}")
-            for ci, p, g, gc, pc, sc, dr in matches
-        ]
+        # Per-class instance index so two same-class objects are distinguishable in the
+        # legend ("{class} #{k}") — load-bearing once per-instance GT lands (Phase 0.6).
+        class_counts = {}
+        legend = []
+        for ci, p, g, gc, pc, sc, dr in matches:
+            k = class_counts.get(gc, 0)
+            class_counts[gc] = k + 1
+            legend.append(Patch(facecolor=_color(ci), label=f"{IDX_TO_CLASS.get(gc, gc)} #{k}"))
         fig.legend(handles=legend, loc="lower center", ncol=min(len(legend), 6), fontsize=8,
                    frameon=False, bbox_to_anchor=(0.5, -0.02))
         fig.suptitle(f"Frame {s} — {fname}", fontsize=13)
-        fig.tight_layout(rect=[0, 0.04, 1, 0.97])
+        fig.text(0.5, 0.93, "one color = one predicted instance (mask spans all frames jointly)",
+                 ha="center", fontsize=9, style="italic")
+        fig.tight_layout(rect=[0, 0.04, 1, 0.92])
         out_path = out_dir / f"frame_{s:02d}_overlay.png"
         fig.savefig(out_path, dpi=110, bbox_inches="tight")
         plt.close(fig)
@@ -213,6 +240,9 @@ def main():
                         help="Comma-separated scene names to render from a multi-scene "
                              "checkpoint (default: all stored scenes)")
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--scans_root", type=str, default=DEFAULT_SCANS_ROOT,
+                        help="Root for reloading frames from --checkpoint_light checkpoints "
+                             "(when no per-scene image pixels are stored)")
     parser.add_argument("--mask_threshold", type=float, default=0.5,
                         help="Sigmoid threshold for a predicted mask pixel")
     parser.add_argument("--score_threshold", type=float, default=0.5,
@@ -237,12 +267,17 @@ def main():
 
     # --- Rebuild model (frozen backbone from HF + trained decoder head) -----------------------
     num_views = ck_args.get("num_views", 10)
+    head_config = ckpt.get("head_config", {}) or {}
     model = D4RTModel(
         freeze_backbone=True,
         num_views=num_views if isinstance(num_views, int) else 10,
         decoder_hidden_dim=256,
         mask_embed_dim=256,
         dropout=0.0,
+        query_mode=head_config.get("query_mode", ck_args.get("query_mode", "point")),
+        num_learned_queries=head_config.get("num_learned_queries",
+                                            ck_args.get("num_learned_queries", 0)),
+        mask_upsample=head_config.get("mask_upsample", ck_args.get("mask_upsample", 1)),
     ).to(device)
     model.decoder_head.load_state_dict(ckpt["decoder_head_state_dict"])
     model.eval()
