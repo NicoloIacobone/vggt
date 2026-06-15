@@ -60,6 +60,86 @@ def create_synthetic_scene(scene_dir: str, num_frames: int = 4, img_size: int = 
     return scene_path
 
 
+def create_synthetic_instance_scene(scene_dir: str, num_frames: int = 4, img_size: int = 256):
+    """
+    Synthetic scene with PER-INSTANCE masks (masks_instance/<class>_<k>/), including TWO
+    objects of the same class (chair_0, chair_1) to exercise instance_level=True.
+    """
+    scene_path = Path(scene_dir)
+    images_dir = scene_path / "images"
+    masks_inst_dir = scene_path / "masks_instance"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    masks_inst_dir.mkdir(parents=True, exist_ok=True)
+
+    for i in range(num_frames):
+        img_array = np.random.randint(0, 256, (img_size, img_size, 3), dtype=np.uint8)
+        Image.fromarray(img_array).save(images_dir / f"frame_{i:05d}.jpg")
+
+    # Two chairs in disjoint regions (left / right halves) + one wall, all in every frame.
+    # region: (y0, y1, x0, x1)
+    h = img_size
+    segments = {
+        "wall_0":  (0, h // 4, 0, img_size),                 # top strip
+        "chair_0": (h // 2, h, 0, img_size // 2),            # bottom-left
+        "chair_1": (h // 2, h, img_size // 2, img_size),     # bottom-right
+    }
+    for seg_name, (y0, y1, x0, x1) in segments.items():
+        seg_dir = masks_inst_dir / seg_name
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(num_frames):
+            mask = np.zeros((img_size, img_size), dtype=np.uint8)
+            mask[y0:y1, x0:x1] = 255
+            Image.fromarray(mask).save(seg_dir / f"frame_{i:05d}.png")
+
+    return scene_path
+
+
+def test_instance_dataset():
+    """instance_level=True: two same-class objects become two distinct cross-view IDs."""
+    print("\n=== instance_level=True (per-instance masks) ===")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        scene_dir = create_synthetic_instance_scene(tmpdir, num_frames=4, img_size=256)
+        dataset = ScanNetSingleSceneDataset(
+            scene_dir=str(scene_dir), num_frames=4, img_size=256,
+            frame_sampling="even", instance_level=True,
+        )
+        batch = dataset[0]
+
+        # 3 segments: wall_0, chair_0, chair_1 -> 3 instances.
+        assert batch["num_instances"] == 3, (
+            f"Expected 3 instances (wall + 2 chairs), got {batch['num_instances']}"
+        )
+        from data.scannet_overfit import CLASS_TO_IDX
+        classes = batch["classes"].tolist()
+        chair_idx = CLASS_TO_IDX["chair"]
+        wall_idx = CLASS_TO_IDX["wall"]
+        print(f"  classes: {classes} (chair={chair_idx}, wall={wall_idx})")
+
+        # The chair class index must appear TWICE (two distinct same-class instances).
+        assert classes.count(chair_idx) == 2, "Expected two separate 'chair' instances"
+        assert classes.count(wall_idx) == 1, "Expected one 'wall' instance"
+
+        # The two chair instances must have DISTINCT global IDs, each present in >1 frame.
+        masks = batch["masks"]
+        chair_ids = [
+            iid for iid, c in zip(batch["instance_ids"].tolist(), classes) if c == chair_idx
+        ]
+        assert len(set(chair_ids)) == 2, f"Two chairs must have distinct IDs, got {chair_ids}"
+        for iid in batch["instance_ids"].tolist():
+            frames_with_id = [f for f in range(masks.shape[0]) if (masks[f] == iid).any()]
+            assert len(frames_with_id) > 1, (
+                f"Instance {iid} appears in only one frame — cross-view identity broken"
+            )
+
+        # The two chair masks must occupy disjoint pixels (left vs right) in a frame.
+        m0 = (masks[0] == chair_ids[0])
+        m1 = (masks[0] == chair_ids[1])
+        assert m0.any() and m1.any(), "Both chair instances must be visible in frame 0"
+        assert not (m0 & m1).any(), "Same-class instances must not overlap"
+
+        print("  ✅ instance_level test PASSED (2 chairs separated, cross-view consistent)")
+
+
 def test_dataset():
     """Test the ScanNetSingleSceneDataset."""
     # Create synthetic scene
@@ -165,3 +245,4 @@ def test_dataset():
 
 if __name__ == "__main__":
     test_dataset()
+    test_instance_dataset()

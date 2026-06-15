@@ -13,33 +13,27 @@ checkpoint `head_config` round-trip intact whenever the head constructor changes
 
 ---
 
-## ⚠ User actions required (SAM3 ground-truth side)
+## ✅ User actions (SAM3 ground-truth side) — DONE 2026-06-15
 
-These items depend on the SAM3 preprocessing side, which the user drives separately. A
-ready-to-use prompt for the SAM3-side agent is in `docs/SAM3_INSTANCE_MASKS_PROMPT.md`.
-Status verified on disk (2026-06-12): **97 scenes (scene0000–0096) are already preprocessed
-with per-class masks**, including val candidates scene0083–0089 — so widening the val set
-(SCALING_RUNS_ANALYSIS §4.4) needs **no new preprocessing for per-class runs**, only scene
-lists, and scale50 + a wider-val protocol are unblocked today.
+The per-instance SAM3 run is **complete**, so Phases 4 and 6 are unblocked. See
+`docs/MILESTONE_3.md` "Dataset update (2026-06-15)" for the canonical, up-to-date plan;
+summary:
 
-What still needs the SAM3 side (gates Phases 4 and 6):
+1. **Per-INSTANCE SAM3 masks — DONE.** 97 scenes (scene0000–0096), 2056 instances,
+   `masks_instance/<class>_<k>/<frame>.png` alongside the unchanged `masks/`; same PNG
+   conventions; cross-frame identity from SAM3 video tracking; `wall`/`floor` single
+   instances; union of a class's instances ≈ the old per-class mask (union-IoU ≈ 1.0).
+   Spec: `…/scannet/INSTANCE_MASKS_README.md`.
+2. **Data access changed:** the dataset now ships as one zstd tar
+   `scannet_instance_dataset.tar.zst` (~1.3 GB); jobs copy it to node-local `$TMPDIR` and
+   unpack there (`slurm/stage_dataset.sh` → `SCANNET_ROOT`). Do not read the small PNGs off
+   `work`.
+3. **Still pending (stretch):** more scenes beyond 97 for the N=100+ scaling point.
 
-1. **Per-INSTANCE SAM3 masks** (decision recorded Jun 12, supervisor_feedback §4):
-   - One binary mask per *instance*, layout `masks_instance/<class>_<k>/<frame>.png` next
-     to (not replacing) the existing `masks/`; same PNG conventions (uint8 {0,255},
-     1296×968, all 100 subset-frame filenames per instance dir, all-zero when absent).
-   - Cross-frame instance identity comes from SAM3 tracking/propagation — the load-bearing
-     assumption of the GT. The prompt mandates a **visual QA on 3 pilot scenes + user
-     approval before the bulk run**, plus a union-IoU check against the old per-class masks.
-   - Stuff classes (wall/floor) stay single instances; class taxonomy unchanged (19 classes,
-     indices 1..19, 0 = bg downstream).
-   - Bulk priority order: val scenes 0080–0089 first, then 0000–0049, then the rest.
-2. **More scenes beyond the 97** (stretch, for the N=100+ scaling point): download +
-   preprocess additional ScanNet scenes in the same format.
-
-Until per-instance data lands, all training/ablation phases below run on the existing
-per-class masks — results stay comparable to the current baselines, and the loader switch
-in Phase 4 is isolated.
+The phase-by-phase loader/experiment plan moved to `docs/MILESTONE_3.md` (Phase 4 + Phase 6
+sections). The Phases 1/2/3/5 GPU experiments were coded against the per-class loader; after
+the Phase-4 switch they should be re-run on the instance GT so the whole curve is one GT
+definition.
 
 ---
 

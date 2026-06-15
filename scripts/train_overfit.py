@@ -131,6 +131,7 @@ def create_dataloader(
     num_frames: int = 8,
     batch_size: int = 1,
     num_workers: int = 0,
+    instance_level: bool = False,
 ) -> DataLoader:
     """Create a dataloader for the scene."""
     if scene_dir is None:
@@ -145,6 +146,7 @@ def create_dataloader(
         scene_dir=str(scene_dir),
         num_frames=num_frames,
         img_size=518,  # Must be divisible by VGGT patch_size (14)
+        instance_level=instance_level,
     )
 
     dataloader = DataLoader(
@@ -405,6 +407,9 @@ def _format_metrics(m: Dict[str, float]) -> str:
 def main():
     parser = argparse.ArgumentParser(description="D4RT Overfit Training Loop")
     parser.add_argument("--num_epochs", type=int, default=100, help="Number of training epochs")
+    parser.add_argument("--instance_level", action="store_true",
+                        help="Use per-instance masks (masks_instance/<class>_<k>/) instead of "
+                             "per-class masks. Default off.")
     parser.add_argument("--num_frames", type=int, default=4, help="Number of frames for overfitting")
     parser.add_argument("--num_queries", type=int, default=16, help="Number of query points per image")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
@@ -470,6 +475,7 @@ def main():
             scene_dir=args.scene_dir,
             num_frames=args.num_frames,
             batch_size=args.batch_size,
+            instance_level=args.instance_level,
         )
         print(f"✓ Loaded dataset with {len(dataloader)} batches")
     except Exception as e:

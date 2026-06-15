@@ -7,7 +7,7 @@
 [X] Unprompted inference/eval on a uniform query grid — `generate_grid_queries` + dual prompted/unprompted metrics
 [X] Regularization: multi-bundle random frame sampling, query jitter, bg resampling, color jitter
 [X] Best-checkpoint on val mIoU + optional early stopping (`checkpoint_best.pth`)
-[ ] Download + preprocess more scenes (tens-to-hundreds) — SAM3 masks; label format DECIDED with supervisor (Jun 12): per-INSTANCE masks (docs/supervisor_feedback_jun_12.md §4)
+[X] Download + preprocess more scenes (tens-to-hundreds) — SAM3 masks; per-INSTANCE format. DONE (Jun 15): 97 scenes (scene0000–0096), 2056 instances, `masks_instance/<class>_<k>/`, shipped as `scannet_instance_dataset.tar.zst` (see INSTANCE_MASKS_README.md). Per-class `masks/` retained.
 [ ] Scaling experiment: train on N ∈ {10, 25, 50, 100+} scenes, val on held-out scenes (MILESTONE_2 §7.1) — first scale10/scale25 runs done but scale25 invalidated by premature early stop; fix SLURM scripts + re-run per docs/SCALING_RUNS_ANALYSIS.md §4 before launching scale50
 [ ] No-object weight + augmentation ablations on the larger dataset (MILESTONE_2 §7.2–7.4) — blocked on data
 
@@ -27,9 +27,9 @@
 # Supervisor feedback Jun 12 (see docs/supervisor_feedback_jun_12.md)
 [X] `--train_grid_queries` CODE: include the eval grid in training so Hungarian + no-object loss learn duplicate suppression (DETR-style, no NMS) — [ ] run the unprompted-AP50 experiment (§3)
 [X] `--query_mode` CODE: point prompts vs learned object queries vs hybrid, coord_weight=0 for learned mode — [ ] run the ablation (§5)
-[ ] Per-instance loader + tests once instance-mask data lands — data/scannet_overfit.py ID-per-(class,instance), update tests/test_phase2.py (§4) — BLOCKED on SAM3
+[X] Per-instance loader + tests CODE (Jun 15) — data/scannet_overfit.py `instance_level` flag (per-(class,instance) IDs from masks_instance/<class>_<k>/, default off = per-class unchanged); --instance_level in train_overfit/train_multiscene; tests/test_phase2.py::test_instance_dataset. — [ ] GPU experiment: re-run scaling curve on instance GT (MILESTONE_3 Phase 4)
 [X] MaskDINO-style pixel decoder CODE: models/mask_upsampler.py upsamples patch features before the cosine-sim mask product (--mask_upsample) — [ ] train + (if dense OOM) point-sampled mask loss (§2)
 [X] Viz polish: legend "{class} #{k}" for same-class instances; caption "one color = one predicted instance (mask spans all frames jointly)" (§1)
 
 # Data management
-[ ] Since data on cluster must be as small as possible in terms of number of files, before running the new per-instance segmentation GT generation, I need to decide how to manage data (i.e. process all and zip the entire folder and, at the beginning of each job, copy it in the temporary folder of the node and unzip it there). Also, I should consider to execute this process after moving the scenes in the /scratch folder, there, I/O operations are faster.
+[X] Keep file count low: the per-instance dataset is shipped as ONE zstd tar `scannet_instance_dataset.tar.zst` (~1.3 GB on `work`). Each job copies it to node-local `$TMPDIR` and unzips there (`slurm/stage_dataset.sh` → exports `SCANNET_ROOT`; train_multiscene.py honors it as default `--scans_root`). Build was done from the fast `/cluster/scratch/niacobone/scannet_build/scans` tree. See INSTANCE_MASKS_README.md "Consuming the dataset at training time".

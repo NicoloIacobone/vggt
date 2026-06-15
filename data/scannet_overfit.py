@@ -100,15 +100,22 @@ class ScanNetSingleSceneDataset(Dataset):
         frame_sampling (str): "random" samples num_frames frames anew on every __getitem__;
             "even" picks num_frames evenly-spaced frames (deterministic — required for a
             stable multi-scene overfit where the same frames must be revisited every epoch)
+        instance_level (bool): if False (default), read per-class binary masks from `masks/`
+            and assign one global ID per class. If True, read per-instance masks from
+            `masks_instance/<class>_<k>/` and assign one global ID per (class, instance) — two
+            objects of the same class then become distinct GT instances that share a class
+            index (`classes` contains repeated class indices). Stuff classes (wall/floor) are
+            single instances on disk, so they behave the same in both modes.
 
-    Cross-view instance identity (item 8.3): a given ScanNet class present in the scene is
-    treated as ONE multi-view instance with a single global ID that is consistent across all
-    sampled frames (e.g. the "wall" region keeps the same instance ID in every view it appears
-    in), rather than minting a fresh ID for every (frame, class) pair. Because the on-disk masks
-    are *binary per-class* PNGs, they carry no information to separate two distinct objects of
-    the same class, so class-level linking is the finest cross-view identity the labels support.
-    Each returned instance is therefore described once (per-global-instance arrays below) but may
-    occupy several frames in the `masks` map.
+    Cross-view instance identity (item 8.3): each mask SEGMENT present in the scene is treated
+    as ONE multi-view instance with a single global ID consistent across all sampled frames
+    (e.g. a "wall" region keeps the same ID in every view it appears in), rather than minting a
+    fresh ID for every (frame, segment) pair. In the default per-class mode a segment is a
+    whole class, so class-level linking is the finest identity the *binary per-class* PNGs
+    support; in `instance_level` mode a segment is one tracked instance, so same-class objects
+    are separated (SAM3 video tracking provides the cross-frame identity). Each returned
+    instance is described once (per-global-instance arrays below) but may occupy several frames
+    in the `masks` map.
 
     Returns dict with:
         - images: torch.Tensor [num_frames, 3, img_size, img_size] in range [0, 1]
@@ -131,6 +138,7 @@ class ScanNetSingleSceneDataset(Dataset):
         img_size: int = 518,
         images_subdir: Optional[str] = None,
         frame_sampling: str = "random",
+        instance_level: bool = False,
     ):
         super().__init__()
         self.scene_dir = Path(scene_dir)
@@ -138,6 +146,7 @@ class ScanNetSingleSceneDataset(Dataset):
         self.image_ext = image_ext
         self.mask_ext = mask_ext
         self.img_size = img_size
+        self.instance_level = instance_level
         if frame_sampling not in ("random", "even"):
             raise ValueError(f"frame_sampling must be 'random' or 'even', got {frame_sampling!r}")
         self.frame_sampling = frame_sampling
@@ -162,7 +171,8 @@ class ScanNetSingleSceneDataset(Dataset):
                 f"Images directory not found (tried {candidates}): {self.scene_dir}"
             )
 
-        self.masks_dir = self.scene_dir / "masks"
+        masks_dirname = "masks_instance" if instance_level else "masks"
+        self.masks_dir = self.scene_dir / masks_dirname
         if not self.masks_dir.exists():
             raise ValueError(f"Masks directory not found: {self.masks_dir}")
 
@@ -175,19 +185,52 @@ class ScanNetSingleSceneDataset(Dataset):
         if len(self.image_files) == 0:
             raise ValueError(f"No images found in {self.images_dir}")
 
-        # Find all class folders in masks directory. On-disk folders may use underscores
-        # (e.g. 'shower_curtain') while the canonical class name uses a space
-        # ('shower curtain'); accept either so the class is not silently dropped.
-        self.class_dirs = {}
-        for cls_name in SCANNET_CLASSES:
-            for cand in (cls_name, cls_name.replace(" ", "_")):
-                cand_dir = self.masks_dir / cand
-                if cand_dir.exists():
-                    self.class_dirs[cls_name] = cand_dir
-                    break
+        # Build the list of mask SEGMENTS — each segment becomes one global instance.
+        # A segment is (canonical_class_name, segment_dir); the list is sorted into a
+        # deterministic order so the same scene always yields the same (global_id -> class)
+        # mapping. On-disk folders may use underscores (e.g. 'shower_curtain') while the
+        # canonical class name uses a space ('shower curtain'); accept either.
+        #   - per-class mode (default):  one segment per class folder in masks/.
+        #   - instance mode:             one segment per masks_instance/<class>_<k>/ folder,
+        #                                so two objects of the same class are distinct GT
+        #                                instances that share a class index.
+        if instance_level:
+            # Map both spelling variants of every class name to the canonical form.
+            norm_to_canon = {}
+            for cls_name in SCANNET_CLASSES:
+                norm_to_canon[cls_name] = cls_name
+                norm_to_canon[cls_name.replace(" ", "_")] = cls_name
+            parsed = []  # (class_idx, k, canonical_class_name, dir)
+            for d in sorted(self.masks_dir.iterdir()):
+                # Folders are '<class>_<k>'; <class> may itself contain underscores and
+                # <k> is a trailing integer. Skip QA/metadata dirs (e.g. '_qa').
+                if not d.is_dir() or d.name.startswith("_") or "_" not in d.name:
+                    continue
+                class_part, k_part = d.name.rsplit("_", 1)
+                if not k_part.isdigit():
+                    continue
+                cls_name = norm_to_canon.get(class_part)
+                if cls_name is None:
+                    continue
+                parsed.append((CLASS_TO_IDX[cls_name], int(k_part), cls_name, d))
+            parsed.sort(key=lambda t: (t[0], t[1]))  # class index, then instance index k
+            self.segments = [(cls_name, d) for (_, _, cls_name, d) in parsed]
+        else:
+            class_dirs = {}
+            for cls_name in SCANNET_CLASSES:
+                for cand in (cls_name, cls_name.replace(" ", "_")):
+                    cand_dir = self.masks_dir / cand
+                    if cand_dir.exists():
+                        class_dirs[cls_name] = cand_dir
+                        break
+            self.class_dirs = class_dirs  # kept for backward compatibility/inspection
+            self.segments = [
+                (c, class_dirs[c]) for c in sorted(class_dirs, key=lambda c: CLASS_TO_IDX[c])
+            ]
 
-        if not self.class_dirs:
-            raise ValueError(f"No class folders found in {self.masks_dir}")
+        if not self.segments:
+            kind = "instance" if instance_level else "class"
+            raise ValueError(f"No {kind} mask folders found in {self.masks_dir}")
 
     def __len__(self):
         return 1  # Single scene dataset - always returns 1 sample
@@ -219,16 +262,17 @@ class ScanNetSingleSceneDataset(Dataset):
 
         num_frames = len(frame_names)
 
-        # --- Pass 1: load every per-frame, per-class binary mask -----------------------------
-        # Collect, for each class that has foreground in ANY sampled frame, the set of frames
-        # it appears in and its binary pixel mask there. This lets us assign a SINGLE global
-        # instance ID per class (cross-view identity, item 8.3) instead of a fresh ID per
-        # (frame, class) pair.
-        per_class_frame_pixels: Dict[str, Dict[int, np.ndarray]] = {}
+        # --- Pass 1: load every per-frame, per-segment binary mask ---------------------------
+        # Collect, for each segment that has foreground in ANY sampled frame, the set of
+        # frames it appears in and its binary pixel mask there. A segment is one class folder
+        # (per-class mode) or one instance folder (instance mode); either way it yields a
+        # SINGLE global ID consistent across views (cross-view identity, item 8.3) rather than
+        # a fresh ID per (frame, segment) pair.
+        per_seg_frame_pixels: Dict[int, Dict[int, np.ndarray]] = {}
 
         for frame_idx, frame_name in enumerate(frame_names):
-            for class_name, class_dir in self.class_dirs.items():
-                mask_path = class_dir / f"{frame_name}{self.mask_ext}"
+            for seg_idx, (class_name, seg_dir) in enumerate(self.segments):
+                mask_path = seg_dir / f"{frame_name}{self.mask_ext}"
                 if not mask_path.exists():
                     continue
 
@@ -236,21 +280,22 @@ class ScanNetSingleSceneDataset(Dataset):
                 class_mask = class_mask.resize((self.img_size, self.img_size), Image.NEAREST)
                 class_mask_array = np.array(class_mask, dtype=np.uint8)
 
-                # The on-disk masks are binary semantic masks (one blob per class per frame).
+                # The on-disk masks are binary (one blob per segment per frame).
                 if class_mask_array.max() == 0:
                     continue
                 class_pixels = class_mask_array > 127  # Threshold at 127
                 if not class_pixels.any():
                     continue
 
-                per_class_frame_pixels.setdefault(class_name, {})[frame_idx] = class_pixels
+                per_seg_frame_pixels.setdefault(seg_idx, {})[frame_idx] = class_pixels
 
         # --- Pass 2: assign global instance IDs and paint the per-frame instance maps --------
-        # Deterministic ID order: sort by canonical class index so the same scene always yields
-        # the same (instance_id -> class) mapping across runs.
-        present_classes = sorted(per_class_frame_pixels.keys(), key=lambda c: CLASS_TO_IDX[c])
+        # Deterministic ID order: segments are already ordered (class index, then instance k),
+        # so iterating present segments in sorted seg_idx order gives a stable
+        # (instance_id -> class) mapping across runs.
+        present_segs = sorted(per_seg_frame_pixels.keys())
 
-        # int32 (not uint8) so the global instance IDs cannot overflow if many classes appear.
+        # int32 (not uint8) so the global instance IDs cannot overflow if many segments appear.
         instance_masks = np.zeros((num_frames, self.img_size, self.img_size), dtype=np.int32)
 
         instance_classes = []
@@ -258,12 +303,15 @@ class ScanNetSingleSceneDataset(Dataset):
         instance_frames = []   # representative frame index per instance
         instance_ids = []      # the global ID written into `instance_masks` (1..G)
 
-        for global_id, class_name in enumerate(present_classes, start=1):
-            frame_pixels = per_class_frame_pixels[class_name]
+        for global_id, seg_idx in enumerate(present_segs, start=1):
+            class_name = self.segments[seg_idx][0]
+            frame_pixels = per_seg_frame_pixels[seg_idx]
 
             best_frame, best_area, best_centroid = -1, -1, (0.5, 0.5)
             for frame_idx, class_pixels in frame_pixels.items():
                 # Paint the SAME global ID into every frame this instance appears in.
+                # In instance mode same-class instances keep distinct IDs; later painted
+                # segments win on cross-class pixel overlaps (matches per-class behavior).
                 instance_masks[frame_idx][class_pixels] = global_id
 
                 # Track the most-visible frame for the representative query point/centroid.

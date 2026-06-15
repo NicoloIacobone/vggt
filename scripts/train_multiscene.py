@@ -33,6 +33,7 @@ Usage:
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -58,7 +59,13 @@ from train_overfit import (
     _format_metrics,
 )
 
-DEFAULT_SCANS_ROOT = "/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans"
+# Default ScanNet root. Jobs that unpack the zstd dataset tar onto node-local scratch
+# (see slurm/train_scale*.sh and docs/INSTANCE dataset notes) export SCANNET_ROOT=$TMPDIR/scans
+# so the loader reads off the fast local SSD; otherwise it falls back to the work filesystem.
+DEFAULT_SCANS_ROOT = os.environ.get(
+    "SCANNET_ROOT",
+    "/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans",
+)
 
 
 def resolve_scene_dirs(spec: str, scans_root: str) -> List[str]:
@@ -117,7 +124,8 @@ def prepare_scene_bundles(
     if not scene_dirs:
         return []
     num_bundles = args.bundles_per_scene if split == "train" else 1
-    common = dict(num_frames=args.num_frames, img_size=518)
+    common = dict(num_frames=args.num_frames, img_size=518,
+                  instance_level=args.instance_level)
     even_loader = DataLoader(ScanNetMultiSceneDataset(scene_dirs, frame_sampling="even", **common),
                              batch_size=1, shuffle=False, num_workers=0)
     rand_dataset = (ScanNetMultiSceneDataset(scene_dirs, frame_sampling="random", **common)
@@ -452,6 +460,10 @@ def main():
     parser.add_argument("--val_scenes", type=str, default="scene0004_00",
                         help="Held-out scene(s), same format as --train_scenes")
     parser.add_argument("--scans_root", type=str, default=DEFAULT_SCANS_ROOT)
+    parser.add_argument("--instance_level", action="store_true",
+                        help="Train/eval on per-instance masks (masks_instance/<class>_<k>/) "
+                             "instead of per-class masks: same-class objects become distinct GT "
+                             "instances. Default off (per-class).")
     parser.add_argument("--num_epochs", type=int, default=600)
     parser.add_argument("--schedule_epochs", type=int, default=None,
                         help="Cosine-schedule length in epochs (defaults to --num_epochs). "

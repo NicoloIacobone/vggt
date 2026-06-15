@@ -164,8 +164,88 @@ cosine-sim + learnable-temperature mask logit (hard-won constraint) is preserved
 `tests/test_mask_upsampler.py`. Train once Phases 1–3 settle. Fallback if the learned pixel
 decoder underperforms: reuse VGGT's frozen depth-head DPT features (zero new params).
 
-## Phases 4 & 6 — Data-gated (BLOCKED on SAM3 per-instance masks)
+## Dataset update (2026-06-15): per-instance SAM3 masks landed — Phases 4 & 6 UNBLOCKED
 
-Gated on the per-instance ScanNet masks produced by the SAM3-side agent
-(`docs/SAM3_INSTANCE_MASKS_PROMPT.md`). No downstream work until that data lands and is
-QA-approved by the user.
+The SAM3-side run is **done**: 97 scenes (scene0000–0096), 2056 instances, per-instance
+binary masks at `masks_instance/<class>_<k>/<frame>.png` (zero-based per-class index `k`;
+same PNG conventions as `masks/`; cross-frame identity from SAM3 video tracking; `wall`/
+`floor` forced to a single instance; union of a class's instances ≈ the old per-class mask,
+union-IoU ≈ 1.0). Full spec in
+`/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/INSTANCE_MASKS_README.md`.
+
+**Data-access change (now mandatory):** the dataset ships as one zstd tar
+`scannet_instance_dataset.tar.zst` (~1.3 GB). Jobs must **not** read the small PNGs off
+`work`; instead copy the tar to node-local `$TMPDIR` and unpack it there once. Implemented
+in `slurm/stage_dataset.sh` (sourced by `slurm/train_scale{10,25,50}.sh`), which exports
+`SCANNET_ROOT=$TMPDIR/scans`; `scripts/train_multiscene.py` uses `SCANNET_ROOT` as the
+default `--scans_root`. SLURM headers now request `--tmp=8000` MB of local scratch. The
+per-class loader is unchanged and still runs against either the staged tree or `work`, so
+all Phase-1/2/3 experiments stay reproducible.
+
+## Phase 4 — Per-instance loader (CODE DONE 2026-06-15; experiment PENDING GPU)
+
+Goal: switch supervision from one-ID-per-class to one-ID-per-`(class, instance)` so the
+model is trained/evaluated on true instances (and same-class separation becomes
+demonstrable — supervisor §1). Implemented behind a default-off flag, all existing tests
+unchanged.
+
+What shipped:
+
+1. **Loader (`data/scannet_overfit.py`).** New ctor flag `instance_level=False`. The two
+   `__getitem__` passes were generalized from "per class" to "per **segment**", where a
+   segment is one mask folder that becomes one global instance ID:
+   - default (per-class): segments = the `masks/<class>/` folders (one per class) — behavior
+     **byte-identical** to before (same deterministic class-index ordering, same IDs).
+   - `instance_level=True`: segments = the `masks_instance/<class>_<k>/` folders. Folder
+     names are parsed with `rsplit("_", 1)` (so multi-word classes like `shower_curtain_0`
+     work), `_qa`/metadata dirs are skipped, and segments are sorted by `(class_idx, k)` for
+     a stable `global_id -> class` mapping. `classes[i]` carries the instance's class index
+     and **repeats** across same-class instances — class head (19+bg) untouched;
+     `coordinates`/`frame_ids` per instance are computed exactly as before.
+2. **Flags wired through** `scripts/train_overfit.py` (`--instance_level` →
+   `create_dataloader`) and `scripts/train_multiscene.py` (`--instance_level` → the dataset
+   `common` kwargs). `train_multiscene` stores `vars(args)` in the checkpoint, so the mode is
+   persisted; the head architecture is mode-independent and the visualizer reads the baked-in
+   `gt` from the cached bundles, so the checkpoint→demo round-trip needs no extra plumbing.
+3. **Tests.** `tests/test_phase2.py::test_instance_dataset` synthesizes a scene with two
+   same-class instances (`chair_0`, `chair_1`) + a `wall_0` and asserts: 3 instances, the
+   chair class index appears twice, the two chairs get distinct cross-view-consistent IDs in
+   disjoint pixels. The original `test_dataset` (per-class path) is kept and still passes,
+   guarding the default behavior. Smoke-tested on real `scene0000_00` (23 segments → matches
+   the README total; `shower_curtain` correctly split into 2 instances).
+4. **No changes** in `train/loss.py` / `train/eval_metrics.py` (already Hungarian-over-GT-
+   instances); `test_phase5`/`test_eval` pass unchanged.
+
+**Experiment (PENDING GPU):** add `--instance_level` to the scale scripts and re-run the
+Phase-1 curve on instance GT (val 0080–0089). **Caveat for slides:** mIoU/AP will likely
+**drop** vs per-class (more, smaller, harder instances; chairs especially) — expected, not a
+regression. New headline figure: two same-class objects in two colors (visualizer colors by
+match; the Phase-0 `"{class} #{k}"` legend labels them).
+
+## Phase 6 — Data-gated ablations (after Phase 4 + the fair scaling re-runs)
+
+Now meaningful with 97 scenes. All on held-out val (widen to scene0080–0089 first — no new
+preprocessing), metric = unprompted val[grid] AP50 (the honest number) + prompted mIoU.
+
+1. **No-object weight sweep** (0.05 / 0.1 / 0.4) — tests whether `no_object_weight 0.1`
+   drives the §3.3 under-confidence.
+2. **Augmentation ablation** — `bundles_per_scene` 1 vs 4, `query_jitter` on/off,
+   `color_jitter` on/off.
+3. **Grid density vs unprompted recall** — `--grid_size` 4/6/8.
+4. **Longer-term:** partial backbone unfreezing once the train−val gap vs N says the
+   dataset can support it.
+
+## Suggested execution order from here
+
+```
+Phase 4 (instance loader + tests)            ← do first; everything downstream is on instance GT
+  └─► re-run the Phase-1 scaling curve on instance GT (N∈{10,25,50}, val 0080–0089)
+        └─► Phase 2 --train_grid_queries A/B   (the flat unprompted-AP50 target)
+        └─► Phase 3 query-mode arms A/B/C/D
+        └─► Phase 5 --mask_upsample train      (mask sharpness; independent of what is learned)
+        └─► Phase 6 ablations
+```
+Note the pending GPU experiments for Phases 1/2/3/5 were all coded against the per-class
+loader; after Phase 4 they should be re-run on instance GT so the whole curve is on one GT
+definition. The N=100+ scaling point still needs more scenes downloaded+preprocessed (the
+only remaining SAM3-side stretch item).
