@@ -25,16 +25,20 @@ PYTHON=myenv/bin/python
 # Stage the dataset onto node-local scratch and export SCANNET_ROOT (see slurm/stage_dataset.sh).
 source slurm/stage_dataset.sh
 
-VAL=scene0080_00,scene0081_00,scene0082_00
+# Wider held-out val set (scene0080–0089) — less noisy than the original 3 scenes.
+VAL=$(seq -f "scene%04g_00" 80 89 | paste -sd, -)
 OUT=/cluster/work/igp_psr/niacobone/distillation/output
 
 # Optional per-instance GT: submit with `sbatch --export=ALL,INSTANCE_LEVEL=1 ...`.
 INSTANCE_FLAG=""; RUN_TAG=""
 if [ "${INSTANCE_LEVEL:-0}" = "1" ]; then INSTANCE_FLAG="--instance_level"; RUN_TAG="_inst"; fi
+# Optional experiment-arm passthrough (Phase 2/3): EXTRA_ARGS appended to the python call,
+# EXP_TAG appended to the run name. E.g. EXTRA_ARGS='--train_grid_queries' EXP_TAG=_gridq.
+RUN_TAG="${RUN_TAG}${EXP_TAG:-}"
 
 # 10 scenes (0000–0009); bundles fit on the GPU, no --cache_device needed
 $PYTHON scripts/train_multiscene.py \
-    --scans_root $SCANNET_ROOT $INSTANCE_FLAG \
+    --scans_root $SCANNET_ROOT $INSTANCE_FLAG ${EXTRA_ARGS:-} \
     --train_scenes $(seq -f "scene%04g_00" 0 9 | paste -sd, -) \
     --val_scenes $VAL \
     --num_epochs 1000 --warmup_epochs 30 --num_frames 8 --num_queries 32 \

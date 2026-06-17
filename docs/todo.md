@@ -27,7 +27,10 @@
 # Supervisor feedback Jun 12 (see docs/supervisor_feedback_jun_12.md)
 [X] `--train_grid_queries` CODE: include the eval grid in training so Hungarian + no-object loss learn duplicate suppression (DETR-style, no NMS) — [ ] run the unprompted-AP50 experiment (§3)
 [X] `--query_mode` CODE: point prompts vs learned object queries vs hybrid, coord_weight=0 for learned mode — [ ] run the ablation (§5)
-[X] Per-instance loader + tests CODE (Jun 15) — data/scannet_overfit.py `instance_level` flag (per-(class,instance) IDs from masks_instance/<class>_<k>/, default off = per-class unchanged); --instance_level in train_overfit/train_multiscene; tests/test_phase2.py::test_instance_dataset. — [ ] GPU experiment: re-run scaling curve on instance GT (MILESTONE_3 Phase 4)
+[X] Per-instance loader + tests CODE (Jun 15) — data/scannet_overfit.py `instance_level` flag (per-(class,instance) IDs from masks_instance/<class>_<k>/, default off = per-class unchanged); --instance_level in train_overfit/train_multiscene; tests/test_phase2.py::test_instance_dataset.
+[X] GPU: instance-GT scaling curve N∈{10,25,50} (Jun 15) — first pass (3-scene val) val mIoU 0.142/0.136/0.185. Fixed exit-code footgun (low train mIoU no longer = FAILED).
+[X] GPU: wide-val (0080–0089) instance curve + Phases 2/3 arms at N=50 (Jun 15) — curve now MONOTONIC: val mIoU 0.152/0.174/0.212, val[grid] AP50 0.089/0.111/0.125. Arms: A point 0.212, C learned 0.259 (BEST), B grid_queries 0.047 (mask learning collapsed), D hybrid CRASHED (NaN in matcher). See MILESTONE_3 "Phases 2/3/4 instance-GT, wide-val results".
+[ ] Fix Phase-2 grid-query loss balance (normalize no-object by query count / keep centroid queries matched) + rerun; fix hybrid NaN (guard matcher cost, grad-clip learned params) + rerun
 [X] MaskDINO-style pixel decoder CODE: models/mask_upsampler.py upsamples patch features before the cosine-sim mask product (--mask_upsample) — [ ] train + (if dense OOM) point-sampled mask loss (§2)
 [X] Viz polish: legend "{class} #{k}" for same-class instances; caption "one color = one predicted instance (mask spans all frames jointly)" (§1)
 

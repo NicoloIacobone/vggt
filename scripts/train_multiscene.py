@@ -782,9 +782,15 @@ def main():
             print(f"⚠ Visualization failed ({e}). Render manually with:\n"
                   f"  python scripts/visualize_masks.py --checkpoint {vis_ckpt}")
 
-    ok = mean_metric(train_metrics, "mIoU") > 0.5
-    print("\n✅ SUCCESS" if ok else "\n⚠ Train mIoU below 0.5 — inspect the run.")
-    return 0 if ok else 1
+    # Diagnostic only — a low train mIoU is a legitimate outcome for large/instance-level
+    # scaling runs (more, smaller, harder GT instances), NOT a crash. Returning non-zero here
+    # made SLURM mark healthy completed runs as FAILED, so the exit code now reflects only
+    # whether training ran to completion.
+    if mean_metric(train_metrics, "mIoU") > 0.5:
+        print("\n✅ SUCCESS")
+    else:
+        print("\n⚠ Train mIoU below 0.5 — completed, but inspect the run.")
+    return 0
 
 
 if __name__ == "__main__":

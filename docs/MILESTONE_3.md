@@ -216,11 +216,86 @@ What shipped:
 4. **No changes** in `train/loss.py` / `train/eval_metrics.py` (already Hungarian-over-GT-
    instances); `test_phase5`/`test_eval` pass unchanged.
 
-**Experiment (PENDING GPU):** add `--instance_level` to the scale scripts and re-run the
-Phase-1 curve on instance GT (val 0080–0089). **Caveat for slides:** mIoU/AP will likely
-**drop** vs per-class (more, smaller, harder instances; chairs especially) — expected, not a
-regression. New headline figure: two same-class objects in two colors (visualizer colors by
-match; the Phase-0 `"{class} #{k}"` legend labels them).
+**Experiment (DONE 2026-06-15):** `slurm/train_scale{10,25,50}.sh` gained an
+`INSTANCE_LEVEL=1` env toggle (submit `sbatch --export=ALL,INSTANCE_LEVEL=1 ...`; runs land
+in `*_inst_*` dirs, per-class default unchanged). Full-schedule (1000 ep), val =
+scene0080–0082.
+
+| N  | val mIoU (prompted) | val[grid] AP50 (honest) | final train mIoU | train−val gap | per-class val mIoU (ref) |
+|----|---------------------|-------------------------|------------------|---------------|--------------------------|
+| 10 | 0.142 @ep700        | 0.070 @ep350            | 0.513            | 0.37          | 0.289 |
+| 25 | 0.136 @ep250        | 0.065 @ep100            | 0.411            | 0.27          | 0.204 |
+| 50 | 0.185 @ep850        | 0.085 @ep800            | 0.339            | 0.15          | 0.347 |
+
+**Reading it:** every instance-GT number is ≈half its per-class counterpart — **exactly the
+predicted drop** (more, smaller, harder instances; chairs split into many objects), not a
+regression. The qualitative trends survive the switch: val mIoU still rises toward N=50, the
+train−val gap still shrinks with N (0.37→0.27→0.15), and unprompted AP50 stays low — the same
+duplicate-suppression / under-confidence problem Phases 2/3 target, now on the real instance
+GT. Visualizations confirm same-class separation (e.g. scale50 val shows multiple
+`chair → chair` matches at distinct IDs — the two-same-class-objects-in-two-colors figure
+supervisor §1 asked for).
+
+**Footgun fixed (2026-06-15):** `train_multiscene.py` used to `sys.exit(1)` when train mIoU
+≤ 0.5 (an overfit-era sanity gate). On instance GT, N=25/50 legitimately finish below 0.5, so
+SLURM marked those healthy completed runs as **FAILED** even though checkpoints, `metrics.jsonl`
+and visualizations were all written. The exit code now reflects only completion (the low-mIoU
+message is kept as a diagnostic).
+
+**Next:** widen val to 0080–0089 and re-run for a less noisy curve; then run Phases 2/3 (and
+the §3.3 score-threshold sweep) on the instance GT. → done below.
+
+## Phases 2/3/4 — instance-GT, wide-val results (DONE 2026-06-15)
+
+Re-ran on the **wider val set (scene0080–0089)** to kill the 3-scene noise; the scale scripts
+gained an `EXTRA_ARGS`/`EXP_TAG` env passthrough so experiment arms reuse the same script
+(`EXTRA_ARGS='--query_mode learned' EXP_TAG=_learned INSTANCE_LEVEL=1 sbatch --export=ALL ...`).
+
+**Phase 4 scaling curve (instance GT, wide val), arm A = point prompts:**
+
+| N  | val mIoU | val[grid] AP50 | final train mIoU |
+|----|----------|----------------|------------------|
+| 10 | 0.152    | 0.089          | 0.526            |
+| 25 | 0.174    | 0.111          | 0.353            |
+| 50 | 0.212    | 0.125          | 0.338            |
+
+Both columns are now **monotonic in N** — widening val removed the N=25 inversion seen with 3
+val scenes (it was noise, as suspected). So on instance GT, more scenes help both prompted
+mIoU and the honest unprompted AP50.
+
+**Phases 2/3 query-mode arms (all N=50, instance GT, wide val):**
+
+| Arm           | train queries           | val mIoU | val[grid] AP50 | train mIoU | outcome |
+|---------------|-------------------------|----------|----------------|------------|---------|
+| A point       | GT centroids + bg       | 0.212    | 0.125          | 0.338      | baseline |
+| B grid (P2)   | + random-offset grid    | **0.047**| 0.146          | **0.055**  | mask learning collapsed |
+| C learned     | M learned embeddings    | **0.259**| **0.146**      | 0.749      | best val; overfits (gap 0.49) |
+| D hybrid      | learned + centroids     | ~0.27*   | —              | 0.54*      | **crashed** (NaN) ~ep555 |
+
+\* D's last eval before the crash (val mIoU 0.234–0.273) — it was the most promising arm.
+
+**Reading it:**
+- **C (learned queries) is the surprise winner** at N=50 instance (val mIoU 0.259 vs point
+  0.212; AP50 0.146 vs 0.125), *against* the "DETR queries are data-hungry, expect them to
+  underperform ≤50 scenes" prior. But train mIoU 0.749 vs val 0.259 is a 0.49 gap → it fits
+  the 50 train scenes hard; the win may shrink (or grow) with more data — the crossover is
+  worth tracking as N→100+.
+- **B (`--train_grid_queries`) backfired:** train mIoU never left ~0.05 while class loss fell
+  normally — the model learned to *classify* but not to produce masks. Mechanism: with ~320
+  queries/step the Hungarian matcher routes many GTs to grid queries, so the GT-centroid
+  queries that prompted eval uses go under-supervised, and `no_object_weight 0.1` over ~10×
+  more (mostly background) queries swamps the few matched-mask gradients. The unprompted AP50
+  did tick up (0.146), consistent with the intended duplicate-suppression effect, but at the
+  cost of overall mask quality. **Fix to try:** normalize the no-object term by query count
+  (or lower its weight when grid queries are on), and/or keep centroid queries always matched.
+- **D (hybrid) is numerically unstable:** `ValueError: matrix contains invalid numeric
+  entries` from `linear_sum_assignment` (`train/loss.py:253`) at ~ep555 — a NaN/inf reached
+  the cost matrix (exploding gradients in the mixed learned+point path). It was the best arm
+  before dying. **Fix to try:** guard the matcher cost (`nan_to_num` + finite assert) and/or
+  tighten grad-clip / lower LR for the learned-embedding params.
+
+**Net:** learned queries (C) are the headline positive result; Phase-2 grid-query training
+needs a loss-balance fix before it's usable; hybrid needs a NaN guard + rerun.
 
 ## Phase 6 — Data-gated ablations (after Phase 4 + the fair scaling re-runs)
 

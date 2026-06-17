@@ -1,0 +1,30 @@
+Many modules are hidden in this stack. Use "module --show_hidden spider SOFTWARE" if you are not able to find the required software
+Traceback (most recent call last):
+  File "/cluster/scratch/niacobone/vggt/scripts/train_multiscene.py", line 797, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/cluster/scratch/niacobone/vggt/scripts/train_multiscene.py", line 648, in main
+    total_loss, comps = loss_fn(
+                        ^^^^^^^^
+  File "/cluster/scratch/niacobone/vggt/myenv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1532, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/cluster/scratch/niacobone/vggt/myenv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1541, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/cluster/scratch/niacobone/vggt/train/loss.py", line 394, in forward
+    sample_losses, n_matches = self._forward_single(
+                               ^^^^^^^^^^^^^^^^^^^^^
+  File "/cluster/scratch/niacobone/vggt/train/loss.py", line 442, in _forward_single
+    pred_indices, gt_indices, cost_matrix = self.matcher(
+                                            ^^^^^^^^^^^^^
+  File "/cluster/scratch/niacobone/vggt/myenv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1532, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/cluster/scratch/niacobone/vggt/myenv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1541, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/cluster/scratch/niacobone/vggt/train/loss.py", line 253, in forward
+    pred_indices, gt_indices = linear_sum_assignment(cost_np)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: matrix contains invalid numeric entries
