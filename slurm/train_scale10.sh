@@ -11,7 +11,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=4096
-#SBATCH --tmp=8000
+#SBATCH --tmp=16000
 #SBATCH --gpus=rtx_4090:1
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=niacobone@student.ethz.ch

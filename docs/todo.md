@@ -1,38 +1,44 @@
-[X] Download and preprocess (compute SAM3 masks) other 4 scenes (total 5 scenes)
-[X] Increase training scenes number (train on 4) — scripts/train_multiscene.py, mean train mIoU 0.967 (MILESTONE_1 §9)
-[X] Eval on a scene the model has never seen during training (eval on 5th scene) — scene0004_00: mIoU 0.027 final (peaked ~0.13 mid-training); no real generalization with only 4 scenes, see MILESTONE_1 §9
+# TODO
 
-# Milestone 2 (see docs/MILESTONE_2.md)
-[X] No-object loss on unmatched queries (DETR eos) — train/loss.py `no_object_weight`
-[X] Unprompted inference/eval on a uniform query grid — `generate_grid_queries` + dual prompted/unprompted metrics
-[X] Regularization: multi-bundle random frame sampling, query jitter, bg resampling, color jitter
-[X] Best-checkpoint on val mIoU + optional early stopping (`checkpoint_best.pth`)
-[X] Download + preprocess more scenes (tens-to-hundreds) — SAM3 masks; per-INSTANCE format. DONE (Jun 15): 97 scenes (scene0000–0096), 2056 instances, `masks_instance/<class>_<k>/`, shipped as `scannet_instance_dataset.tar.zst` (see INSTANCE_MASKS_README.md). Per-class `masks/` retained.
-[ ] Scaling experiment: train on N ∈ {10, 25, 50, 100+} scenes, val on held-out scenes (MILESTONE_2 §7.1) — first scale10/scale25 runs done but scale25 invalidated by premature early stop; fix SLURM scripts + re-run per docs/SCALING_RUNS_ANALYSIS.md §4 before launching scale50
-[ ] No-object weight + augmentation ablations on the larger dataset (MILESTONE_2 §7.2–7.4) — blocked on data
+See `docs/MILESTONES.md` for the consolidated summary; `docs/old/` for full per-milestone
+detail. This list tracks only what is still open.
 
-# Milestone 3 / Phase 0 — instrumentation & small fixes (see docs/MILESTONE_3.md, docs/NEXT_STEPS_PLAN.md)
-[X] Persist eval history → <run_dir>/metrics.jsonl (epoch, lr, loss, prompted+grid train/val mIoU & AP50)
-[X] Shrink checkpoints: uint8 images (default, 4× smaller) + --checkpoint_light (drop pixels, reload from disk)
-[X] Noise-robust early stopping: --early_stop_min_delta + --early_stop_window moving average, refuse before half schedule (off by default)
-[X] Second best checkpoint on val[grid] AP50 → checkpoint_best_ap50.pth
-[X] --schedule_epochs to decouple cosine schedule length from --num_epochs
-[X] Viz polish: legend "{class} #{k}", caption "one color = one predicted instance", --score_threshold exposed
-[X] Fix SLURM scripts: identical protocol (--eval_interval 50 --early_stop_patience 0), --time trimmed to 2 h
-[ ] Phase 1: fair scaling re-runs (GPU) — scale25/scale10 full-schedule, then scale50; plot mIoU/AP50 vs N from metrics.jsonl
-[X] Phase 2 CODE: --train_grid_queries (random-offset grid in make_train_queries, off by default) — [ ] GPU experiment (scale10/25 with vs without) after Phase 1
-[X] Phase 3 CODE: --query_mode {point,learned,hybrid} in QueryGenerator + head_config round-trip + matcher coord_weight=0 for learned — [ ] GPU experiment arms A/B/C/D after Phase 1
-[X] Phase 5 CODE: MaskDINO pixel decoder (models/mask_upsampler.py + --mask_upsample, default 1 = unchanged) — [ ] train after Phases 1–3 settle
+## Open — next experiments (GPU)
 
-# Supervisor feedback Jun 12 (see docs/supervisor_feedback_jun_12.md)
-[X] `--train_grid_queries` CODE: include the eval grid in training so Hungarian + no-object loss learn duplicate suppression (DETR-style, no NMS) — [ ] run the unprompted-AP50 experiment (§3)
-[X] `--query_mode` CODE: point prompts vs learned object queries vs hybrid, coord_weight=0 for learned mode — [ ] run the ablation (§5)
-[X] Per-instance loader + tests CODE (Jun 15) — data/scannet_overfit.py `instance_level` flag (per-(class,instance) IDs from masks_instance/<class>_<k>/, default off = per-class unchanged); --instance_level in train_overfit/train_multiscene; tests/test_phase2.py::test_instance_dataset.
-[X] GPU: instance-GT scaling curve N∈{10,25,50} (Jun 15) — first pass (3-scene val) val mIoU 0.142/0.136/0.185. Fixed exit-code footgun (low train mIoU no longer = FAILED).
-[X] GPU: wide-val (0080–0089) instance curve + Phases 2/3 arms at N=50 (Jun 15) — curve now MONOTONIC: val mIoU 0.152/0.174/0.212, val[grid] AP50 0.089/0.111/0.125. Arms: A point 0.212, C learned 0.259 (BEST), B grid_queries 0.047 (mask learning collapsed), D hybrid CRASHED (NaN in matcher). See MILESTONE_3 "Phases 2/3/4 instance-GT, wide-val results".
-[ ] Fix Phase-2 grid-query loss balance (normalize no-object by query count / keep centroid queries matched) + rerun; fix hybrid NaN (guard matcher cost, grad-clip learned params) + rerun
-[X] MaskDINO-style pixel decoder CODE: models/mask_upsampler.py upsamples patch features before the cosine-sim mask product (--mask_upsample) — [ ] train + (if dense OOM) point-sampled mask loss (§2)
-[X] Viz polish: legend "{class} #{k}" for same-class instances; caption "one color = one predicted instance (mask spans all frames jointly)" (§1)
+- [ ] **N=100+ scaling point** (unblocked: 200 scenes in one full tar, staging handles it).
+      Re-run the instance-GT curve at N ∈ {10, 25, 50, 100, 200}, wide val (scene0080–0089),
+      arm A point prompts. Target: does val mIoU / honest val[grid] AP50 keep climbing?
+- [ ] **Fix Phase-2 `--train_grid_queries` loss balance** (arm B collapsed: train mIoU ~0.05).
+      Normalize the no-object term by query count and/or keep GT-centroid queries always matched;
+      rerun. Metric = unprompted val AP50.
+- [ ] **Fix Phase-3 hybrid (arm D) NaN** — guard the matcher cost (`nan_to_num` + finite assert
+      around `linear_sum_assignment`, `train/loss.py:253`), tighter grad-clip / lower LR on the
+      learned-embedding params; rerun (it was the most promising arm before crashing).
+- [ ] **Confirm the learned-query win (arm C)** holds as N grows — track the point-vs-learned
+      crossover toward N=100+ (C overfits hard at N=50: train 0.749 vs val 0.259).
+- [ ] **Train the MaskDINO pixel decoder** (`--mask_upsample 2/4`) — code done, never trained.
+      If dense Dice+BCE OOMs, adopt Mask2Former point-sampled mask loss (~3k pts/mask). May fix
+      the window/door/picture confusion if it's a resolution (not coverage) problem.
 
-# Data management
-[X] Keep file count low: the per-instance dataset is shipped as ONE zstd tar `scannet_instance_dataset.tar.zst` (~1.3 GB on `work`). Each job copies it to node-local `$TMPDIR` and unzips there (`slurm/stage_dataset.sh` → exports `SCANNET_ROOT`; train_multiscene.py honors it as default `--scans_root`). Build was done from the fast `/cluster/scratch/niacobone/scannet_build/scans` tree. See INSTANCE_MASKS_README.md "Consuming the dataset at training time".
+## Open — data-gated ablations (Phase 6; meaningful now with 200 scenes)
+
+- [ ] No-object-weight sweep (0.05 / 0.1 / 0.4) — tests whether 0.1 drives the under-confidence.
+- [ ] Augmentation ablation: `bundles_per_scene` 1 vs 4, `query_jitter` on/off, `color_jitter` on/off.
+- [ ] Grid-density vs unprompted recall: `--grid_size` 4/6/8.
+- [ ] Score-threshold sweep at viz time (no retrain): re-render at `--score_threshold 0.3`.
+- [ ] Longer-term: partial backbone unfreezing once the train−val gap vs N says data supports it.
+
+## Done (high level — detail in docs/MILESTONES.md)
+
+- [X] M1: prototype, single-scene overfit, 4-scene training (train mIoU 0.967), unseen-scene eval.
+- [X] M2: no-object loss, unprompted grid eval, regularization, best-checkpoint + early stop.
+- [X] M3 Phase 0: metrics.jsonl, uint8/light checkpoints, noise-robust early stop,
+      checkpoint_best_ap50, --schedule_epochs, viz polish, fixed SLURM protocol.
+- [X] M3 Phase 4: per-instance loader (`instance_level`) + tests; instance-GT scaling curve
+      (monotonic, wide val) N∈{10,25,50}.
+- [X] M3 Phases 2/3 CODE + first runs: `--train_grid_queries`, `--query_mode {point,learned,hybrid}`.
+      Arms A/B/C/D run at N=50 (C learned = best; B/D need fixes above).
+- [X] M3 Phase 5 CODE: `models/mask_upsampler.py` + `--mask_upsample` (not yet trained).
+- [X] Per-instance SAM3 dataset: 200 scenes (scene0000–0199) in one `scannet_instance_dataset_full.tar.zst`;
+      `stage_dataset.sh` stages it to node-local SSD (`--tmp=16000`).
+</content>

@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-This is a fork of **VGGT** (Visual Geometry Grounded Transformer, CVPR 2025) — a feed-forward 3D reconstruction model. The project goal is **not** to modify VGGT itself, but to attach and train a **D4RT-style / DETR-like decoder for 3D multi-view consistent segmentation** on top of the frozen VGGT-1B backbone. Ground-truth supervision comes from segmentation masks produced by running **SAM3 on ScanNet scenes** (currently per-class binary masks; semantic vs. instance vs. panoptic is still open — see `docs/MILESTONE_2.md` §7.5).
+This is a fork of **VGGT** (Visual Geometry Grounded Transformer, CVPR 2025) — a feed-forward 3D reconstruction model. The project goal is **not** to modify VGGT itself, but to attach and train a **D4RT-style / DETR-like decoder for 3D multi-view consistent segmentation** on top of the frozen VGGT-1B backbone. Ground-truth supervision comes from segmentation masks produced by running **SAM3 on ScanNet scenes** (per-instance masks now available, see Storage layout; the loader defaults to per-class, `--instance_level` switches to per-instance).
 
 Project history, design decisions, and results live in `docs/`:
-- `docs/MILESTONE_1.md` — full prototype (phases 1–6), validated overfit + 4-scene multi-scene training. Read this first; it documents every component and the debugging that shaped the architecture.
-- `docs/MILESTONE_2.md` — no-object loss, unprompted (grid-query) inference, regularization, best-checkpoint/early stopping. Scaling experiments are **blocked on data** (need tens-to-hundreds of preprocessed scenes).
+- `docs/MILESTONES.md` — **the single consolidated summary** of Milestones 1–3 (architecture, hard-won constraints, all results, qualitative findings, dataset & storage status). Read this first.
+- `docs/todo.md` — current open task list.
 - `docs/HOOK_PLAN.md` — where/how the decoder hooks into VGGT.
-- `docs/todo.md` — current task list.
-- `docs/prompt.md` — the original phase-by-phase project brief (workflow: incremental, each phase validated by a standalone test before moving on; simplicity over optimization).
+- `docs/slides_meeting_jun_15.md` — most recent supervision-meeting slides.
+- `docs/old/` — archived per-milestone detail (`MILESTONE_1/2/3.md`), executed plans (`NEXT_STEPS_PLAN.md`), the scaling-protocol analysis (`SCALING_RUNS_ANALYSIS.md`), addressed supervisor feedback, the original project brief (`prompt.md`), and the SAM3 preprocessing prompt. Consult these for the full debugging narrative behind a result.
 
 ## Environment & Commands
 
@@ -44,7 +44,7 @@ python scripts/train_multiscene.py \
 # After training it auto-renders the 2D overlays into <run_dir>/visualizations/ from
 # checkpoint_best.pth (final checkpoint if no best was saved); opt out with --no_visualize.
 
-# Scaling experiments (MILESTONE_2.md §7.1) as SLURM jobs — submit from anywhere, they cd
+# Scaling experiments (docs/MILESTONES.md) as SLURM jobs — submit from anywhere, they cd
 # to the repo and use myenv/. Val scenes 0080-0082 are held out of every train set. Each job
 # stages the dataset tar onto node-local scratch first (slurm/stage_dataset.sh → SCANNET_ROOT).
 sbatch slurm/train_scale10.sh   # scenes 0000-0009
@@ -62,9 +62,9 @@ Milestone-1 behavior is exactly recovered with `--no_object_weight 0 --bundles_p
 ### Storage layout (repo vs. group storage)
 
 - Repo: `/cluster/scratch/niacobone/vggt`
-- ScanNet scenes: `/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans/<scene>/raw_data` (default `--scans_root`). **97 scenes** (scene0000–0096), each with `subset/` (the ~100 stride-5 masked frames), `masks/<class>/` (per-class binary), and **`masks_instance/<class>_<k>/`** (per-instance binary, new — see below).
-- **Dataset access at training time (do NOT read the small PNGs off `work`).** The whole dataset is shipped as one zstd tar `…/scannet/scannet_instance_dataset.tar.zst` (~1.3 GB; uncompressed ~2.7 GB). Each job copies that single file to node-local scratch (`$TMPDIR`) and unpacks it there once, then reads off the fast local SSD. `slurm/stage_dataset.sh` does this and exports `SCANNET_ROOT=$TMPDIR/scans`; `scripts/train_multiscene.py` uses `SCANNET_ROOT` as the default `--scans_root` (the SLURM scripts also pass it explicitly). `zstd` is at `/usr/bin/zstd` (no module). Canonical uncompressed source tree for re-packing/inspection: `/cluster/scratch/niacobone/scannet_build/scans`.
-- **Per-instance masks (`masks_instance/<class>_<k>/<frame>.png`):** one binary mask per instance (`<k>` = zero-based per-class index, e.g. `chair_0`, `chair_1`); same PNG conventions as `masks/` (uint8 {0,255}, 1296×968, one file per subset frame, all-zero when absent). Cross-frame instance identity comes from SAM3 video tracking. Stuff classes `wall`/`floor` stay a single instance `_0`. The union of a class's instance masks reproduces the old `masks/<class>/` mask (union-IoU ≈ 1.0). 2056 instances over 97 scenes. Full spec: `…/scannet/INSTANCE_MASKS_README.md`. The loader still reads the per-class `masks/` until the Phase-4 per-instance switch (`docs/MILESTONE_3.md`).
+- ScanNet scenes: `/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans/<scene>/raw_data` (default `--scans_root`). **200 scenes** (scene0000–0199), each with `subset/` (the ~100 stride-5 masked frames), `masks/<class>/` (per-class binary), and **`masks_instance/<class>_<k>/`** (per-instance binary, new — see below). All 200 shipped in one tar (see below).
+- **Dataset access at training time (do NOT read the small PNGs off `work`).** All 200 scenes ship as one zstd tar `…/scannet/scannet_instance_dataset_full.tar.zst` (~2.6 GB; uncompressed ~5.4 GB), containing `scans/<scene>/raw_data/...`. Each job copies that single file to node-local scratch (`$TMPDIR`) and unpacks it there once, then reads off the fast local SSD. `slurm/stage_dataset.sh` does this and exports `SCANNET_ROOT=$TMPDIR/scans`; `scripts/train_multiscene.py` uses `SCANNET_ROOT` as the default `--scans_root` (the SLURM scripts also pass it explicitly). The SLURM headers request `#SBATCH --tmp=16000` (MB) — peak is tar 2.6 GB + unpacked 5.4 GB. `zstd` is at `/usr/bin/zstd` (no module). Canonical uncompressed source tree for re-packing/inspection: `/cluster/scratch/niacobone/scannet_build/scans`.
+- **Per-instance masks (`masks_instance/<class>_<k>/<frame>.png`):** one binary mask per instance (`<k>` = zero-based per-class index, e.g. `chair_0`, `chair_1`); same PNG conventions as `masks/` (uint8 {0,255}, 1296×968, one file per subset frame, all-zero when absent). Cross-frame instance identity comes from SAM3 video tracking. Stuff classes `wall`/`floor` stay a single instance `_0`. The union of a class's instance masks reproduces the old `masks/<class>/` mask (union-IoU ≈ 1.0). ≈4195 instances over 200 scenes (scene0000–0199), all packed in `scannet_instance_dataset_full.tar.zst` (see staging above). Per-scene/per-class spec: `…/scannet/INSTANCE_MASKS_README.md` (scene0000–0096) + `…_split2.md` (scene0097–0199). The loader defaults to per-class `masks/`; `--instance_level` switches to per-instance (`data/scannet_overfit.py::instance_level`).
 - Training runs/checkpoints: `/cluster/work/igp_psr/niacobone/distillation/output/<run_name>/checkpoint.pth` (timestamped run names, e.g. `d4rt_m2_5scenes_20260610_133100`). `checkpoint_best.pth` (best val mIoU) is the one to use for eval/demos; `checkpoint_best_ap50.pth` is the same run selected on the honest unprompted val[grid] AP50 instead.
 - Each run dir also gets `metrics.jsonl` — one JSON line per eval (epoch, lr, loss, prompted+grid train/val mIoU & AP50). Scaling plots read this, not the logs.
 - Checkpoints are self-contained: head weights + head config + the scene batches + optimizer/scheduler (for `--resume`). The frozen backbone is reloaded from HF (`facebook/VGGT-1B`), never stored. Scene images are stored as **uint8** (4× smaller than float; decoded back via `data/scannet_overfit.py::decode_checkpoint_images`); `--checkpoint_light` drops the pixels entirely and stores `frame_names` + `scene_dir`, so the visualizer/demo reload frames from `--scans_root`.
@@ -89,7 +89,7 @@ Pipeline (one component per file, each with its phase test):
 
 ### Hard-won constraints (violating these silently breaks training)
 
-These came out of real debugging (`MILESTONE_1.md` §6) — keep them when touching the decoder:
+These came out of real debugging (`docs/old/MILESTONE_1.md` §6) — keep them when touching the decoder:
 - **LayerNorm the projected memory** and keep the **query skip connection** in `InstanceDecoder` — raw VGGT features have huge magnitudes and otherwise every query collapses to the same decoded vector (loss falls, mIoU stays 0).
 - Mask logits use **cosine similarity** (learnable temperature), not raw dot products, to keep sigmoids from saturating.
 - BCE uses a foreground `pos_weight`; gradient clipping is on.
