@@ -79,6 +79,10 @@ Full detail: `docs/old/MILESTONE_2.md`.
 
 ## Milestone 3 — Scaling, query modes, pixel decoder, per-instance GT (largely DONE)
 
+> **Status (2026-06-22):** the arm-A scaling curve is now complete through N=200 and has
+> **plateaued** (table below). Next experiments pivot from "more data" to the head/training axis:
+> learned queries (arm C) at large N, and training the pixel decoder. See `docs/todo.md`.
+
 **Phase 0 (instrumentation, CPU, DONE):**
 - `metrics.jsonl` per run (one line per eval: epoch, lr, loss, prompted+grid train/val
   mIoU/AP50) — scaling plots read this, not logs.
@@ -96,17 +100,25 @@ Tests added. This is now the real supervision target.
 
 **Phases 1–4 results (instance GT, wide val = scene0080–0089), arm A = point prompts:**
 
-| N  | val mIoU | val[grid] AP50 (honest) | final train mIoU |
-|----|----------|-------------------------|------------------|
-| 10 | 0.152    | 0.089                   | 0.526            |
-| 25 | 0.174    | 0.111                   | 0.353            |
-| 50 | 0.212    | 0.125                   | 0.338            |
+| N   | val mIoU  | val[grid] AP50 (honest) | final train mIoU |
+|-----|-----------|-------------------------|------------------|
+| 10  | 0.152     | 0.089                   | 0.526            |
+| 25  | 0.174     | 0.111                   | 0.353            |
+| 50  | 0.212     | **0.125**               | 0.338            |
+| 100 | **0.228** | 0.103                   | 0.272            |
+| 200 | 0.216     | 0.105                   | 0.265            |
 
-- **Both columns monotonic in N** — more scenes help prompted mIoU *and* honest AP50. (The
-  earlier N=25 dip was 3-val-scene noise; widening val to 10 scenes removed it.)
+- **The curve has plateaued (updated 2026-06-22).** Through N=50 both columns climbed
+  monotonically, but extending to N=100 (`d4rt_m2_scale100_inst`) and N=200 / all 190 non-val
+  scenes (`d4rt_full_inst`) flattens val mIoU at ~0.21–0.23 and leaves the honest val[grid] AP50
+  at ~0.10 — *below* its N=50 peak of 0.125. **More scenes is no longer the lever**; the ceiling
+  is now architecture/resolution, not data quantity.
 - Instance-GT numbers are ≈half the per-class equivalents — **the predicted cost of the harder
   task** (more, smaller objects), not a regression.
-- train−val gap shrinks with N (0.37→0.27→0.15) → scaling reduces overfitting as expected.
+- train−val gap keeps shrinking with N (0.37→0.18→0.13→0.04→0.05) → the model is no longer
+  overfitting; it has hit a capacity/resolution ceiling rather than a data ceiling. This is what
+  motivates pivoting to the head/training items (learned queries at large N, the pixel decoder)
+  over further scaling.
 
 **Phases 2/3 query-mode arms (all N=50, instance GT, wide val):**
 

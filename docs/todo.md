@@ -5,17 +5,21 @@ detail. This list tracks only what is still open.
 
 ## Open — next experiments (GPU)
 
-- [ ] **N=100+ scaling point** (unblocked: 200 scenes in one full tar, staging handles it).
-      Re-run the instance-GT curve at N ∈ {10, 25, 50, 100, 200}, wide val (scene0080–0089),
-      arm A point prompts. Target: does val mIoU / honest val[grid] AP50 keep climbing?
+- [X] **N=100+ scaling point** (DONE 2026-06-22). Arm-A instance-GT curve now runs N ∈ {10, 25,
+      50, 100, 200}, wide val (scene0080–0089). **Result: plateau** — val mIoU flattens at
+      ~0.21–0.23 past N=50, honest val[grid] AP50 sits ~0.10 (below its N=50 peak of 0.125). More
+      scenes is no longer the lever; train−val gap shrank to ~0.05 (no longer overfitting →
+      capacity/resolution ceiling). Runs: `d4rt_m2_scale100_inst`, `d4rt_full_inst`. See MILESTONES.
+- [ ] **Confirm the learned-query win (arm C) at large N** (IN PROGRESS — running at N=200).
+      C was best at N=50 (val mIoU 0.259 vs 0.212 baseline) but overfit hard (gap 0.49). With the
+      baseline plateaued, the question is whether the best architecture variant keeps climbing.
+      `--query_mode learned --num_learned_queries 64`. Metric = val mIoU + honest val[grid] AP50.
 - [ ] **Fix Phase-2 `--train_grid_queries` loss balance** (arm B collapsed: train mIoU ~0.05).
       Normalize the no-object term by query count and/or keep GT-centroid queries always matched;
       rerun. Metric = unprompted val AP50.
 - [ ] **Fix Phase-3 hybrid (arm D) NaN** — guard the matcher cost (`nan_to_num` + finite assert
       around `linear_sum_assignment`, `train/loss.py:253`), tighter grad-clip / lower LR on the
       learned-embedding params; rerun (it was the most promising arm before crashing).
-- [ ] **Confirm the learned-query win (arm C)** holds as N grows — track the point-vs-learned
-      crossover toward N=100+ (C overfits hard at N=50: train 0.749 vs val 0.259).
 - [ ] **Train the MaskDINO pixel decoder** (`--mask_upsample 2/4`) — code done, never trained.
       If dense Dice+BCE OOMs, adopt Mask2Former point-sampled mask loss (~3k pts/mask). May fix
       the window/door/picture confusion if it's a resolution (not coverage) problem.
