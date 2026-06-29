@@ -10,10 +10,12 @@ detail. This list tracks only what is still open.
       ~0.21–0.23 past N=50, honest val[grid] AP50 sits ~0.10 (below its N=50 peak of 0.125). More
       scenes is no longer the lever; train−val gap shrank to ~0.05 (no longer overfitting →
       capacity/resolution ceiling). Runs: `d4rt_m2_scale100_inst`, `d4rt_full_inst`. See MILESTONES.
-- [ ] **Confirm the learned-query win (arm C) at large N** (IN PROGRESS — running at N=200).
-      C was best at N=50 (val mIoU 0.259 vs 0.212 baseline) but overfit hard (gap 0.49). With the
-      baseline plateaued, the question is whether the best architecture variant keeps climbing.
-      `--query_mode learned --num_learned_queries 64`. Metric = val mIoU + honest val[grid] AP50.
+- [X] **Confirm the learned-query win (arm C) at large N** (DONE 2026-06-22 — decisive win).
+      At N=200: val mIoU **0.371** (best @ep600, gap 0.086) / 0.326 final, honest AP50 **0.228** —
+      vs the plateaued point baseline (0.216 / 0.105): +0.15 mIoU, >2× AP50. Learned queries keep
+      scaling (0.259→0.371 from N=50→200) and their N=50 overfitting resolved (gap 0.49→0.086).
+      **The ceiling was the head, not the data.** Run: `d4rt_full_inst_learned_20260622_183203`.
+      → Arm C learned is now the default base for all further experiments (below).
 - [ ] **Fix Phase-2 `--train_grid_queries` loss balance** (arm B collapsed: train mIoU ~0.05).
       Normalize the no-object term by query count and/or keep GT-centroid queries always matched;
       rerun. Metric = unprompted val AP50.
@@ -21,8 +23,10 @@ detail. This list tracks only what is still open.
       around `linear_sum_assignment`, `train/loss.py:253`), tighter grad-clip / lower LR on the
       learned-embedding params; rerun (it was the most promising arm before crashing).
 - [ ] **Train the MaskDINO pixel decoder** (`--mask_upsample 2/4`) — code done, never trained.
-      If dense Dice+BCE OOMs, adopt Mask2Former point-sampled mask loss (~3k pts/mask). May fix
-      the window/door/picture confusion if it's a resolution (not coverage) problem.
+      **Now the top open lever** (data is plateaued; arm C is the new base — train it WITH
+      `--query_mode learned --num_learned_queries 64` at N=200). If dense Dice+BCE OOMs, adopt
+      Mask2Former point-sampled mask loss (~3k pts/mask). Targets the window/door/picture
+      confusion if it's a resolution (not coverage) problem.
 
 ## Open — data-gated ablations (Phase 6; meaningful now with 200 scenes)
 

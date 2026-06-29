@@ -38,9 +38,14 @@ python scripts/train_multiscene.py \
     --train_scenes scene0000_00,scene0001_00,scene0002_00,scene0003_00 \
     --val_scenes scene0004_00 \
     --num_epochs 1000 --warmup_epochs 30 --num_frames 8 --num_queries 32 \
+    --query_mode learned --num_learned_queries 64 --instance_level \
     --learning_rate 2e-3 --bundles_per_scene 3 --query_jitter 0.02 --color_jitter 0.2 \
     --no_object_weight 0.1 --grid_size 6 --eval_interval 50 \
     --save_checkpoint /cluster/work/igp_psr/niacobone/distillation/output/<run_name>/checkpoint.pth
+# CURRENT BASE: learned object queries (arm C) on per-instance GT (--instance_level) is the
+# default starting point for all further experiments — it broke the point-prompt plateau
+# (val mIoU 0.371, honest val[grid] AP50 0.228 at N=200; see docs/MILESTONES.md). For the
+# superseded point-prompt baseline, drop --query_mode/--num_learned_queries (defaults to point).
 # After training it auto-renders the 2D overlays into <run_dir>/visualizations/ from
 # checkpoint_best.pth (final checkpoint if no best was saved); opt out with --no_visualize.
 

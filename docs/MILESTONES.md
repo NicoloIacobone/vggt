@@ -79,9 +79,12 @@ Full detail: `docs/old/MILESTONE_2.md`.
 
 ## Milestone 3 — Scaling, query modes, pixel decoder, per-instance GT (largely DONE)
 
-> **Status (2026-06-22):** the arm-A scaling curve is now complete through N=200 and has
-> **plateaued** (table below). Next experiments pivot from "more data" to the head/training axis:
-> learned queries (arm C) at large N, and training the pixel decoder. See `docs/todo.md`.
+> **Status (2026-06-22):** the arm-A *point*-prompt scaling curve is complete through N=200 and
+> has **plateaued** (val mIoU ~0.22, honest AP50 ~0.10). But **arm C (learned queries) scaled to
+> N=200 breaks that plateau** — val mIoU **0.371**, honest AP50 **0.228** (>2× the point
+> baseline), with its old overfitting resolved. The ceiling was the head, not the data. Learned
+> queries are now the default for further work; next levers (pixel decoder, ablations) stack on
+> top of arm C. See the arm tables below and `docs/todo.md`.
 
 **Phase 0 (instrumentation, CPU, DONE):**
 - `metrics.jsonl` per run (one line per eval: epoch, lr, loss, prompted+grid train/val
@@ -131,9 +134,26 @@ Tests added. This is now the real supervision target.
 
 \* D's last eval before the crash.
 
-- **C (learned object queries) is the surprise winner** at N=50 — *against* the "DETR queries
-  are data-hungry, expect them to underperform ≤50 scenes" prior. Big train−val gap (0.49); the
-  crossover as N→100+ is the thing to watch.
+**Arm C scaled to N=200 (instance GT, wide val) — the headline result (2026-06-22):**
+
+| Arm C learned | val mIoU  | honest val[grid] AP50 | train mIoU | gap   |
+|---------------|-----------|-----------------------|------------|-------|
+| N=50          | 0.259     | 0.146                 | 0.749      | 0.49  |
+| N=200 best (@ep600) | **0.371** | 0.228           | 0.457      | 0.086 |
+| N=200 final (@ep1000) | 0.326 | **0.228**            | 0.560      | 0.23  |
+
+- **Learned queries break the plateau — the ceiling was the head, not the data.** Against the
+  N=200 *point* baseline (val mIoU 0.216, AP50 0.105), arm C gives +0.15 val mIoU and **>2× the
+  honest AP50** (0.105 → 0.228). Run: `d4rt_full_inst_learned_20260622_183203`.
+- **Learned queries keep scaling** where point prompts saturated: val mIoU 0.259 → 0.371 from
+  N=50 → N=200, and their N=50 overfitting **resolved** (train−val gap 0.49 → 0.086 at best epoch)
+  — exactly the predicted crossover.
+- For learned queries there are no point prompts, so prompted == grid metrics: **0.228 is the
+  unconditional honest detection number.** Next levers stack *on top* of arm C (pixel decoder for
+  the resolution-limited class confusion; no-object/aug ablations).
+
+- **C (learned object queries) was the surprise winner** already at N=50 — *against* the "DETR
+  queries are data-hungry" prior — and the win compounds with scale (table above).
 - **B (`--train_grid_queries`) backfired:** train mIoU stuck ~0.05 while class loss fell —
   learned to classify but not to mask. Mechanism: ~320 queries/step routes many GTs to grid
   queries, under-supervising the GT-centroid queries eval uses, and `no_object_weight` over ~10×
