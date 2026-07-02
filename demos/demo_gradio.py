@@ -28,6 +28,7 @@ from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from vggt.utils.geometry import unproject_depth_map_to_point_map
 from models.d4rt_decoder import D4RTInstanceSegmentationHead
+from train.postprocess import select_instances, upsample_assignment
 from data.scannet_overfit import IDX_TO_CLASS, decode_checkpoint_images
 
 # Root for reloading frames from --checkpoint_light checkpoints (no stored pixels).
@@ -157,36 +158,21 @@ def compute_seg_colors(images_dev: torch.Tensor, mask_thr: float = 0.5, score_th
     pred_masks = pred_masks[0]       # [N, S, h, w]
     N = class_logits.shape[0]
 
-    probs = torch.softmax(class_logits, dim=-1)
-    labels = probs.argmax(dim=-1)            # [N]
-    scores = probs.max(dim=-1).values        # [N]
-
-    # The fixed overfit queries are ordered [real instances ..., background points ...] (see
-    # generate_query_points in train_overfit.py), so the first Ng queries ARE the real
-    # instances, in GT order. Coloring only those reproduces the validated 11-instance result
-    # and avoids the background query points — which this overfit head does not push to the
-    # background class — painting spurious overlapping masks over most of the image.
-    n_inst = int(SEG["gt_classes"].shape[0]) if SEG.get("gt_classes") is not None else N
-    keep = list(range(min(n_inst, N)))
-
-    # Upsample mask probabilities to full image resolution.
-    mask_prob = torch.sigmoid(pred_masks)                                   # [N, S, h, w]
-    mask_prob = F.interpolate(
-        mask_prob.reshape(N * S, 1, *pred_masks.shape[-2:]),
-        size=(H, W), mode="bilinear", align_corners=False,
-    ).reshape(N, S, H, W).cpu().numpy()
+    # Honest, GT-free instance selection — the SAME rule as the 2D overlay renderer
+    # (train/postprocess.select_instances): drop background/low-score queries and resolve
+    # overlaps by per-pixel winner-takes-all. This replaces the old "first Ng queries are the
+    # real instances" assumption, which only held for the overfit point-query checkpoints and
+    # silently mis-selected for learned/hybrid object queries (a chair appearing in 3D but not
+    # in the 2D overlays).
+    keep, labels, scores, assign = select_instances(
+        class_logits, pred_masks, score_thr=score_thr, mask_thr=mask_thr,
+    )
+    # Nearest-upsample the native-resolution assignment so the 3D coloring matches the 2D
+    # "honest" panel exactly (same instances, same patch-grid sharpness).
+    best_k = upsample_assignment(assign, (H, W)).cpu().numpy()  # [S, H, W], values index keep; -1 = bg
 
     base_rgb = images_dev[0].permute(0, 2, 3, 1).clamp(0, 1).cpu().numpy()  # [S, H, W, 3]
     seg = base_rgb.copy()
-
-    # Per-pixel winner-takes-all over kept instances (above mask threshold).
-    best_val = np.full((S, H, W), mask_thr, dtype=np.float32)
-    best_k = np.full((S, H, W), -1, dtype=np.int64)
-    for color_i, i in enumerate(keep):
-        pv = mask_prob[i]
-        better = pv > best_val
-        best_val[better] = pv[better]
-        best_k[better] = color_i
 
     legend_lines = []
     for color_i, i in enumerate(keep):

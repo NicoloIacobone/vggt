@@ -62,6 +62,16 @@ python scripts/visualize_masks.py --checkpoint <run_dir>/checkpoint.pth   # 2D o
 python demos/demo_gradio.py --seg_checkpoint <path>   # 3D viewer; auto-discovers latest checkpoint, scene dropdown, "Color By: Predicted Instances"
 ```
 
+The 2D overlay and the 3D viewer share ONE instance-selection rule — `train/postprocess.py::select_instances`
+(drop background/score<0.5 queries, per-pixel winner-takes-all, no GT, no query-order assumption). The 2D
+figure shows 4 panels: RGB | GT | **Prediction (honest, no GT)** | Prediction (oracle, GT-matched). The
+"honest" panel and the 3D "Predicted Instances" coloring are identical by construction; the oracle panel
+(Hungarian-matched to GT) is the upper-bound diagnostic for "is this a detection miss or a mask-quality
+issue?". All masks render at the head's native patch-grid resolution, nearest-upsampled, so GT and
+predictions share the same (honest) sharpness — predictions are NOT bilinear-smoothed to look better than
+their 37×37 supervision. For genuinely sharper masks, retrain with `--mask_upsample 2/4` (changes the
+supervision resolution; compare AP50/mIoU, don't judge by the picture).
+
 Milestone-1 behavior is exactly recovered with `--no_object_weight 0 --bundles_per_scene 1 --query_jitter 0 --fixed_bg`.
 
 ### Storage layout (repo vs. group storage)

@@ -22,11 +22,15 @@ detail. This list tracks only what is still open.
 - [ ] **Fix Phase-3 hybrid (arm D) NaN** — guard the matcher cost (`nan_to_num` + finite assert
       around `linear_sum_assignment`, `train/loss.py:253`), tighter grad-clip / lower LR on the
       learned-embedding params; rerun (it was the most promising arm before crashing).
-- [ ] **Train the MaskDINO pixel decoder** (`--mask_upsample 2/4`) — code done, never trained.
-      **Now the top open lever** (data is plateaued; arm C is the new base — train it WITH
-      `--query_mode learned --num_learned_queries 64` at N=200). If dense Dice+BCE OOMs, adopt
-      Mask2Former point-sampled mask loss (~3k pts/mask). Targets the window/door/picture
-      confusion if it's a resolution (not coverage) problem.
+- [~] **Train the MaskDINO pixel decoder** (`--mask_upsample 2/4`) — code done. **IN PROGRESS
+      2026-06-30**: launched `--mask_upsample 2` (74×74) on the arm-C base (learned, 64 queries,
+      instance-level, N=190) as SLURM job 5275027 → run dir `d4rt_full_inst_learned_us2_*`. This
+      is a controlled vs-baseline test: compare honest val[grid] AP50/mIoU against
+      `d4rt_full_inst_learned_20260622_183203` (us=1: 0.228 / 0.371) — decide by the number, NOT
+      by sharper-looking masks (GT is SAM3 pseudo-labels, so finer supervision may just fit label
+      noise). If it wins, try `--mask_upsample 4`. If dense Dice+BCE OOMs, adopt Mask2Former
+      point-sampled mask loss (~3k pts/mask). Targets the window/door/picture confusion if it's a
+      resolution (not coverage) problem.
 
 ## Open — data-gated ablations (Phase 6; meaningful now with 200 scenes)
 

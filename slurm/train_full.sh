@@ -47,5 +47,12 @@ $PYTHON scripts/train_multiscene.py \
     --num_epochs 1000 --warmup_epochs 30 --num_frames 8 --num_queries 32 \
     --learning_rate 2e-3 --bundles_per_scene 3 --query_jitter 0.02 --color_jitter 0.2 \
     --no_object_weight 0.1 --grid_size 6 --eval_interval 50 --early_stop_patience 0 \
-    --cache_device cpu \
+    --cache_device cpu --no_visualize \
     --save_checkpoint $OUT/d4rt_full${RUN_TAG}_$(date +%Y%m%d_%H%M%S)/checkpoint.pth
+
+# NOTE: --no_visualize keeps the job inside the 4h walltime. On the full 190-scene set,
+# training + staging already takes ~3h45 (more at --mask_upsample 2), so the end-of-run
+# auto-render (200 scenes) previously pushed the job past the limit (job 5275027 TIMEOUT at
+# 20:15 — training had finished at 19:58, only the viz was truncated). Render overlays
+# separately afterward on any GPU node:
+#   myenv/bin/python scripts/visualize_masks.py --checkpoint $OUT/<run>/checkpoint_best_ap50.pth

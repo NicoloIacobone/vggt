@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root
 
 from train_overfit import D4RTModel
 from train.loss import PointBipartiteMatcher
+from train.postprocess import select_instances, upsample_assignment
 from data.scannet_overfit import IDX_TO_CLASS, decode_checkpoint_images
 
 DEFAULT_SCANS_ROOT = "/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans"
@@ -159,20 +160,33 @@ def visualize_scene(model, scene: dict, out_dir: Path, device: str, args) -> int
     pred_labels = probs.argmax(dim=-1)                  # [N]
     pred_scores = probs.max(dim=-1).values              # [N]
 
-    # Upsample predicted (sigmoid) and GT masks to image resolution.
-    pred_prob_full = F.interpolate(
-        torch.sigmoid(pred_masks).reshape(-1, 1, *pred_masks.shape[-2:]),
-        size=(H, W), mode="bilinear", align_corners=False,
-    ).reshape(pred_masks.shape[0], S, H, W).cpu().numpy()
+    # --- Honest, GT-free selection (identical rule to the 3D viewer) --------------------------
+    # train/postprocess.select_instances is the single source of truth shared with
+    # demos/demo_gradio.py, so the "Prediction (honest)" panel here and the 3D point cloud
+    # pick exactly the same instances: drop background/low-score queries, winner-takes-all.
+    keep, _, _, assign = select_instances(
+        class_logits, pred_masks,
+        score_thr=args.score_threshold, mask_thr=args.mask_threshold,
+    )
+    assign_full = upsample_assignment(assign, (H, W)).cpu().numpy()  # [S, H, W], values index keep
+
+    # All masks are rendered at the head's NATIVE resolution and nearest-upsampled, so GT and
+    # both prediction panels share the same (honest) patch-grid sharpness — no panel looks
+    # artificially smooth. GT: one binary map per instance.
     gt_full = F.interpolate(
         gt_masks.reshape(-1, 1, *gt_masks.shape[-2:]).float(),
         size=(H, W), mode="nearest",
     ).reshape(gt_masks.shape[0], S, H, W).cpu().numpy() > 0.5
+    # Oracle: per-query native mask thresholded then nearest-upsampled (matched to GT below).
+    pred_oracle_full = F.interpolate(
+        (torch.sigmoid(pred_masks) >= args.mask_threshold).float().reshape(-1, 1, *pred_masks.shape[-2:]),
+        size=(H, W), mode="nearest",
+    ).reshape(pred_masks.shape[0], S, H, W).cpu().numpy() > 0.5
 
     imgs_np = images[0].permute(0, 2, 3, 1).cpu().numpy()  # [S, H, W, 3]
 
-    # --- Report matched instances ------------------------------------------------------------
-    print("\nMatched instances (color : GT class -> predicted class, score):")
+    # --- Report matched instances (oracle view) ----------------------------------------------
+    print("\nOracle match (color : GT class -> predicted class, score):")
     matches = []  # (color_i, p, g, gt_cls, pred_cls, score, drawn)
     for color_i, (p, g) in enumerate(zip(pred_idx, gt_idx)):
         gt_cls = int(gt_classes[g].item())
@@ -184,45 +198,70 @@ def visualize_scene(model, scene: dict, out_dir: Path, device: str, args) -> int
         print(f"  [{color_i:2d}] {IDX_TO_CLASS.get(gt_cls, gt_cls):>14s} -> "
               f"{IDX_TO_CLASS.get(pred_cls, pred_cls):<14s} ({score:.2f}){flag}")
 
-    # --- Per-frame overlays: original | GT | prediction --------------------------------------
+    # The honest panel uses its own colors (keep-order); report its instances too.
+    print(f"\nHonest selection (score>={args.score_threshold}, non-bg): {len(keep)} instance(s)")
+    for c, i in enumerate(keep):
+        print(f"  ({c:2d}) {IDX_TO_CLASS.get(int(pred_labels[i]), int(pred_labels[i])):<14s} "
+              f"({float(pred_scores[i]):.2f})")
+
+    # --- Per-frame overlays: RGB | GT | Prediction (honest) | Prediction (oracle) -------------
     for s in range(S):
         base = imgs_np[s]
         gt_ov = base.copy()
-        pred_ov = base.copy()
+        honest_ov = base.copy()
+        oracle_ov = base.copy()
+        # GT + oracle share the matched-pair color scheme.
         for color_i, p, g, gt_cls, pred_cls, score, drawn in matches:
             col = _color(color_i)
             gt_m = gt_full[g, s]
             if gt_m.any():
                 gt_ov = overlay_mask(gt_ov, gt_m, col, args.alpha)
             if drawn:
-                pred_m = pred_prob_full[p, s] >= args.mask_threshold
+                pred_m = pred_oracle_full[p, s]
                 if pred_m.any():
-                    pred_ov = overlay_mask(pred_ov, pred_m, col, args.alpha)
+                    oracle_ov = overlay_mask(oracle_ov, pred_m, col, args.alpha)
+        # Honest panel: winner-takes-all assignment, colored by keep-order.
+        for c in range(len(keep)):
+            hm = assign_full[s] == c
+            if hm.any():
+                honest_ov = overlay_mask(honest_ov, hm, _color(c), args.alpha)
 
         fname = frame_names[s] if frame_names is not None else f"frame {s}"
         if isinstance(fname, (list, tuple)):
             fname = fname[0]
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5.5))
+        fig, axes = plt.subplots(1, 4, figsize=(20, 5.5))
         for ax, im, title in zip(
-            axes, [base, gt_ov, pred_ov], ["RGB", "Ground truth", "Prediction"]
+            axes, [base, gt_ov, honest_ov, oracle_ov],
+            ["RGB", "Ground truth", "Prediction (honest, no GT)", "Prediction (oracle, GT-matched)"],
         ):
             ax.imshow(im)
-            ax.set_title(title, fontsize=12)
+            ax.set_title(title, fontsize=11)
             ax.axis("off")
-        # Per-class instance index so two same-class objects are distinguishable in the
-        # legend ("{class} #{k}") — load-bearing once per-instance GT lands (Phase 0.6).
+        # GT/oracle legend (shared colors): per-class instance index "{class} #{k}".
         class_counts = {}
-        legend = []
+        gt_legend = []
         for ci, p, g, gc, pc, sc, dr in matches:
             k = class_counts.get(gc, 0)
             class_counts[gc] = k + 1
-            legend.append(Patch(facecolor=_color(ci), label=f"{IDX_TO_CLASS.get(gc, gc)} #{k}"))
-        fig.legend(handles=legend, loc="lower center", ncol=min(len(legend), 6), fontsize=8,
-                   frameon=False, bbox_to_anchor=(0.5, -0.02))
+            gt_legend.append(Patch(facecolor=_color(ci), label=f"{IDX_TO_CLASS.get(gc, gc)} #{k}"))
+        # Honest legend (own colors): predicted class + score.
+        honest_legend = [
+            Patch(facecolor=_color(c), label=f"{IDX_TO_CLASS.get(int(pred_labels[i]), int(pred_labels[i]))} ({float(pred_scores[i]):.2f})")
+            for c, i in enumerate(keep)
+        ]
+        if gt_legend:
+            leg1 = fig.legend(handles=gt_legend, loc="lower left", ncol=min(len(gt_legend), 5),
+                              fontsize=7, frameon=False, bbox_to_anchor=(0.02, -0.02),
+                              title="GT / oracle", title_fontsize=8)
+            fig.add_artist(leg1)
+        if honest_legend:
+            fig.legend(handles=honest_legend, loc="lower right", ncol=min(len(honest_legend), 5),
+                       fontsize=7, frameon=False, bbox_to_anchor=(0.98, -0.02),
+                       title="honest", title_fontsize=8)
         fig.suptitle(f"Frame {s} — {fname}", fontsize=13)
-        fig.text(0.5, 0.93, "one color = one predicted instance (mask spans all frames jointly)",
-                 ha="center", fontsize=9, style="italic")
-        fig.tight_layout(rect=[0, 0.04, 1, 0.92])
+        fig.text(0.5, 0.93, "one color = one instance (mask spans all frames jointly); "
+                 "honest = same selection as 3D viewer", ha="center", fontsize=9, style="italic")
+        fig.tight_layout(rect=[0, 0.06, 1, 0.92])
         out_path = out_dir / f"frame_{s:02d}_overlay.png"
         fig.savefig(out_path, dpi=110, bbox_inches="tight")
         plt.close(fig)

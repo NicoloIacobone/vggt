@@ -1,0 +1,2 @@
+Many modules are hidden in this stack. Use "module --show_hidden spider SOFTWARE" if you are not able to find the required software
+[2026-06-30T20:15:29.956+02:00] error: *** JOB 5275027 ON eu-g6-061 CANCELLED AT 2026-06-30T20:15:29 DUE TO TIME LIMIT ***
