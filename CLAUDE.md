@@ -9,6 +9,7 @@ This is a fork of **VGGT** (Visual Geometry Grounded Transformer, CVPR 2025) —
 Project history, design decisions, and results live in `docs/`:
 - `docs/MILESTONES.md` — **the single consolidated summary** of Milestones 1–3 (architecture, hard-won constraints, all results, qualitative findings, dataset & storage status). Read this first.
 - `docs/todo.md` — current open task list.
+- `docs/RIEPILOGO_PROGETTO_IT.md` — full project narrative in Italian (architecture, motivations, experiments, interpretations) for the project owner.
 - `docs/HOOK_PLAN.md` — where/how the decoder hooks into VGGT.
 - `docs/slides_meeting_jun_15.md` — most recent supervision-meeting slides.
 - `docs/old/` — archived per-milestone detail (`MILESTONE_1/2/3.md`), executed plans (`NEXT_STEPS_PLAN.md`), the scaling-protocol analysis (`SCALING_RUNS_ANALYSIS.md`), addressed supervisor feedback, the original project brief (`prompt.md`), and the SAM3 preprocessing prompt. Consult these for the full debugging narrative behind a result.
@@ -54,6 +55,8 @@ python scripts/train_multiscene.py \
 # puts the learned-query embeddings in their own lower-LR AdamW param group (hybrid NaN
 # fix; 1.0 = single group, --resume-compatible with old checkpoints). The matcher also
 # nan_to_num-guards the Hungarian cost (warns instead of crashing on non-finite entries).
+# Rerun outcome (2026-07-07): both fixes verified (B's collapse and D's NaN are gone) but
+# neither arm beats arm C — arms B/D closed, arm C stays the base (docs/MILESTONES.md).
 
 # Scaling experiments (docs/MILESTONES.md) as SLURM jobs — submit from anywhere, they cd
 # to the repo and use myenv/. Val scenes 0080-0082 are held out of every train set. Each job

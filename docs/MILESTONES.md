@@ -165,6 +165,26 @@ Tests added. This is now the real supervision target.
   dying. **Fix:** guard the matcher cost (`nan_to_num` + finite assert) + tighter grad-clip /
   lower LR on the learned-embedding params.
 
+**Arm B/D fix reruns (fixes 2026-07-03, results 2026-07-07) — both fixes work, neither beats arm C:**
+
+| Fix rerun (N=50, instance GT, wide val) | best val[grid] AP50 | best val[grid] mIoU | train[grid] mIoU @ep1000 | outcome |
+|---|---|---|---|---|
+| B `_gridq_fix` (`--no_object_norm matched`; job 5647527) | **0.161** (@ep700) | 0.284 | 0.458 | collapse fixed (was 0.055); clears the ≥0.125 success bar |
+| D `_hybrid_fix` (`--learned_query_lr_scale 0.1`, grad-clip 0.5, guarded matcher; job 5647528) | 0.146 (@ep200) | 0.247 (@ep250) | 0.750 | NaN fixed — full 1000 epochs, zero non-finite warnings; only *ties* arm C N=50 (0.259/0.146) |
+
+- Judge arm B by the **grid** columns only: its prompted val mIoU stays ~0.05–0.11 because with
+  288 trained grid queries the GT-centroid prompts used by the prompted eval get little
+  supervision — that's routing, not the old mask collapse (train[grid] mIoU learns 0.13→0.46).
+- **B scaled to N=190** (`d4rt_full_inst_gridq_fix_20260703_184456`, job 5658375): val[grid]
+  mIoU reaches **0.372** @ep1000 (still rising; matches arm C's 0.371) but the honest AP50 peaks
+  at only **0.185** (@ep650) and is unstable across evals (0.071 @ep1000) — well below arm C's
+  0.228. Trained grid queries recover mask quality at scale but not stable detection.
+- **D no longer NaNs but is not a win** at N=50 → per the decision rule (scale only on a win),
+  no N=190 run. The centroid prompts reintroduce the point-path overfitting that pure learned
+  queries had resolved (val decays 0.247→0.177 after ep250 while train[grid] climbs to 0.75).
+- **Verdict: arm C (pure learned queries) stays the base.** Arms B and D are closed; the next
+  levers are the Phase-6 ablations (no-object-weight sweep / duplicate suppression first).
+
 **Phase 5 — MaskDINO-style pixel decoder (TRAINED 2026-06-30 — neutral result):**
 `models/mask_upsampler.py` upsamples the 37×37 map before the cosine-sim mask product
 (`--mask_upsample 1/2/4`). Cosine-sim + learnable temperature preserved.

@@ -16,18 +16,18 @@ detail. This list tracks only what is still open.
       scaling (0.259→0.371 from N=50→200) and their N=50 overfitting resolved (gap 0.49→0.086).
       **The ceiling was the head, not the data.** Run: `d4rt_full_inst_learned_20260622_183203`.
       → Arm C learned is now the default base for all further experiments (below).
-- [ ] **Fix Phase-2 `--train_grid_queries` loss balance** (arm B collapsed: train mIoU ~0.05).
-      FIX IMPLEMENTED 2026-07-03: `--no_object_norm matched` normalizes the no-object class
-      loss per term (`matched.mean() + w*unmatched.mean()`), invariant to appended grid
-      queries (tests in `test_milestone2.py`). N=50 rerun submitted: **job 5647527**
-      (`_gridq_fix`). Metric = unprompted val AP50; success = train mIoU ≫ 0.05 and
-      val[grid] AP50 ≥ arm A's 0.125. Fallback if still collapsed: force-match centroid queries.
-- [ ] **Fix Phase-3 hybrid (arm D) NaN** — FIX IMPLEMENTED 2026-07-03: matcher cost now
-      `nan_to_num`-guarded (warns instead of crashing, `train/loss.py`; test in
-      `test_phase5.py`) + `--learned_query_lr_scale` (own AdamW param group for the learned
-      embeddings). N=50 rerun submitted: **job 5647528** (`_hybrid_fix`, lr_scale 0.1,
-      grad_clip 0.5). Success = survives 1000 epochs and ≥ arm C N=50 (val mIoU 0.259 /
-      AP50 0.146); on a win, scale to N=190 via train_full.sh (with --time bump: 96 queries).
+- [X] **Fix Phase-2 `--train_grid_queries` loss balance** (DONE 2026-07-07 — fix works, arm B
+      closed as a loss to arm C). `--no_object_norm matched` fixed the collapse: N=50 rerun
+      (job 5647527, `_gridq_fix`) reaches train[grid] mIoU 0.458 (was 0.055) and best val[grid]
+      AP50 **0.161** ≥ the 0.125 bar. Scaled to N=190 (job 5658375,
+      `d4rt_full_inst_gridq_fix_20260703_184456`): val[grid] mIoU 0.372 @ep1000 (matches arm C)
+      but AP50 peaks at only 0.185 and is unstable (0.071 @ep1000) vs arm C's 0.228 →
+      **arm C stays the base**. See MILESTONES.
+- [X] **Fix Phase-3 hybrid (arm D) NaN** (DONE 2026-07-07 — NaN fixed, no win, arm D closed).
+      N=50 rerun (job 5647528, `_hybrid_fix`, lr_scale 0.1, grad_clip 0.5) survived all 1000
+      epochs with zero non-finite matcher warnings, but best val mIoU 0.247 / AP50 0.146 only
+      ties arm C N=50 (0.259/0.146) and then overfits (val→0.177 while train[grid]→0.75).
+      Per the decision rule (scale only on a win): **no N=190 run**. See MILESTONES.
 - [X] **Train the MaskDINO pixel decoder** (`--mask_upsample 2`) — DONE 2026-06-30 (SLURM job
       5275027, run `d4rt_full_inst_learned_us2_20260630_161537`; arm-C base: learned, 64 queries,
       instance-level, N=190). **Result: a wash.** Best honest val[grid] AP50 **0.236** (@ep500,
