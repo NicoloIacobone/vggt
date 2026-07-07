@@ -42,7 +42,20 @@ detail. This list tracks only what is still open.
 
 - [ ] No-object-weight sweep (0.05 / 0.1 / 0.4) — tests whether 0.1 drives the under-confidence.
 - [ ] Augmentation ablation: `bundles_per_scene` 1 vs 4, `query_jitter` on/off, `color_jitter` on/off.
-- [ ] Grid-density vs unprompted recall: `--grid_size` 4/6/8.
+- [X] Grid-density vs unprompted recall (DONE 2026-07-07, job 6111639 — **negative: density
+      is not the lever, learned-vs-grid gap confirmed architectural**). Eval-only sweep
+      (`scripts/eval_grid_ablation.py` + `slurm/eval_grid_ablation.sh`, no retraining) of
+      `--grid_size` 2/4/6/8/10/12 on the stored val bundles; grid-6 rows reproduce the
+      training-time `val_grid_AP50` of the selected epochs exactly (0.134 / 0.185).
+      Val AP50 by density —
+      arm A `d4rt_full_inst` best_ap50: 0.023 / 0.124 / 0.134 / **0.138** / 0.116 / 0.109
+      (flat 6→8, drops beyond); arm B `gridq_fix` best_ap50: 0.018 / 0.063 / **0.185** /
+      0.100 / 0.134 / 0.067 (sharp peak exactly at its 6×6 *training* density). Kept
+      foreground predictions explode with density (arm A: 58 @6 → 236 @12 vs 14.4 GT/scene)
+      → denser grids die by duplicate FPs (no NMS), as predicted. Unprompted mIoU rises
+      monotonically with density (0.297→0.336) — the known "unprompted mIoU is optimistic"
+      artifact; judge on AP50. Best grid number over all densities/checkpoints (0.185) stays
+      well below arm C's 0.228. Results: `<run_dir>/grid_ablation_<ckpt>.json`.
 - [X] Score-threshold sweep at viz time (DONE 2026-07-03 — **negative, keep 0.5**). On the
       arm-C best checkpoint (`d4rt_full_inst_learned_20260622_183203`), thr 0.3 surfaces 76
       extra instances over the 10 val scenes of which only 2 have IoU≥0.5 with any GT (1 with

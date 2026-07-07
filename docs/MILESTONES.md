@@ -185,6 +185,20 @@ Tests added. This is now the real supervision target.
 - **Verdict: arm C (pure learned queries) stays the base.** Arms B and D are closed; the next
   levers are the Phase-6 ablations (no-object-weight sweep / duplicate suppression first).
 
+**Grid-density ablation (2026-07-07, eval-only, job 6111639 — negative: 6×6 was not the
+bottleneck; the learned-vs-grid gap is architectural, not a density artifact):**
+`scripts/eval_grid_ablation.py` sweeps the unprompted `--grid_size` (2/4/6/8/10/12) on a
+checkpoint's stored val bundles without retraining (grid-6 reproduces the training-time
+`val_grid_AP50` of the selected epoch exactly). Val AP50 by density — arm A
+(`d4rt_full_inst`, best_ap50 ckpt): 0.023/0.124/0.134/**0.138**/0.116/0.109, i.e. flat from
+6→8 and *falling* beyond; arm B (`gridq_fix`, trained 6×6 grid): 0.018/0.063/**0.185**/
+0.100/0.134/0.067 — a sharp peak exactly at its training density. Mechanism confirmed:
+kept foreground predictions explode with density (arm A: 58 @g6 → 236 @g12 vs 14.4
+GT/scene) — denser grids die by duplicate FPs (no NMS). Unprompted mIoU instead rises
+monotonically with density (0.297→0.336): the known "unprompted mIoU is optimistic"
+artifact — judge density on AP50 only. The best grid number over all densities and
+checkpoints (0.185) stays well below arm C's 0.228.
+
 **Phase 5 — MaskDINO-style pixel decoder (TRAINED 2026-06-30 — neutral result):**
 `models/mask_upsampler.py` upsamples the 37×37 map before the cosine-sim mask product
 (`--mask_upsample 1/2/4`). Cosine-sim + learnable temperature preserved.

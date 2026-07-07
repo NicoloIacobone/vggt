@@ -28,6 +28,7 @@ python tests/test_eval.py        # instance-segmentation metrics
 python tests/test_milestone2.py  # no-object loss, grid queries, augmentation, metrics.jsonl, early-stop, train-grid/query-mode queries
 python tests/test_visualize_masks.py  # visualize_masks checkpoint-format handling (float/uint8/light) + overlays
 python tests/test_mask_upsampler.py   # Phase-5 MaskUpsampler pixel decoder + GT-resolution match
+python tests/test_grid_ablation.py    # eval-only grid-density sweep (eval_grid_ablation.py)
 
 # Single-scene overfit (sanity check for gradient flow / new components)
 python scripts/train_overfit.py --num_epochs 400 --num_frames 4 --num_queries 16 \
@@ -65,6 +66,12 @@ sbatch slurm/train_scale10.sh   # scenes 0000-0009
 sbatch slurm/train_scale25.sh   # scenes 0000-0024 (--cache_device cpu)
 sbatch slurm/train_scale50.sh   # scenes 0000-0049 (--cache_device cpu)
 # Add --instance_level (to the script's python call) to run the curve on per-instance GT.
+
+# Eval-only grid-density ablation (docs/todo.md): sweeps the unprompted --grid_size on the
+# val bundles stored in a point/hybrid checkpoint — no retraining, no dataset staging;
+# rejects learned-query checkpoints (their queries ignore coordinates). Results →
+# <run_dir>/grid_ablation_<ckpt>.json. Batch job for the trained runs: sbatch slurm/eval_grid_ablation.sh
+python scripts/eval_grid_ablation.py --checkpoint <run_dir>/checkpoint_best_ap50.pth --grid_sizes 2,4,6,8,10,12
 
 # Visualize predictions manually (re-render or filter scenes)
 python scripts/visualize_masks.py --checkpoint <run_dir>/checkpoint.pth   # 2D overlays → <run_dir>/visualizations/ (multi-scene ckpt: one subfolder per train/val scene; --scenes to filter)
