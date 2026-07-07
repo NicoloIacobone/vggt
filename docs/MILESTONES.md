@@ -149,8 +149,8 @@ Tests added. This is now the real supervision target.
   N=50 → N=200, and their N=50 overfitting **resolved** (train−val gap 0.49 → 0.086 at best epoch)
   — exactly the predicted crossover.
 - For learned queries there are no point prompts, so prompted == grid metrics: **0.228 is the
-  unconditional honest detection number.** Next levers stack *on top* of arm C (pixel decoder for
-  the resolution-limited class confusion; no-object/aug ablations).
+  unconditional honest detection number.** Next levers stack *on top* of arm C (pixel decoder —
+  since tested, neutral, see Phase 5; no-object/aug ablations).
 
 - **C (learned object queries) was the surprise winner** already at N=50 — *against* the "DETR
   queries are data-hungry" prior — and the win compounds with scale (table above).
@@ -165,10 +165,27 @@ Tests added. This is now the real supervision target.
   dying. **Fix:** guard the matcher cost (`nan_to_num` + finite assert) + tighter grad-clip /
   lower LR on the learned-embedding params.
 
-**Phase 5 — MaskDINO-style pixel decoder (CODE DONE, NOT yet trained):**
+**Phase 5 — MaskDINO-style pixel decoder (TRAINED 2026-06-30 — neutral result):**
 `models/mask_upsampler.py` upsamples the 37×37 map before the cosine-sim mask product
-(`--mask_upsample 1/2/4`). Cosine-sim + learnable temperature preserved. Fallback if it
-underperforms: reuse VGGT's frozen DPT depth-head features (zero new params).
+(`--mask_upsample 1/2/4`). Cosine-sim + learnable temperature preserved.
+
+`--mask_upsample 2` (74×74) on the arm-C base (learned, 64 queries, instance GT, N=190; run
+`d4rt_full_inst_learned_us2_20260630_161537`, job 5275027 — hit the 4h walltime *after* training
+finished, so only the auto-render was cut; overlays re-rendered afterwards, and
+`slurm/train_full.sh` now passes `--no_visualize`):
+
+| vs us=1 baseline | honest val[grid] AP50 | val mIoU | gap @best |
+|------------------|-----------------------|----------|-----------|
+| us=1 (`d4rt_full_inst_learned_20260622_183203`) | 0.228 | **0.371** (@ep600) | 0.086 |
+| us=2 best        | **0.236** (@ep500)    | 0.355 (@ep250) | 0.098 |
+| us=2 final (@ep1000) | 0.200             | 0.311    | —     |
+
+- **A wash: doubling mask resolution doesn't move the numbers** (+0.008 AP50, −0.016 mIoU —
+  within run-to-run noise). Mask resolution is NOT the current bottleneck; `--mask_upsample 4`
+  is deprioritized per the decision rule (only on a win).
+- Implication: the window/door/picture confusion is semantic rather than resolution-limited —
+  the next levers are the score-threshold/under-confidence cluster (no-object sweep) and fixing
+  arm D (hybrid), not sharper masks.
 
 Full detail (incl. the SCALING_RUNS_ANALYSIS protocol fixes that made the curve fair):
 `docs/old/MILESTONE_3.md`, `docs/old/SCALING_RUNS_ANALYSIS.md`.
@@ -179,6 +196,11 @@ Full detail (incl. the SCALING_RUNS_ANALYSIS protocol fixes that made the curve 
 - **Under-confidence:** many correct predictions land at score 0.28–0.49 and are dropped by the
   0.5 threshold. `--score_threshold 0.3` recovers them; predictions where the head emits the
   *background class* stay undrawn (class confusion, not a threshold issue).
+  **Update 2026-07-03 — point-prompt-only phenomenon.** On the arm-C learned-query N=200
+  checkpoint, thr 0.3 adds 76 val instances of which 2 are correct (IoU≥0.5) — pure noise —
+  and the model already keeps 338 instances vs 144 GT at thr 0.5. For learned queries the
+  problem is **over**-prediction (duplicates/FPs), pointing at the no-object-weight sweep,
+  not a lower threshold. Keep 0.5.
 - **Class-confusion cluster:** `window ↔ door ↔ picture ↔ curtain` (flat, wall-mounted,
   rectangular — hard at 37×37; where RGB evidence + the pixel decoder should help most).
 - **Coverage gaps:** bathroom fixtures (`toilet`/`sink` → `chair`) when train scenes lack them —

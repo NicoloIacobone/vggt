@@ -415,6 +415,52 @@ def test_loss_components_weighted():
     return True
 
 
+def test_matcher_nonfinite_cost_guard():
+    """Non-finite matching costs (exploding logits — the Phase-3 hybrid arm's NaN crash at
+    ~ep555) must not kill linear_sum_assignment: they are replaced with a large finite cost
+    (with a warning) so the poisoned queries simply lose every match."""
+    print("=== Testing matcher non-finite cost guard ===")
+    import warnings
+
+    matcher = PointBipartiteMatcher(class_weight=1.0, mask_weight=1.0, coord_weight=1.0)
+    torch.manual_seed(0)
+    N_pred, N_gt, C = 6, 3, 20
+    pred_classes = torch.randn(N_pred, C)
+    pred_embed = torch.randn(N_pred, 256)
+    pred_coords = torch.rand(N_pred, 2)
+    gt_classes = torch.randint(1, C, (N_gt,))
+    gt_coords = torch.rand(N_gt, 2)
+    gt_masks = (torch.rand(N_gt, 4, 4) > 0.5).float()
+    pred_masks = torch.randn(N_pred, 4, 4)
+    # Poison two queries: NaN mask logits (NaN dice cost) and +inf logits (inf BCE cost).
+    pred_masks[0] = float("nan")
+    pred_masks[1] = float("inf")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        pred_idx, gt_idx, cost = matcher(
+            pred_classes, pred_embed, pred_coords,
+            gt_classes, None, gt_coords,
+            pred_masks=pred_masks, gt_masks=gt_masks,
+        )
+    assert any("non-finite" in str(w.message) for w in caught), "guard should warn"
+    assert torch.isfinite(cost).all(), "returned cost matrix must be sanitized"
+    assert len(pred_idx) == N_gt, "assignment must still be complete"
+    assert 0 not in pred_idx.tolist() and 1 not in pred_idx.tolist(), (
+        "poisoned queries must lose every match to healthy ones")
+
+    # Clean inputs must not trigger the warning.
+    pred_masks_ok = torch.randn(N_pred, 4, 4)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        matcher(pred_classes, pred_embed, pred_coords, gt_classes, None, gt_coords,
+                pred_masks=pred_masks_ok, gt_masks=gt_masks)
+    assert not any("non-finite" in str(w.message) for w in caught)
+
+    print("✅ Non-finite cost guard test passed!\n")
+    return True
+
+
 if __name__ == "__main__":
     try:
         test_focal_loss()
@@ -427,6 +473,7 @@ if __name__ == "__main__":
         test_empty_predictions()
         test_perfect_match()
         test_loss_components_weighted()
+        test_matcher_nonfinite_cost_guard()
 
         print("=" * 60)
         print("✅ Phase 5 Validation PASSED!")

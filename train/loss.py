@@ -1,6 +1,8 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 
+import warnings
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -248,7 +250,19 @@ class PointBipartiteMatcher(nn.Module):
             + self.coord_weight * coord_cost
         )
 
-        # Hungarian algorithm (linear_sum_assignment minimizes cost)
+        # Hungarian algorithm (linear_sum_assignment minimizes cost).
+        # Guard against non-finite costs (exploding logits, e.g. the Phase-3 hybrid arm's
+        # NaN crash at ~ep555): linear_sum_assignment raises on nan/inf, killing the run.
+        # Replace them with a large finite cost so the affected queries simply lose every
+        # match, and warn so the instability stays visible in the logs.
+        if not torch.isfinite(cost_matrix).all():
+            n_bad = int((~torch.isfinite(cost_matrix)).sum().item())
+            warnings.warn(
+                f"PointBipartiteMatcher: {n_bad}/{cost_matrix.numel()} non-finite entries "
+                f"in the matching cost (exploding logits?); replacing with large finite "
+                f"cost so training can continue."
+            )
+            cost_matrix = torch.nan_to_num(cost_matrix, nan=1e6, posinf=1e6, neginf=1e6)
         cost_np = cost_matrix.cpu().detach().numpy()
         pred_indices, gt_indices = linear_sum_assignment(cost_np)
 
@@ -283,6 +297,16 @@ class D4RTLoss(nn.Module):
             down-weighted by this factor (DETR's eos_coef, typically 0.1) so the many
             background queries do not drown out the matched ones. If None (default), only
             matched queries receive a class loss (Milestone-1 behavior).
+        no_object_norm (str): how the no-object class loss is normalized (only used when
+            `no_object_weight` is set):
+            - "weighted" (default, Milestone-2 behavior): weighted mean over all queries,
+              `(per_query * w).sum() / w.sum()`. The normalizer grows with the query count,
+              so adding many background queries (e.g. --train_grid_queries' ~10x grid)
+              dilutes the matched-query gradients AND grows the summed background pull —
+              the arm-B mask-learning collapse.
+            - "matched": `matched.mean() + no_object_weight * unmatched.mean()`. Each term
+              is normalized by its own count, making the balance invariant to the number
+              of background queries appended.
         background_class (int): class index used as the "no-object" target (default: 0)
         matcher_kwargs (dict): Keyword arguments for PointBipartiteMatcher
     """
@@ -297,13 +321,17 @@ class D4RTLoss(nn.Module):
         coord_loss_weight: float = 1.0,
         mask_loss_weight: float = 1.0,
         no_object_weight: Optional[float] = None,
+        no_object_norm: str = "weighted",
         background_class: int = 0,
         bce_pos_weight_cap: float = 20.0,
         matcher_kwargs: Optional[Dict] = None,
     ):
         super().__init__()
+        if no_object_norm not in ("weighted", "matched"):
+            raise ValueError(f"no_object_norm must be 'weighted' or 'matched', got {no_object_norm!r}")
         self.num_classes = num_classes
         self.no_object_weight = no_object_weight
+        self.no_object_norm = no_object_norm
         self.background_class = background_class
 
         self.focal_loss = FocalLoss(alpha=focal_alpha, gamma=focal_gamma, reduction="mean")
@@ -473,9 +501,18 @@ class D4RTLoss(nn.Module):
             )
             target_classes[pred_indices] = matched_gt_classes
             per_query = self.focal_loss_per_query(class_logits, target_classes)  # [N]
-            weights = torch.full_like(per_query, self.no_object_weight)
-            weights[pred_indices] = 1.0
-            class_loss = (per_query * weights).sum() / weights.sum()
+            if self.no_object_norm == "matched":
+                # Per-term normalization: invariant to the number of background queries,
+                # so --train_grid_queries' ~10x grid no longer swamps the matched gradients.
+                matched_mask = torch.zeros(N, dtype=torch.bool, device=class_logits.device)
+                matched_mask[pred_indices] = True
+                class_loss = per_query[matched_mask].mean()
+                if (~matched_mask).any():
+                    class_loss = class_loss + self.no_object_weight * per_query[~matched_mask].mean()
+            else:  # "weighted" (Milestone-2 behavior)
+                weights = torch.full_like(per_query, self.no_object_weight)
+                weights[pred_indices] = 1.0
+                class_loss = (per_query * weights).sum() / weights.sum()
         else:
             class_loss = self.focal_loss(matched_pred_classes, matched_gt_classes)
         losses["class_loss"] = class_loss

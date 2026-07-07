@@ -479,6 +479,11 @@ def main():
                              "coord_weight=0); 'hybrid' = learned queries + centroid prompts.")
     parser.add_argument("--num_learned_queries", type=int, default=64,
                         help="Number of learned object queries for --query_mode learned/hybrid")
+    parser.add_argument("--learned_query_lr_scale", type=float, default=1.0,
+                        help="LR multiplier for the learned object-query embeddings (own AdamW "
+                             "param group; the cosine schedule applies per group). <1 tames the "
+                             "hybrid arm's exploding-gradient NaN. 1.0 (default) = single param "
+                             "group (previous behavior, --resume-compatible with old runs).")
     parser.add_argument("--mask_upsample", type=int, default=1,
                         help="Pixel-decoder upsampling factor (power of two) for the dense mask "
                              "head (Phase 5). 1 = current 37x37 patch grid (default); 2 = 74x74; "
@@ -516,6 +521,13 @@ def main():
                         help="Also feed the eval grid (random-offset) as training queries so "
                              "Hungarian + no-object loss learn duplicate suppression (Phase 2). "
                              "Default off (Milestone-2 behavior).")
+    parser.add_argument("--no_object_norm", type=str, default="weighted",
+                        choices=["weighted", "matched"],
+                        help="Normalization of the no-object class loss. 'weighted' (default) = "
+                             "weighted mean over ALL queries (normalizer grows with query count; "
+                             "collapsed arm B). 'matched' = matched.mean() + w*unmatched.mean(), "
+                             "invariant to how many background/grid queries are appended — use "
+                             "with --train_grid_queries.")
     # --- Milestone 2: regularization ---
     parser.add_argument("--bundles_per_scene", type=int, default=1,
                         help="Cached bundles per train scene; bundle 0 is evenly-spaced frames "
@@ -591,13 +603,27 @@ def main():
         coord_loss_weight=0.0,       # item 8.5: coordinates are matching-only
         mask_loss_weight=1.0,
         no_object_weight=args.no_object_weight if args.no_object_weight > 0 else None,
+        no_object_norm=args.no_object_norm,
         matcher_kwargs=matcher_kwargs,
     ).to(device)
 
-    optimizer = AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=args.learning_rate, weight_decay=args.weight_decay,
-    )
+    # Optionally train the learned object-query embeddings at a lower LR (Phase-3 arm-D fix:
+    # the hybrid arm's NaN crash traced to exploding gradients in the mixed learned/point
+    # path). Scale 1.0 keeps a single param group, so old checkpoints still --resume cleanly.
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if args.learned_query_lr_scale != 1.0:
+        lq = model.decoder_head.query_generator.learned_queries
+        if lq is None:
+            raise ValueError("--learned_query_lr_scale requires --query_mode learned/hybrid")
+        lq_params = list(lq.parameters())
+        lq_ids = {id(p) for p in lq_params}
+        param_groups = [
+            {"params": [p for p in trainable_params if id(p) not in lq_ids]},
+            {"params": lq_params, "lr": args.learning_rate * args.learned_query_lr_scale},
+        ]
+    else:
+        param_groups = trainable_params
+    optimizer = AdamW(param_groups, lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = build_scheduler(optimizer, args.schedule_epochs, args.warmup_epochs)
 
     start_epoch = 0

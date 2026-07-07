@@ -48,6 +48,12 @@ python scripts/train_multiscene.py \
 # superseded point-prompt baseline, drop --query_mode/--num_learned_queries (defaults to point).
 # After training it auto-renders the 2D overlays into <run_dir>/visualizations/ from
 # checkpoint_best.pth (final checkpoint if no best was saved); opt out with --no_visualize.
+# Arm-B/D fixes (2026-07-03): --no_object_norm matched normalizes the no-object class loss
+# per term (matched.mean() + w*unmatched.mean()), so appended grid queries no longer dilute
+# the matched gradients — use it with --train_grid_queries. --learned_query_lr_scale 0.1
+# puts the learned-query embeddings in their own lower-LR AdamW param group (hybrid NaN
+# fix; 1.0 = single group, --resume-compatible with old checkpoints). The matcher also
+# nan_to_num-guards the Hungarian cost (warns instead of crashing on non-finite entries).
 
 # Scaling experiments (docs/MILESTONES.md) as SLURM jobs — submit from anywhere, they cd
 # to the repo and use myenv/. Val scenes 0080-0082 are held out of every train set. Each job

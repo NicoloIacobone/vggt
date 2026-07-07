@@ -17,27 +17,39 @@ detail. This list tracks only what is still open.
       **The ceiling was the head, not the data.** Run: `d4rt_full_inst_learned_20260622_183203`.
       → Arm C learned is now the default base for all further experiments (below).
 - [ ] **Fix Phase-2 `--train_grid_queries` loss balance** (arm B collapsed: train mIoU ~0.05).
-      Normalize the no-object term by query count and/or keep GT-centroid queries always matched;
-      rerun. Metric = unprompted val AP50.
-- [ ] **Fix Phase-3 hybrid (arm D) NaN** — guard the matcher cost (`nan_to_num` + finite assert
-      around `linear_sum_assignment`, `train/loss.py:253`), tighter grad-clip / lower LR on the
-      learned-embedding params; rerun (it was the most promising arm before crashing).
-- [~] **Train the MaskDINO pixel decoder** (`--mask_upsample 2/4`) — code done. **IN PROGRESS
-      2026-06-30**: launched `--mask_upsample 2` (74×74) on the arm-C base (learned, 64 queries,
-      instance-level, N=190) as SLURM job 5275027 → run dir `d4rt_full_inst_learned_us2_*`. This
-      is a controlled vs-baseline test: compare honest val[grid] AP50/mIoU against
-      `d4rt_full_inst_learned_20260622_183203` (us=1: 0.228 / 0.371) — decide by the number, NOT
-      by sharper-looking masks (GT is SAM3 pseudo-labels, so finer supervision may just fit label
-      noise). If it wins, try `--mask_upsample 4`. If dense Dice+BCE OOMs, adopt Mask2Former
-      point-sampled mask loss (~3k pts/mask). Targets the window/door/picture confusion if it's a
-      resolution (not coverage) problem.
+      FIX IMPLEMENTED 2026-07-03: `--no_object_norm matched` normalizes the no-object class
+      loss per term (`matched.mean() + w*unmatched.mean()`), invariant to appended grid
+      queries (tests in `test_milestone2.py`). N=50 rerun submitted: **job 5647527**
+      (`_gridq_fix`). Metric = unprompted val AP50; success = train mIoU ≫ 0.05 and
+      val[grid] AP50 ≥ arm A's 0.125. Fallback if still collapsed: force-match centroid queries.
+- [ ] **Fix Phase-3 hybrid (arm D) NaN** — FIX IMPLEMENTED 2026-07-03: matcher cost now
+      `nan_to_num`-guarded (warns instead of crashing, `train/loss.py`; test in
+      `test_phase5.py`) + `--learned_query_lr_scale` (own AdamW param group for the learned
+      embeddings). N=50 rerun submitted: **job 5647528** (`_hybrid_fix`, lr_scale 0.1,
+      grad_clip 0.5). Success = survives 1000 epochs and ≥ arm C N=50 (val mIoU 0.259 /
+      AP50 0.146); on a win, scale to N=190 via train_full.sh (with --time bump: 96 queries).
+- [X] **Train the MaskDINO pixel decoder** (`--mask_upsample 2`) — DONE 2026-06-30 (SLURM job
+      5275027, run `d4rt_full_inst_learned_us2_20260630_161537`; arm-C base: learned, 64 queries,
+      instance-level, N=190). **Result: a wash.** Best honest val[grid] AP50 **0.236** (@ep500,
+      marginally above the us=1 baseline's 0.228), best val mIoU **0.355** (@ep250, below the
+      baseline's 0.371); final @ep1000: 0.200 / 0.311; gap at best 0.098 (vs 0.086). Doubling the
+      mask resolution to 74×74 does not move the numbers → **resolution is NOT the current
+      bottleneck**; `--mask_upsample 4` is deprioritized (per the decision rule: only on a win).
+      The window/door/picture confusion is therefore likely semantic, not resolution-limited —
+      points at the score-threshold / no-object levers and arm-D instead.
 
 ## Open — data-gated ablations (Phase 6; meaningful now with 200 scenes)
 
 - [ ] No-object-weight sweep (0.05 / 0.1 / 0.4) — tests whether 0.1 drives the under-confidence.
 - [ ] Augmentation ablation: `bundles_per_scene` 1 vs 4, `query_jitter` on/off, `color_jitter` on/off.
 - [ ] Grid-density vs unprompted recall: `--grid_size` 4/6/8.
-- [ ] Score-threshold sweep at viz time (no retrain): re-render at `--score_threshold 0.3`.
+- [X] Score-threshold sweep at viz time (DONE 2026-07-03 — **negative, keep 0.5**). On the
+      arm-C best checkpoint (`d4rt_full_inst_learned_20260622_183203`), thr 0.3 surfaces 76
+      extra instances over the 10 val scenes of which only 2 have IoU≥0.5 with any GT (1 with
+      the right class) — the under-confidence finding was a *point-prompt* phenomenon and does
+      not transfer to learned queries. The model already over-predicts at 0.5 (338 kept vs 144
+      GT) → the lever is duplicate suppression / no-object weight, not the threshold.
+      Renders: `<run>/visualizations_thr03/` (val scenes, vs `visualizations/` at 0.5).
 - [ ] Longer-term: partial backbone unfreezing once the train−val gap vs N says data supports it.
 
 ## Done (high level — detail in docs/MILESTONES.md)
@@ -50,7 +62,11 @@ detail. This list tracks only what is still open.
       (monotonic, wide val) N∈{10,25,50}.
 - [X] M3 Phases 2/3 CODE + first runs: `--train_grid_queries`, `--query_mode {point,learned,hybrid}`.
       Arms A/B/C/D run at N=50 (C learned = best; B/D need fixes above).
-- [X] M3 Phase 5 CODE: `models/mask_upsampler.py` + `--mask_upsample` (not yet trained).
+- [X] M3 Phase 5: `models/mask_upsampler.py` + `--mask_upsample`; us=2 trained at N=190 →
+      neutral vs us=1 baseline (see MILESTONES) — resolution is not the bottleneck.
+- [X] Standardized 2D/3D visualization (2026-07-02): `train/postprocess.py::select_instances`
+      is the single instance-selection rule shared by `visualize_masks.py` and the Gradio 3D
+      viewer (honest, no-GT, winner-takes-all; + oracle GT-matched panel as diagnostic).
 - [X] Per-instance SAM3 dataset: 200 scenes (scene0000–0199) in one `scannet_instance_dataset_full.tar.zst`;
       `stage_dataset.sh` stages it to node-local SSD (`--tmp=16000`).
 </content>

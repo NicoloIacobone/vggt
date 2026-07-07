@@ -99,6 +99,57 @@ def test_no_object_loss_gradients():
     print("✓ no-object loss: finite scalar, gradients reach ALL queries")
 
 
+def test_no_object_norm_matched_invariant_to_query_count():
+    """Arm-B fix: with no_object_norm='matched' the class loss is invariant to how many
+    background queries are appended (each term normalized by its own count); the default
+    'weighted' norm dilutes the matched-query term as the query count grows (the
+    --train_grid_queries collapse mechanism)."""
+    gc, gco, gm = _toy_gt()
+    C = 20
+
+    def build(n_extra, seed=3):
+        g = torch.Generator().manual_seed(seed)
+        N = 2 + n_extra
+        logits = torch.full((N, C), -4.0)
+        # The two matchable queries predict the WRONG class (all class loss lives here)
+        # but have perfect masks + exact GT coordinates, so Hungarian still matches them.
+        logits[0, 5] = 4.0
+        logits[1, 9] = 4.0
+        # Appended queries predict background near-perfectly (identical rows → their
+        # per-query loss, and thus unmatched.mean(), is the same at every n_extra).
+        logits[2:, 0] = 4.0
+        masks = torch.full((N, 2, 4, 4), -8.0)
+        masks[0] = gm[0] * 16.0 - 8.0
+        masks[1] = gm[1] * 16.0 - 8.0
+        me = torch.randn(N, 256, generator=g)
+        co = torch.cat([gco, torch.rand(N - 2, 2, generator=g)], dim=0)
+        return logits, me, co, masks
+
+    def class_loss(norm, n_extra):
+        loss_fn = D4RTLoss(coord_loss_weight=0.0, mask_embed_loss_weight=0.0,
+                           no_object_weight=0.1, no_object_norm=norm)
+        cl, me, co, pm = build(n_extra)
+        _, comps = loss_fn(cl, me, co, gc, gt_coordinates=gco, gt_masks=gm, pred_masks=pm)
+        return comps["class_loss"].item()
+
+    m_small, m_large = class_loss("matched", 4), class_loss("matched", 40)
+    w_small, w_large = class_loss("weighted", 4), class_loss("weighted", 40)
+    assert abs(m_small - m_large) / m_small < 0.01, (
+        f"'matched' must be invariant to appended bg queries: {m_small:.4f} vs {m_large:.4f}")
+    assert w_large < 0.6 * w_small, (
+        f"'weighted' should dilute with query count (the arm-B mechanism): "
+        f"{w_small:.4f} -> {w_large:.4f}")
+
+    # Invalid values are rejected at construction.
+    try:
+        D4RTLoss(no_object_norm="bogus")
+        assert False, "should have raised"
+    except ValueError:
+        pass
+    print(f"✓ no_object_norm='matched' invariant to bg-query count "
+          f"({m_small:.4f}≈{m_large:.4f}); 'weighted' dilutes ({w_small:.4f}→{w_large:.4f})")
+
+
 def test_grid_queries():
     coords, view_ids = generate_grid_queries(num_frames=3, grid_size=5, device="cpu")
     assert coords.shape == (1, 3 * 25, 2) and view_ids.shape == (1, 3 * 25)
@@ -276,6 +327,7 @@ if __name__ == "__main__":
     test_no_object_loss_disabled_matches_old_behavior()
     test_no_object_loss_supervises_unmatched_queries()
     test_no_object_loss_gradients()
+    test_no_object_norm_matched_invariant_to_query_count()
     test_grid_queries()
     test_make_train_queries_augmentation()
     test_train_grid_queries()
