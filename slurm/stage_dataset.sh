@@ -1,7 +1,12 @@
 # slurm/stage_dataset.sh — stage the ScanNet instance dataset onto node-local scratch.
 #
 # The dataset ships as a single zstd-compressed tar covering all 200 scenes
-# (scene0000–0199), `scannet_instance_dataset_full.tar.zst` (~2.6 GB; unpacked ~5.4 GB).
+# (scene0000–0199). Which tar is staged is controlled by the DATA_TAR env var:
+#   - default here: the SAM3-GT tar `scannet_instance_dataset_full.tar.zst`
+#     (~2.6 GB; unpacked ~5.4 GB) — backward compatible.
+#   - the train SLURM scripts override it to the official-ScanNet-GT tar
+#     `scannet_official_gt_full.tar.zst` (the current default supervision; see
+#     docs/OFFICIAL_GT_MIGRATION_PLAN.md). Both unpack to `scans/<scene>/raw_data/...`.
 # One big file lives well on the work filesystem; reading the thousands of small PNGs
 # directly off `work` is slow and pressures the inode quota. Each job copies that one
 # archive to the compute node's local SSD ($TMPDIR) and unpacks it there once, then reads

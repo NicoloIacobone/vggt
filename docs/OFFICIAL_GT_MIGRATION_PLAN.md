@@ -118,6 +118,34 @@ Then verify, and **record the answers in this file under Phase-0 results**:
    frames 0–495 step 5 are needed, so extract selectively and delete zips as
    you go).
 
+#### Phase-0 results (executed 2026-07-07, scene0000_00) — ALL GATES PASS
+
+1. **Zip member naming:** `instance-filt/<idx>.png` / `label-filt/<idx>.png`,
+   unpadded indices, one PNG per color frame (5578 for scene0000_00 + a dir
+   entry). All 100 subset frames (0–495 step 5) present. Downloaded with
+   direct `curl` (the URL scheme from §2 works verbatim; server 301-redirects
+   http→https, harmless — `curl -L` / urllib follow it).
+2. **Resolution:** 1296×968 (native color camera, same as the SAM3 masks).
+   `instance-filt` is 8-bit PNG (mode L, uint8 instance ids); `label-filt` is
+   16-bit PNG (mode I;16, uint16 raw ScanNet label ids). No depth-registered
+   640×480 anywhere, so no aspect-mismatch concern.
+3. **Value semantics confirmed:** instance px = per-scene instance id (0 =
+   unannotated), label px = raw ScanNet id mapped via tsv `id → nyu40id`.
+   Per-instance label purity = 1.000 for all 8 instances in frame 0; classes
+   (wall×2, curtain×2, desk, floor, table, cabinet) match the RGB. Cross-frame:
+   21 instances appear over the 100 subset frames, **0 class inconsistencies**;
+   ids are stable across frames as expected. 12/21 instances are in the
+   trainable taxonomy (rest: pillow, ceiling, night stand, otherprop,
+   otherfurniture → background per the locked decision — also *forced*:
+   the class head has `num_classes=20` = background + classes 1..19, so
+   SCANNET_CLASSES index 20 (otherfurniture) is unrepresentable anyway).
+4. **Alignment:** overlay saved at
+   `scannet_official_build/pilot/alignment_check_frame0.jpg` — instance
+   boundaries sit on the objects. Same 1296×968 grid as the RGB, pixel-aligned.
+5. **Zip sizes:** instance-filt 61.4 MB + label-filt 66.4 MB ≈ 128 MB/scene →
+   ~26 GB transient download over 200 scenes; extract only the ~100 subset
+   frames per zip (~2% of members), delete zips per scene batch.
+
 ### Phase 1 — converter script + test
 
 New script `scripts/build_official_masks.py` (follows repo conventions: one
@@ -216,6 +244,38 @@ mapping, union consistency, background handling. CPU, no downloads.
   supervision; SAM3 tar kept as baseline), and the audit finding.
 - Update `docs/MILESTONES.md` + `docs/todo.md`: audit numbers, migration, new
   baseline comparison. Move this plan to `docs/old/` once executed.
+
+## Execution log (2026-07-07)
+
+- **Phase 0 done** — all gates pass, results recorded above. Pilot artifacts in
+  `scannet_official_build/pilot/` (incl. `alignment_check_frame0.jpg`).
+- **Phase 1 done** — `scripts/build_official_masks.py` +
+  `tests/test_build_official_masks.py` (7 checks incl. a real-loader
+  round-trip; all pass). Real-scene validation on scene0000_00: 11 trainable
+  instances, label purity 1.0, 0 cross-class duplicates, wall has 3 instances
+  (no stuff-merge fallback needed); loader reads the built tree correctly with
+  `instance_level=True`. Note: cross-class duplicates are structurally 0
+  (instance-filt is a single-valued id map → masks are pixel-disjoint); the QA
+  stat documents rather than tests it.
+- **Phase 2 in progress** — `scripts/download_2d_gt.py` (downloads + converts +
+  deletes zips per scene, doubly resumable), SLURM job
+  `slurm/download_official_gt.sh` submitted as **job 6135931** (~1.5–2 min/scene).
+  QA/report: `scripts/gen_official_gt_report.py` (hard gates: 0 duplicates,
+  200 scenes, plausible instance count; writes `OFFICIAL_GT_README.md`),
+  `scripts/qa_official_gt_strips.py` (visual identity-consistency strips).
+  Packing: `slurm/pack_official_gt.sh`. Subset dirs pre-extracted (only
+  `scans/*/raw_data/subset/*`, 19 797 jpgs — inode-friendly) to
+  `scannet_official_build/sam3_subsets/`.
+- **Phase 3 (naming)** — `stage_dataset.sh` already had the env var, named
+  `DATA_TAR` (not `DATASET_TAR`); kept the existing name. All five train SLURM
+  scripts now default `DATA_TAR` to `scannet_official_gt_full.tar.zst`
+  (override back to the SAM3 tar via `sbatch --export=ALL,DATA_TAR=…`).
+- **Phase 4 (tooling)** — new `scripts/eval_checkpoint.py` (+
+  `tests/test_eval_checkpoint.py`): cross-GT eval of a checkpoint against GT
+  rebuilt fresh from any `--scans_root`, works for learned-query heads
+  (eval_grid_ablation.py can't — it rejects them and reuses stored GT). Old
+  arm-C run confirmed on disk: `d4rt_full_inst_learned_20260622_183203`
+  (val = scenes 0080–0089 per train_full.sh, not 0080–0082 as §4 said).
 
 ## 5. Risks / fallbacks
 

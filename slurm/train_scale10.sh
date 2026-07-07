@@ -23,6 +23,9 @@ source myenv/bin/activate
 PYTHON=myenv/bin/python
 
 # Stage the dataset onto node-local scratch and export SCANNET_ROOT (see slurm/stage_dataset.sh).
+# GT tar: official ScanNet GT by default (docs/OFFICIAL_GT_MIGRATION_PLAN.md). For the
+# SAM3-GT baseline: sbatch --export=ALL,DATA_TAR=/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scannet_instance_dataset_full.tar.zst ...
+export DATA_TAR="${DATA_TAR:-/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scannet_official_gt_full.tar.zst}"
 source slurm/stage_dataset.sh
 
 # Wider held-out val set (scene0080–0089) — less noisy than the original 3 scenes.
