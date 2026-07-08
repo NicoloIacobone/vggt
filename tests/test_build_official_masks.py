@@ -54,6 +54,8 @@ def build_synthetic(root):
     inst 9 = otherfurniture (frame 0)             -> dropped
     inst 4 = ceiling (frame 10)                   -> dropped
     inst 6 = wall (all frames)                    -> wall_0
+    inst 11 = raw label 999, NOT in tsv (frame 0) -> dropped (-1), no crash
+      (regression: scene0091_00 KeyError(30) — voteless instances must be dropped)
     """
     inst_dir = root / "inst" / "instance-filt"
     lab_dir = root / "lab" / "label-filt"
@@ -61,8 +63,10 @@ def build_synthetic(root):
     lab_dir.mkdir(parents=True)
 
     frames = {
-        0: ([(3, 0, 10, 0, 10), (2, 20, 30, 20, 30), (9, 40, 48, 0, 10), (6, 0, 48, 50, 64)],
-            [(101, 0, 10, 0, 10), (102, 20, 30, 20, 30), (103, 40, 48, 0, 10), (104, 0, 48, 50, 64)]),
+        0: ([(3, 0, 10, 0, 10), (2, 20, 30, 20, 30), (9, 40, 48, 0, 10), (6, 0, 48, 50, 64),
+             (11, 40, 48, 20, 30)],
+            [(101, 0, 10, 0, 10), (102, 20, 30, 20, 30), (103, 40, 48, 0, 10), (104, 0, 48, 50, 64),
+             (999, 40, 48, 20, 30)]),
         5: ([(3, 0, 10, 0, 10), (7, 30, 40, 30, 40), (6, 0, 48, 50, 64)],
             [(101, 0, 10, 0, 10), (101, 30, 40, 30, 40), (104, 0, 48, 50, 64)]),
         10: ([(2, 20, 30, 20, 30), (4, 0, 5, 20, 40), (6, 0, 48, 50, 64)],
@@ -114,8 +118,8 @@ def main():
     assert m.dtype == np.uint8 and set(np.unique(m)) == {0, 255}
     assert m[:10, :10].min() == 255 and m[10:, :].max() == 0
     assert not any("otherfurniture" in d or "ceiling" in d for d in seg_dirs)
-    assert set(stats["dropped_out_of_taxonomy"].values()) == {39, 22}
-    print("[4/7] mask content + background handling OK")
+    assert set(stats["dropped_out_of_taxonomy"].values()) == {39, 22, -1}
+    print("[4/7] mask content + background handling (incl. unmappable label) OK")
 
     # Union consistency: masks/chair = chair_0 | chair_1 per frame.
     u5 = np.array(Image.open(raw / "masks" / "chair" / "00005.png")) > 127

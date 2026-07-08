@@ -5,6 +5,26 @@ detail. This list tracks only what is still open.
 
 ## Open — next experiments (GPU)
 
+- [X] **Migrate GT: SAM3 → official ScanNet 2D instance annotations** (DONE 2026-07-08,
+      Phases 0–3 + tooling; `docs/OFFICIAL_GT_MIGRATION_PLAN.md`). Motivation: 2026-07-07 audit —
+      ~3.4 cross-class duplicate instances/scene, 15.9% multi-class foreground px in the SAM3 GT.
+      Built `scannet_official_gt_full.tar.zst` (200 scenes, 2950 instances, **0 cross-class
+      duplicates**, QA gates + visual strips pass), same layout → zero loader changes; train
+      SLURM scripts now stage it by default (`DATA_TAR` env var to switch back). Overfit smoke
+      test on converted GT passes. New: `scripts/build_official_masks.py`,
+      `scripts/download_2d_gt.py`, `scripts/gen_official_gt_report.py`,
+      `scripts/qa_official_gt_strips.py`, `scripts/eval_checkpoint.py` (+ tests).
+- [ ] **Official-GT training validation (migration Phase 4 — jobs in flight 2026-07-08).**
+      (a) Arm-C rerun on official GT (job 6234787, `d4rt_full_inst_learned_officialgt_*`):
+      compare vs SAM3-GT arm C (val mIoU 0.371, honest AP50 0.228) — expect honest AP50 to move
+      most (duplicate GT hurt exactly there). (b) DONE 2026-07-08 — cross-eval of the old
+      SAM3-trained checkpoints against official-GT val (job 6234828,
+      `scripts/eval_checkpoint.py`): best_ap50 honest AP50 0.228 → **0.117**, best mIoU
+      0.371 → **0.285** (official val: 13.3 GT inst/scene). ~Half the honest-AP50 headline was
+      SAM3-GT-specific (label-noise fitting + distribution shift) — quote official-GT numbers
+      from now on. Record (a) in MILESTONES + here when the run lands, then move the migration
+      plan to `docs/old/`.
+
 - [X] **N=100+ scaling point** (DONE 2026-06-22). Arm-A instance-GT curve now runs N ∈ {10, 25,
       50, 100, 200}, wide val (scene0080–0089). **Result: plateau** — val mIoU flattens at
       ~0.21–0.23 past N=50, honest val[grid] AP50 sits ~0.10 (below its N=50 peak of 0.125). More

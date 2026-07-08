@@ -187,9 +187,11 @@ def convert_scene(
 
     # Class per instance (global majority vote); drop out-of-taxonomy instances.
     inst_class: dict[int, str] = {}
-    dropped: dict[int, int] = {}  # inst id -> winning nyu40 id (out of taxonomy)
+    dropped: dict[int, int] = {}  # inst id -> winning nyu40 id (out of taxonomy; -1 = no
+    #                               mappable label pixels at all, e.g. label-filt 0/unknown)
     label_purity: dict[int, float] = {}
-    for inst, votes in inst_votes.items():
+    for inst in list(inst_frame_masks):
+        votes = inst_votes.get(inst)
         if not votes:
             dropped[inst] = -1
             continue

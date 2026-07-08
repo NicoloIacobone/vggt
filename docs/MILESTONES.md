@@ -244,21 +244,40 @@ Full detail (incl. the SCALING_RUNS_ANALYSIS protocol fixes that made the curve 
 - mIoU-best and AP50-best checkpoints land at different epochs → selection metric matters
   (hence `checkpoint_best_ap50.pth`).
 
-## Dataset status (updated 2026-06-17)
-- **200 scenes: scene0000–scene0199, ≈4195 instances.** All packed in a single
-  `…/scannet/scannet_instance_dataset_full.tar.zst` (~2.6 GB; unpacked ~5.4 GB), containing
-  `scans/<scene>/raw_data/...`. Per-scene/per-class counts: `INSTANCE_MASKS_README.md`
-  (scene0000–0096, 2056 inst.) + `INSTANCE_MASKS_README_split2.md` (scene0097–0199, 2139 inst.).
-  (The two older split tars `scannet_instance_dataset.tar.zst` + `…_split2.tar.zst` are
-  superseded by the full tar and can be deleted.)
-- Per-instance masks: `masks_instance/<class>_<k>/<frame>.png` (uint8 {0,255}, 1296×968, cross-
-  frame identity from SAM3 video tracking; `wall`/`floor` forced single instance; union of a
-  class's instances ≈ old per-class mask, union-IoU ≈ 1.0). Per-class `masks/` retained.
-- **Data access:** `slurm/stage_dataset.sh` copies the full tar to node-local `$TMPDIR`, unpacks
-  once, exports `SCANNET_ROOT=$TMPDIR/scans` (read off local SSD, never the small PNGs off
-  `work`); `train_multiscene.py` honors it as default `--scans_root`. SLURM headers request
-  `--tmp=16000` MB. Canonical uncompressed source tree:
-  `/cluster/scratch/niacobone/scannet_build/scans`.
+## Dataset status (updated 2026-07-08 — official ScanNet GT is now the default supervision)
+
+**GT migration (2026-07-08, `docs/OFFICIAL_GT_MIGRATION_PLAN.md`).** A 2026-07-07 audit of the
+SAM3 GT (20 scenes) found systematic **cross-class duplicates**: SAM3 prompts each class
+independently, so the same physical object is often an instance under two classes — 68 pairs
+with cross-frame IoU ≥ 0.5 between different classes (~3.4/scene, mostly pixel-identical;
+desk↔table, curtain↔shower_curtain, chair↔sofa, …), **15.9% of foreground pixels multi-class**.
+Training effect: the matcher demands two predictions for one object (built-in honest-AP50 false
+positives) and the class head gets contradictory supervision. → Supervision switched to the
+**official ScanNet v2 2D instance GT** (`_2d-instance-filt`/`_2d-label-filt`: projections of the
+single human-verified 3D annotation; one class per object, cross-view-consistent ids by
+construction). Converted into the exact SAM3 on-disk layout by `scripts/build_official_masks.py`
+(zero loader/tooling changes), QA'd (**200 scenes, 2950 instances, 0 cross-class duplicates,
+label purity 1.0**; count < SAM3's ≈4195 because SAM3 double-counted duplicated objects), packed
+as `…/scannet/scannet_official_gt_full.tar.zst` (2.3 GB). Spec: `…/scannet/OFFICIAL_GT_README.md`.
+Differences vs SAM3 GT: masks written sparsely (missing PNG = not visible); stuff classes keep
+official per-segment ids (`wall_0..k`, not forced `_0`); out-of-taxonomy objects (incl.
+`otherfurniture`) → background. Smoke-tested end-to-end (overfit: loss falls, mIoU rises).
+
+- **Both tars** contain 200 scenes (scene0000–0199), layout
+  `scans/<scene>/raw_data/{subset,masks,masks_instance}`:
+  - `scannet_official_gt_full.tar.zst` (2.3 GB, **default**) — official GT, 2950 instances.
+  - `scannet_instance_dataset_full.tar.zst` (~2.6 GB) — SAM3 GT, ≈4195 instances (with the
+    duplicate defect above); kept as the GT-quality baseline and as a project deliverable.
+    Per-scene counts: `INSTANCE_MASKS_README.md` + `…_split2.md`.
+- Mask conventions (both): `masks_instance/<class>_<k>/<frame>.png`, uint8 {0,255}, 1296×968,
+  `<k>` per class by first appearance; union of a class's instances = its `masks/<class>/` mask.
+- **Data access:** `slurm/stage_dataset.sh` copies ONE tar (selected by `DATA_TAR`; train SLURM
+  scripts default it to the official tar, `sbatch --export=ALL,DATA_TAR=<sam3 tar>` restores the
+  baseline) to node-local `$TMPDIR`, unpacks once, exports `SCANNET_ROOT=$TMPDIR/scans`;
+  `train_multiscene.py` honors it as default `--scans_root`. SLURM headers request
+  `--tmp=16000` MB. No unpacked `scans/` tree exists on work; the official-GT build tree is
+  currently also unpacked at `/cluster/scratch/niacobone/scannet_official_build/scans` (scratch,
+  purgeable — the tar on work is canonical). Old `scannet_build*` scratch trees are hollow.
 
 ## Storage layout
 - Repo: `/cluster/scratch/niacobone/vggt`. Runs/checkpoints:

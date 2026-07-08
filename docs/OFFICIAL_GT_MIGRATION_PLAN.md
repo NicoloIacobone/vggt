@@ -257,19 +257,59 @@ mapping, union consistency, background handling. CPU, no downloads.
   `instance_level=True`. Note: cross-class duplicates are structurally 0
   (instance-filt is a single-valued id map → masks are pixel-disjoint); the QA
   stat documents rather than tests it.
-- **Phase 2 in progress** — `scripts/download_2d_gt.py` (downloads + converts +
-  deletes zips per scene, doubly resumable), SLURM job
-  `slurm/download_official_gt.sh` submitted as **job 6135931** (~1.5–2 min/scene).
-  QA/report: `scripts/gen_official_gt_report.py` (hard gates: 0 duplicates,
-  200 scenes, plausible instance count; writes `OFFICIAL_GT_README.md`),
-  `scripts/qa_official_gt_strips.py` (visual identity-consistency strips).
-  Packing: `slurm/pack_official_gt.sh`. Subset dirs pre-extracted (only
-  `scans/*/raw_data/subset/*`, 19 797 jpgs — inode-friendly) to
+- **Phase 2 download/build done (2026-07-08)** — `scripts/download_2d_gt.py`
+  (downloads + converts + deletes zips per scene, doubly resumable), SLURM job
+  `slurm/download_official_gt.sh` (job 6135931) converted 199/200 scenes;
+  scene0091_00 exposed a converter bug (KeyError for an instance whose label
+  pixels don't map through the tsv — now dropped with sentinel −1, regression
+  test added) and was healed by a resume run. **QA gates: PASS** —
+  `scripts/gen_official_gt_report.py`: 200 scenes, **2 950 instances, 0
+  cross-class duplicates, max cross-class IoU 0.0** (SAM3: ~4 195 instances
+  with ~3.4 duplicates/scene — same order, gate 2 OK; official GT has fewer
+  because SAM3 double-counted duplicates and over-split tracks). Visual strips
+  (`scripts/qa_official_gt_strips.py`, 5 scenes + extras in
+  `scannet_official_build/qa_strips/`) eyeballed: colors stay on their objects
+  across frames, same-class objects separated, out-of-taxonomy objects
+  background. Class totals: wall 889, chair 709, door 238, floor 204, table
+  195, cabinet 181, window 128 … shower_curtain 10. Packing job
+  `slurm/pack_official_gt.sh` (re-runs the gates, tars, verifies counts,
+  atomic-moves to work) submitted as job 6227088. Subset dirs pre-extracted
+  (only `scans/*/raw_data/subset/*`, 19 797 jpgs — inode-friendly) to
   `scannet_official_build/sam3_subsets/`.
 - **Phase 3 (naming)** — `stage_dataset.sh` already had the env var, named
   `DATA_TAR` (not `DATASET_TAR`); kept the existing name. All five train SLURM
   scripts now default `DATA_TAR` to `scannet_official_gt_full.tar.zst`
   (override back to the SAM3 tar via `sbatch --export=ALL,DATA_TAR=…`).
+- **Phase 2 COMPLETE (2026-07-08)** — pack job 6227088: QA gates re-passed,
+  `OFFICIAL_GT_README.md` written to work, tar built and count-verified
+  (221 621 files archive == source), atomic-moved to
+  `…/scannet/scannet_official_gt_full.tar.zst` (**2.3 GB**).
+- **Phase 3 COMPLETE (2026-07-08)** — `DATA_TAR` wiring in all five train SLURM
+  scripts (official tar is the default; stage_dataset.sh keeps the SAM3 default
+  for backward compat). Smoke test (job 6227137, `train_overfit.py` 10 epochs on
+  converted scene0000_00, `--instance_level`): loss 2.85→2.29, prompted mIoU
+  0.005→0.103, class_acc 0.10→0.30 — the built tree trains end-to-end.
+  `tests/test_phase2.py` still passes untouched.
+- **Phase 4 IN FLIGHT (2026-07-08)** — arm-C rerun on official GT submitted as
+  job 6234787 (`sbatch --export=ALL,INSTANCE_LEVEL=1,EXP_TAG=_learned_officialgt,
+  EXTRA_ARGS="--query_mode learned --num_learned_queries 64" slurm/train_full.sh`
+  → run `d4rt_full_inst_learned_officialgt_<ts>`); cross-eval of the old
+  SAM3-trained arm-C checkpoints (best + best_ap50) against official-GT val
+  scenes 0080–0089 submitted as job 6234828 (results →
+  `<run_dir>/cross_eval_*_official_gt.json`).
+  **Cross-eval done (2026-07-08):** the old SAM3-trained arm C scores on
+  official-GT val: `checkpoint_best_ap50` honest AP50 **0.117** (was 0.228 on
+  SAM3 val — −49%), `checkpoint_best` mIoU **0.285** (was 0.371 — −23%);
+  official val has 13.3 GT instances/scene. Reading: roughly half the old
+  honest-AP50 headline evaporates under clean GT — consistent with the model
+  having fit SAM3's duplicate/label idiosyncrasies, though part of the drop is
+  plain distribution shift (sparser masks, wall splits, different instance
+  inventory). The honest number to quote going forward is the official-GT one.
+- **Phase 5 (docs)** — CLAUDE.md (GT provenance, storage/tars/`DATA_TAR`, new
+  tests + rebuild/cross-eval commands, stale-path fixes), `docs/MILESTONES.md`
+  (audit + migration in Dataset status), `docs/todo.md` (migration entry +
+  open Phase-4 comparison item) all updated 2026-07-08. Plan moves to
+  `docs/old/` once the Phase-4 numbers are recorded.
 - **Phase 4 (tooling)** — new `scripts/eval_checkpoint.py` (+
   `tests/test_eval_checkpoint.py`): cross-GT eval of a checkpoint against GT
   rebuilt fresh from any `--scans_root`, works for learned-query heads
