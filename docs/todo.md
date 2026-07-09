@@ -5,8 +5,24 @@ detail. This list tracks only what is still open.
 
 ## Open — next experiments (GPU)
 
+- [X] **Dataset extension to 500 scenes (DONE 2026-07-09; pack job 6423316 shipping the tar).**
+      Scenes 0200–0499 had no SAM3-era subset frames, so new tooling streams each scene's
+      `.sens` and extracts only the stride-5 subset jpgs with early abort (~10% of each file
+      transferred, no .sens on disk): `scripts/extract_sens_subset.py`
+      (+ `tests/test_extract_sens_subset.py`), then the usual `download_2d_gt.py` zips+convert
+      (`slurm/extend_dataset_500.sh`, jobs 6291743/6291746). 291/300 converted first pass;
+      the 9 failures (scene0240/0243/0269/0292/0354/0366/0438/0456/0483) all had a **640×480
+      color camera** — their GT projections are 640×480 too (RGB↔GT consistent, loader resizes
+      to 518 anyway), so the extractor now allows that resolution and the scenes were healed.
+      **QA gates @500: PASS — 500 scenes, 7379 instances, 0 cross-class duplicates**; low-res
+      strip (scene0240_00) eyeballed clean. New tar `scannet_official_gt_500.tar.zst` (the
+      200-scene `scannet_official_gt_full.tar.zst` is kept for reproducibility of the current
+      baseline). Train SLURM scripts now default `DATA_TAR` to the 500-scene tar and request
+      `--tmp=24000` (bigger unpacked tree). NOTE: scene lists in the train scripts still
+      enumerate 0000–0199; extending train sets to the new scenes is a separate decision.
+
 - [X] **Migrate GT: SAM3 → official ScanNet 2D instance annotations** (DONE 2026-07-08,
-      Phases 0–3 + tooling; `docs/OFFICIAL_GT_MIGRATION_PLAN.md`). Motivation: 2026-07-07 audit —
+      Phases 0–3 + tooling; `docs/old/OFFICIAL_GT_MIGRATION_PLAN.md`). Motivation: 2026-07-07 audit —
       ~3.4 cross-class duplicate instances/scene, 15.9% multi-class foreground px in the SAM3 GT.
       Built `scannet_official_gt_full.tar.zst` (200 scenes, 2950 instances, **0 cross-class
       duplicates**, QA gates + visual strips pass), same layout → zero loader changes; train
@@ -14,16 +30,17 @@ detail. This list tracks only what is still open.
       test on converted GT passes. New: `scripts/build_official_masks.py`,
       `scripts/download_2d_gt.py`, `scripts/gen_official_gt_report.py`,
       `scripts/qa_official_gt_strips.py`, `scripts/eval_checkpoint.py` (+ tests).
-- [ ] **Official-GT training validation (migration Phase 4 — jobs in flight 2026-07-08).**
-      (a) Arm-C rerun on official GT (job 6234787, `d4rt_full_inst_learned_officialgt_*`):
-      compare vs SAM3-GT arm C (val mIoU 0.371, honest AP50 0.228) — expect honest AP50 to move
-      most (duplicate GT hurt exactly there). (b) DONE 2026-07-08 — cross-eval of the old
-      SAM3-trained checkpoints against official-GT val (job 6234828,
+- [X] **Official-GT training validation (migration Phase 4 — DONE 2026-07-08).**
+      (a) Arm-C rerun on official GT (job 6234787,
+      `d4rt_full_inst_learned_officialgt_20260708_124452`): best val mIoU **0.367** @ep500,
+      honest val[grid] AP50 **0.199** @ep450 → **the new quotable baseline**. Run hit the 4 h
+      walltime at ep850/1000 but both metrics had peaked ~ep450–500 and best checkpoints were
+      saved — bests valid; official-GT epochs are ~20% slower, budget >4 h next time.
+      (b) Cross-eval of the old SAM3-trained checkpoints against official-GT val (job 6234828,
       `scripts/eval_checkpoint.py`): best_ap50 honest AP50 0.228 → **0.117**, best mIoU
       0.371 → **0.285** (official val: 13.3 GT inst/scene). ~Half the honest-AP50 headline was
-      SAM3-GT-specific (label-noise fitting + distribution shift) — quote official-GT numbers
-      from now on. Record (a) in MILESTONES + here when the run lands, then move the migration
-      plan to `docs/old/`.
+      SAM3-GT-specific; retraining on clean GT recovers +70% AP50 on the same ruler. Full
+      table in MILESTONES §Dataset status. Migration complete — plan archived to `docs/old/`.
 
 - [X] **N=100+ scaling point** (DONE 2026-06-22). Arm-A instance-GT curve now runs N ∈ {10, 25,
       50, 100, 200}, wide val (scene0080–0089). **Result: plateau** — val mIoU flattens at
@@ -57,6 +74,41 @@ detail. This list tracks only what is still open.
       bottleneck**; `--mask_upsample 4` is deprioritized (per the decision rule: only on a win).
       The window/door/picture confusion is therefore likely semantic, not resolution-limited —
       points at the score-threshold / no-object levers and arm-D instead.
+
+## Open — positioning & new research directions (from the 2026-07-08 literature survey)
+
+Context: an arXiv harvest (see `docs/RELATED_WORK.md`) shows "decoder on frozen VGGT" is now
+a crowded genre — **SegVGGT** (verified: object queries on VGGT, ScanNetv2/ScanNet200) is the
+closest published competitor. The architecture alone is no longer the contribution; the
+query-strategy study (arms A–D) is. Direction: don't pivot, reposition.
+
+- [ ] **Read the direct competitors** (`docs/RELATED_WORK.md` table): SegVGGT line-by-line
+      first (esp. its eval protocol — 3D point-cloud masks vs our per-view 2D patch-grid masks
+      are NOT comparable numbers; note the difference explicitly), then EPS3D, FAST3DIS,
+      PanSt3R. Check whether any already claims (a) a query-init ablation or (b) 3D-anchored
+      queries — both would change the plan below. Record findings in RELATED_WORK.md.
+- [ ] **Arm E — 3D-anchored queries (the main new experiment).** Seed queries from VGGT's own
+      predicted pointmap geometry instead of image-space (u,v): `QueryGenerator` is currently
+      purely 2D (Fourier(u,v) + view embed + RGB patch). Design sketch: sample/cluster anchor
+      points in the predicted 3D point cloud (point head runs anyway during feature caching),
+      encode each anchor's 3D position (Fourier in xyz) + pooled multi-view features → one
+      query per 3D location shared across views. Rationale: (i) fills the one query-strategy
+      cell no competitor has published; (ii) a 3D anchor is a natural one-query-per-object
+      dedup mechanism → directly attacks the over-prediction failure (338 kept vs 144 GT).
+      Follow the arm protocol: N=50 first, scale to N=190 only on a win vs arm C
+      (official-GT numbers). Pair with the no-object-weight sweep (same target: duplicate FPs).
+- [ ] **Cross-view consistency metric** in `train/eval_metrics.py` (+ test). Our decoder is
+      intrinsically consistent by construction (`pred_masks [B,N,S,h,w]`, one query = one
+      instance in all views) vs the fuse-2D-masks paradigm (PanSt3R/MV3DIS) — quantify it
+      (e.g. per matched instance, cross-view mask-identity agreement / ID-switch rate) so the
+      claim is a number, not an assertion. CPU-runnable; no retraining needed (eval-only on
+      existing checkpoints).
+- [ ] **Which-layer ablation (mining backbone internals; cheap).** We hook only
+      `aggregated_tokens_list[-1]`; sweep the hook layer (e.g. every 4th of the 24 blocks) on
+      the arm-C recipe at N=50. Nearly free given feature caching; VGGT-Det ("mining VGGT
+      internal priors") shows the appetite. Good thesis-analysis chapter even if [-1] wins.
+- Deprioritized: backbone-agnostic decoder (VGGT/CUT3R/Pi3) — real gap but out of thesis
+  scope; Lite3R already owns the framing.
 
 ## Open — data-gated ablations (Phase 6; meaningful now with 200 scenes)
 

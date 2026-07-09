@@ -1,10 +1,12 @@
 # Plan: replace SAM3 GT with official ScanNet instance GT
 
-**Status: PLAN — not yet executed.** Written 2026-07-07. This document is
-self-contained: it records the findings that motivate the switch, the verified
-state of every relevant path on disk, and a phased execution plan with
-verification gates. It is meant to be executed by a fresh Claude agent
-(`read this file first, then start at Phase 0`).
+**Status: EXECUTED 2026-07-07/08 — all phases complete.** Written 2026-07-07.
+This document records the findings that motivated the switch, the phased plan,
+and (see "Execution log" + the per-phase results sections) everything that was
+actually done, found, and measured. The official ScanNet GT tar is now the
+default supervision; headline outcome: on official-GT val, the old SAM3-trained
+arm C keeps only AP50 0.117 of its 0.228, while retraining on official GT gives
+the new baseline val mIoU 0.367 / honest AP50 0.199.
 
 ---
 
@@ -290,7 +292,16 @@ mapping, union consistency, background handling. CPU, no downloads.
   converted scene0000_00, `--instance_level`): loss 2.85→2.29, prompted mIoU
   0.005→0.103, class_acc 0.10→0.30 — the built tree trains end-to-end.
   `tests/test_phase2.py` still passes untouched.
-- **Phase 4 IN FLIGHT (2026-07-08)** — arm-C rerun on official GT submitted as
+- **Phase 4 COMPLETE (2026-07-08)** — arm-C rerun
+  (`d4rt_full_inst_learned_officialgt_20260708_124452`, job 6234787): best val
+  mIoU **0.367** @ep500, honest val[grid] AP50 **0.199** @ep450 — the new
+  quotable baseline. (Job hit the 4 h walltime at ep850/1000; both selection
+  metrics had peaked ~ep450–500 and were declining while train mIoU kept
+  rising, and both best checkpoints were saved, so the bests are valid.
+  Official-GT epochs are ~20% slower than SAM3-GT ones — budget >4 h for full
+  1000-epoch runs.) Same-ruler comparison table: `docs/MILESTONES.md`
+  §Dataset status. Original submission record follows:
+  arm-C rerun on official GT submitted as
   job 6234787 (`sbatch --export=ALL,INSTANCE_LEVEL=1,EXP_TAG=_learned_officialgt,
   EXTRA_ARGS="--query_mode learned --num_learned_queries 64" slurm/train_full.sh`
   → run `d4rt_full_inst_learned_officialgt_<ts>`); cross-eval of the old

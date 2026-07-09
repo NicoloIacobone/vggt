@@ -1,12 +1,13 @@
 # slurm/stage_dataset.sh — stage the ScanNet instance dataset onto node-local scratch.
 #
-# The dataset ships as a single zstd-compressed tar covering all 200 scenes
-# (scene0000–0199). Which tar is staged is controlled by the DATA_TAR env var:
+# The dataset ships as a single zstd-compressed tar. Which tar is staged is
+# controlled by the DATA_TAR env var:
 #   - default here: the SAM3-GT tar `scannet_instance_dataset_full.tar.zst`
-#     (~2.6 GB; unpacked ~5.4 GB) — backward compatible.
+#     (200 scenes, ~2.6 GB; unpacked ~5.4 GB) — backward compatible.
 #   - the train SLURM scripts override it to the official-ScanNet-GT tar
-#     `scannet_official_gt_full.tar.zst` (the current default supervision; see
-#     docs/OFFICIAL_GT_MIGRATION_PLAN.md). Both unpack to `scans/<scene>/raw_data/...`.
+#     `scannet_official_gt_500.tar.zst` (500 scenes, the current default
+#     supervision; see docs/old/OFFICIAL_GT_MIGRATION_PLAN.md — they request
+#     --tmp=24000 for it). All tars unpack to `scans/<scene>/raw_data/...`.
 # One big file lives well on the work filesystem; reading the thousands of small PNGs
 # directly off `work` is slow and pressures the inode quota. Each job copies that one
 # archive to the compute node's local SSD ($TMPDIR) and unpacks it there once, then reads
@@ -16,9 +17,9 @@
 # which scripts/train_multiscene.py picks up as the default --scans_root.
 #
 # Requires `zstd` (present at /usr/bin/zstd on the GPU nodes; no module needed). Request
-# enough node-local scratch in the SBATCH header: peak usage is the tar (2.6 GB) +
-# unpacked tree (~5.4 GB) ≈ 8 GB before the tar is deleted, so `#SBATCH --tmp=16000` (MB)
-# is comfortable.
+# enough node-local scratch in the SBATCH header: peak = tar + unpacked tree before the
+# tar is deleted — ≈ 8 GB for the 200-scene tars (`--tmp=16000` MB comfortable), ≈ 19 GB
+# for the 500-scene official tar (`--tmp=24000` MB, what the train scripts request).
 
 set -euo pipefail
 

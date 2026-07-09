@@ -1,13 +1,17 @@
 # Project Summary — Milestones 1–3 (consolidated)
 
 **Project:** A DETR-like / D4RT-style decoder for **multi-view-consistent 3D instance
-segmentation**, trained on top of a **frozen VGGT-1B backbone**. Ground truth = SAM3 masks on
-ScanNet scenes. The VGGT backbone is never modified; only the ~6.5M-param head trains.
+segmentation**, trained on top of a **frozen VGGT-1B backbone**. Ground truth = the official
+ScanNet v2 2D instance annotations (since 2026-07-08; previously SAM3-generated masks, now the
+GT-quality baseline — see §Dataset status). The VGGT backbone is never modified; only the
+~6.5M-param head trains.
 
 This file is the single, current summary. The detailed per-milestone docs, the executed plans,
 and addressed supervisor feedback are archived in `docs/old/` (read those for the full
 debugging narrative). Companion live files: `docs/todo.md` (open work), `docs/HOOK_PLAN.md`
-(where the decoder hooks into VGGT), `CLAUDE.md` (commands, storage layout, hard-won
+(where the decoder hooks into VGGT), `docs/RELATED_WORK.md` (competitor landscape +
+positioning, 2026-07-08 survey — "decoder on frozen VGGT" is now a crowded genre; the
+contribution is the query-strategy study), `CLAUDE.md` (commands, storage layout, hard-won
 constraints).
 
 ---
@@ -85,6 +89,11 @@ Full detail: `docs/old/MILESTONE_2.md`.
 > baseline), with its old overfitting resolved. The ceiling was the head, not the data. Learned
 > queries are now the default for further work; next levers (pixel decoder, ablations) stack on
 > top of arm C. See the arm tables below and `docs/todo.md`.
+>
+> **Update 2026-07-08:** all numbers in this milestone were measured on the (defective) SAM3
+> GT. After the GT migration, the quotable arm-C baseline is **val mIoU 0.367 / honest AP50
+> 0.199 on official-GT val** (`d4rt_full_inst_learned_officialgt_20260708_124452`); the
+> SAM3-vs-official comparison table is in §Dataset status.
 
 **Phase 0 (instrumentation, CPU, DONE):**
 - `metrics.jsonl` per run (one line per eval: epoch, lr, loss, prompted+grid train/val
@@ -246,7 +255,7 @@ Full detail (incl. the SCALING_RUNS_ANALYSIS protocol fixes that made the curve 
 
 ## Dataset status (updated 2026-07-08 — official ScanNet GT is now the default supervision)
 
-**GT migration (2026-07-08, `docs/OFFICIAL_GT_MIGRATION_PLAN.md`).** A 2026-07-07 audit of the
+**GT migration (2026-07-08, `docs/old/OFFICIAL_GT_MIGRATION_PLAN.md`).** A 2026-07-07 audit of the
 SAM3 GT (20 scenes) found systematic **cross-class duplicates**: SAM3 prompts each class
 independently, so the same physical object is often an instance under two classes — 68 pairs
 with cross-frame IoU ≥ 0.5 between different classes (~3.4/scene, mostly pixel-identical;
@@ -263,19 +272,52 @@ Differences vs SAM3 GT: masks written sparsely (missing PNG = not visible); stuf
 official per-segment ids (`wall_0..k`, not forced `_0`); out-of-taxonomy objects (incl.
 `otherfurniture`) → background. Smoke-tested end-to-end (overfit: loss falls, mIoU rises).
 
-- **Both tars** contain 200 scenes (scene0000–0199), layout
-  `scans/<scene>/raw_data/{subset,masks,masks_instance}`:
-  - `scannet_official_gt_full.tar.zst` (2.3 GB, **default**) — official GT, 2950 instances.
-  - `scannet_instance_dataset_full.tar.zst` (~2.6 GB) — SAM3 GT, ≈4195 instances (with the
-    duplicate defect above); kept as the GT-quality baseline and as a project deliverable.
-    Per-scene counts: `INSTANCE_MASKS_README.md` + `…_split2.md`.
+**Phase-4 training validation (2026-07-08) — same-ruler comparison on official-GT val
+(scenes 0080–0089, 13.3 GT inst/scene):**
+
+| arm C (N=190, learned, instance GT) | val mIoU | honest val[grid] AP50 |
+|---|---|---|
+| trained on SAM3 GT, evaled on SAM3 GT (old headline) | 0.371 | 0.228 |
+| trained on SAM3 GT, evaled on OFFICIAL GT (cross-eval) | 0.285 | **0.117** |
+| trained on OFFICIAL GT, evaled on OFFICIAL GT (new baseline) | **0.367** (@ep500) | **0.199** (@ep450) |
+
+- **~Half the old honest-AP50 headline didn't survive clean GT** (0.228 → 0.117 cross-eval):
+  the SAM3-trained model had fit SAM3's duplicate/label idiosyncrasies (plus distribution
+  shift: sparse masks, per-segment walls, exhaustive small instances).
+- **Retraining on official GT recovers most of it**: +0.082 honest AP50 (+70%) and +0.082 mIoU
+  over the cross-evaled SAM3 model on the same GT. **New quotable baseline: val mIoU 0.367 /
+  honest AP50 0.199** — run `d4rt_full_inst_learned_officialgt_20260708_124452` (job 6234787;
+  cross-eval jsons live in the old run's dir). All future comparisons use official-GT numbers.
+- Ops note: the run hit the 4 h walltime at ep850/1000, but both selection metrics had peaked
+  ~ep450–500 and were declining (train mIoU still rising → overfitting), and both best
+  checkpoints were saved — bests are valid. Official-GT epochs are ~20% slower than SAM3-GT
+  ones (sparser GT → more, smaller instances per eval); budget >4 h or fewer epochs for full
+  1000-epoch runs.
+
+**500-scene extension (2026-07-09).** Scenes 0200–0499 added: no SAM3-era subset frames
+existed for them, so `scripts/extract_sens_subset.py` streams each scene's `.sens` from the
+TUM server and extracts only the stride-5 subset jpgs with early abort (frames 0–495 sit in
+the first ~10% of the stream; no `.sens` is ever stored), then the standard zips+convert
+(`slurm/extend_dataset_500.sh`). 9 scenes (0240/0243/0269/0292/0354/0366/0438/0456/0483)
+have a 640×480 color camera — their GT projections match that resolution, so RGB↔GT stay
+consistent and the loader's resize handles the rest. **QA @500: 7379 instances, 0
+cross-class duplicates.** New default tar: `scannet_official_gt_500.tar.zst`.
+
+- **Tars** (layout `scans/<scene>/raw_data/{subset,masks,masks_instance}`):
+  - `scannet_official_gt_500.tar.zst` (**default**) — official GT, 500 scenes
+    (scene0000–0499), 7379 instances.
+  - `scannet_official_gt_full.tar.zst` (2.3 GB) — original 200-scene official GT
+    (2950 instances); kept for reproducibility of the runs trained on it.
+  - `scannet_instance_dataset_full.tar.zst` (~2.6 GB) — SAM3 GT, 200 scenes, ≈4195 instances
+    (with the duplicate defect above); kept as the GT-quality baseline and as a project
+    deliverable. Per-scene counts: `INSTANCE_MASKS_README.md` + `…_split2.md`.
 - Mask conventions (both): `masks_instance/<class>_<k>/<frame>.png`, uint8 {0,255}, 1296×968,
   `<k>` per class by first appearance; union of a class's instances = its `masks/<class>/` mask.
 - **Data access:** `slurm/stage_dataset.sh` copies ONE tar (selected by `DATA_TAR`; train SLURM
   scripts default it to the official tar, `sbatch --export=ALL,DATA_TAR=<sam3 tar>` restores the
   baseline) to node-local `$TMPDIR`, unpacks once, exports `SCANNET_ROOT=$TMPDIR/scans`;
   `train_multiscene.py` honors it as default `--scans_root`. SLURM headers request
-  `--tmp=16000` MB. No unpacked `scans/` tree exists on work; the official-GT build tree is
+  `--tmp=24000` MB. No unpacked `scans/` tree exists on work; the official-GT build tree is
   currently also unpacked at `/cluster/scratch/niacobone/scannet_official_build/scans` (scratch,
   purgeable — the tar on work is canonical). Old `scannet_build*` scratch trees are hollow.
 

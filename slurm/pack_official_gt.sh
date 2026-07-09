@@ -5,6 +5,9 @@
 #
 # Submit after the download/convert job: sbatch slurm/pack_official_gt.sh
 # (or --dependency=afterok:<download job id>). CPU-only.
+# EXPECT_SCENES / OUT_TAR are env-overridable (defaults: the 500-scene build).
+# The original 200-scene tar (scannet_official_gt_full.tar.zst) is kept as-is
+# for reproducibility of the runs trained on it.
 #
 #SBATCH --job-name=pack_official_gt
 #SBATCH --output=pack_official_gt_%j.log
@@ -20,17 +23,20 @@ set -e
 REPO=/cluster/scratch/niacobone/vggt
 BUILD=/cluster/scratch/niacobone/scannet_official_build
 WORK=/cluster/work/igp_psr/niacobone/distillation/dataset/scannet
-STAGE_TAR=/cluster/scratch/niacobone/scannet_official_gt_full.tar.zst
-WORK_TAR="$WORK/scannet_official_gt_full.tar.zst"
+EXPECT_SCENES=${EXPECT_SCENES:-500}
+OUT_TAR=${OUT_TAR:-scannet_official_gt_500.tar.zst}
+STAGE_TAR=/cluster/scratch/niacobone/$OUT_TAR
+WORK_TAR="$WORK/$OUT_TAR"
 
 cd "$REPO"
 
 # QA gates (exits non-zero on failure -> job fails before packing) + README.
 myenv/bin/python scripts/gen_official_gt_report.py \
-    --build "$BUILD" --out "$WORK/OFFICIAL_GT_README.md"
+    --build "$BUILD" --out "$WORK/OFFICIAL_GT_README.md" --expect_scenes "$EXPECT_SCENES"
 
 # Visual spot-check strips (eyeballed separately; not a hard gate).
-myenv/bin/python scripts/qa_official_gt_strips.py --build "$BUILD"
+myenv/bin/python scripts/qa_official_gt_strips.py --build "$BUILD" \
+    --scenes scene0000_00,scene0080_00,scene0160_00,scene0250_00,scene0340_00,scene0430_00,scene0499_00
 
 echo "[pack] building archive ..."
 tar --use-compress-program="zstd -1 -T0" -C "$BUILD" -cf "$STAGE_TAR" scans

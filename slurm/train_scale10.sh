@@ -11,7 +11,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=4096
-#SBATCH --tmp=16000
+#SBATCH --tmp=24000
 #SBATCH --gpus=rtx_4090:1
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=niacobone@student.ethz.ch
@@ -25,7 +25,7 @@ PYTHON=myenv/bin/python
 # Stage the dataset onto node-local scratch and export SCANNET_ROOT (see slurm/stage_dataset.sh).
 # GT tar: official ScanNet GT by default (docs/OFFICIAL_GT_MIGRATION_PLAN.md). For the
 # SAM3-GT baseline: sbatch --export=ALL,DATA_TAR=/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scannet_instance_dataset_full.tar.zst ...
-export DATA_TAR="${DATA_TAR:-/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scannet_official_gt_full.tar.zst}"
+export DATA_TAR="${DATA_TAR:-/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scannet_official_gt_500.tar.zst}"
 source slurm/stage_dataset.sh
 
 # Wider held-out val set (scene0080–0089) — less noisy than the original 3 scenes.
