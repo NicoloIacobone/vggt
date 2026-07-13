@@ -58,22 +58,26 @@ detail. This list tracks only what is still open.
       **Fixed properly**: added a `SANITY200=1` flag to `slurm/train_full.sh` — when set, it
       switches `TRAIN` to the original 190-scene pool via bash arithmetic (`seq`), no
       comma-bearing value ever crosses `--export`. **Relaunched (job 6962655,
-      `d4rt_full_sanity200`, `--time 4:00:00`, `--mem-per-cpu 8000`,
-      `SANITY200=1`, `DATA_TAR` pinned to `scannet_official_gt_full.tar.zst`)** — this is the
-      real A/B test: does the exact original recipe still run at its historical
-      ~4h/850-epoch pace, or does it now also show the per-bundle stalls seen on the
-      500-scene job? Whichever way this comes back changes what "decision needed before
-      relaunching" (below) even means, so no 500-scene relaunch until this reports.
+      `d4rt_full_sanity200`, node `eu-g6-046`) — COMPLETED cleanly, all 1000 epochs, in
+      2h39m total (well under the 4h budget; 132.8 min was training alone).** Best val mIoU
+      **0.350** @ep500, best val[grid] AP50 **0.196** @ep350 — matches the original
+      0.367/0.199 baseline within normal run-to-run noise (different random bundle/jitter
+      sampling). **Conclusion: the original recipe is healthy and fast on an uncontended
+      node — the earlier stalls were specific to the 500-scene job's nodes
+      (`eu-g6-014`/`eu-g6-057`), not a general cluster-load regression or a code bug.**
+      Back-of-envelope for the real 500-scene point under similarly uncontended conditions:
+      this run's 570 cached bundles → 132.8 min training; 490-scene run has 1480 bundles
+      (2.6x) → ~5.75h training + ~20min staging (bigger tar) + ~35min caching (2.6x this
+      run's ~14min) ≈ **~6.5–7h if the node behaves**, vs. the 12h that wasn't enough on a
+      bad node. Next: relaunch the real 490-scene arm-C job (`SANITY200` unset) with a
+      generous margin over that estimate — plan is `--time` in the 20–24h range on
+      `gpuhe.24h` (max 48h, no need for `gpuhe.bulk`/`--exclusive` given this wasn't a
+      systemic issue) to absorb node-luck variance, and just retry if unlucky again.
 
-      **Decision needed before relaunching** (resource commitment, not a code fix): at this
-      node's rate, caching alone for 490×3 bundles could take several hours, and training
-      still needs its own time on top — realistically an order of a day or more of
-      walltime, which only `gpuhe.120h`/`gpuhe.bulk` (15-day max) comfortably cover
-      (`gpuhe.24h` maxes at 48h). Options to weigh: (a) just request a very long walltime
-      on `gpuhe.bulk` and accept the queue/contention risk, (b) ask about `--exclusive`
-      node access to remove the noisy-neighbor variable (costs full-node GPU allocation),
-      (c) reduce `--bundles_per_scene` from 3 to lower the caching pass size at the cost of
-      less augmentation diversity. No relaunch attempted yet — awaiting a call on this.
+      **Relaunched for real (job 6981912, `d4rt_full`, `--time 24:00:00`, `SANITY200` unset
+      → the 490-scene pool, `EXP_TAG=_learned_officialgt_500`, arm-C recipe) — pending as of
+      2026-07-13.** This is the actual result-producing attempt; check `metrics.jsonl` /
+      `sacct` for outcome before touching anything else in this item.
 - [X] **Dataset extension to 500 scenes (DONE 2026-07-09; pack job 6423316 shipping the tar).**
       Scenes 0200–0499 had no SAM3-era subset frames, so new tooling streams each scene's
       `.sens` and extracts only the stride-5 subset jpgs with early abort (~10% of each file
@@ -178,6 +182,21 @@ query-strategy study (arms A–D) is. Direction: don't pivot, reposition.
       internal priors") shows the appetite. Good thesis-analysis chapter even if [-1] wins.
 - Deprioritized: backbone-agnostic decoder (VGGT/CUT3R/Pi3) — real gap but out of thesis
   scope; Lite3R already owns the framing.
+- [ ] **Align training protocol with best practices (splits + frame sampling).** Audited
+      2026-07-13 against SegVGGT's stated protocol: (a) our `--train_scenes`/`--val_scenes`
+      are contiguous scene-ID ranges (first N train, fixed 0080–0089 val) chosen for a
+      data-scaling curve, not the official ScanNetv2 1201/312/100 split (SegVGGT spans all
+      1613 scenes; we only have 500 downloaded, so an exact match isn't possible without
+      more data, but an official-split-intersected-with-our-500 subset would be closer than
+      the current first-N convention). (b) SegVGGT randomly samples 2–24 frames per scene
+      *every training iteration*; we cache `--bundles_per_scene` (3) fixed random frame-sets
+      per scene once up front and reuse them for up to 1000 epochs, with `num_frames` fixed
+      per run (8) rather than varied. This is a deliberate tradeoff for backbone-feature
+      caching (head-only training in minutes, not hours) but risks the head memorizing the
+      cached view combinations rather than learning frame-count/view-set robustness. Needs a
+      decision before implementing: intersect official split with our 500 scenes vs. keep the
+      scaling-curve convention; and whether to raise `--bundles_per_scene` / randomize
+      `num_frames` per bundle vs. accept the caching tradeoff as-is.
 
 ## Open — data-gated ablations (Phase 6; meaningful now with 200 scenes)
 
