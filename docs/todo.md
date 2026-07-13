@@ -5,6 +5,75 @@ detail. This list tracks only what is still open.
 
 ## Open — next experiments (GPU)
 
+- [ ] **Arm-C rerun on the full 500-scene official GT — TIMED OUT, inconclusive, needs
+      relaunch (job 6442237, submitted 2026-07-09, killed at the 12h limit 2026-07-10).**
+      `slurm/train_full.sh` updated to pull its "whole dataset" train pool from
+      `scannet_official_gt_500.tar.zst` — 0000–0079 + 0090–0499 (490 scenes, was 190), same
+      held-out val 0080–0089; submitted with the arm-C recipe (`INSTANCE_LEVEL=1,
+      EXTRA_ARGS="--query_mode learned --num_learned_queries 64"`). **Result: only reached
+      epoch 150/1000 before TIMEOUT** (`checkpoint_best.pth` epoch field confirms 150; val
+      mIoU 0.313 / AP50 0.170 at that point — not comparable to the N=190 baseline's
+      converged 0.367/0.199, since that run trained 450–1000 epochs). The 12h budget was
+      sized off a linear 2.6x-more-bundles estimate (570→1480 cached bundles) from the
+      N=190 run's ~4h/850-epoch pace; actual throughput was **~15–17x slower per epoch**,
+      not 2.6x — `sacct` shows MaxRSS ≈ 250 GB, comfortably under the 350 GB request, so
+      it's not host-memory swapping. Root cause NOT YET DIAGNOSED: stdout is block-buffered
+      when redirected to the SLURM log and the process was SIGTERM'd by the time-limit
+      kill, so all of `train_multiscene.py`'s per-epoch prints were lost — only
+      `metrics.jsonl`'s eval-interval writes (flushed to disk) survived, giving epoch
+      counts but no per-epoch timing to localize the slowdown (caching pass vs. train loop
+      vs. eval). **Fix applied**: `slurm/train_full.sh` now `export PYTHONUNBUFFERED=1` and
+      moved `${EXTRA_ARGS:-}` to the END of the python invocation (argparse keeps the last
+      occurrence of a repeated flag, so it can now override any hardcoded default, e.g.
+      `--num_epochs`/`--eval_interval` — previously EXTRA_ARGS sat before the hardcoded
+      flags and could only add new ones).
+
+      **Diagnostic run (job 6944946, `d4rt_full_diag`, `--time 2:00:00`,
+      `--num_epochs 20 --eval_interval 5`) — bottleneck localized, ALSO timed out, but with a
+      real answer this time: the entire 2h was consumed by the up-front feature-caching
+      pass — it never reached the `TRAINING` banner, let alone epoch 1.** Per-bundle
+      "backbone" timing (the `build_bundle` call: image transfer + jitter + query-point gen
+      + one aggregator forward + `build_gt_targets`) is normally ~1.4–1.6s, matching the
+      constant `[1, 8, 1374, 2048]` feature shape (compute per bundle should be independent
+      of scene content). But a growing fraction of scenes spike to 10–80s+ with **no
+      correlation to instance count** (scene0466 had 57 instances @1.8s; scene0472 had 13
+      instances @82.4s) — ruling out GT-mask-processing cost as the driver. Spikes were rare
+      early in bundle 0, common by bundle 1, and dominant by bundle 2 (490 scenes × 3
+      bundles compounding the exposure window). This pattern — constant-shape compute with
+      wildly variable wall time, worsening over the run — points to **contention on the
+      shared 8-GPU node** (`eu-g6-057`; the first, 12h run was on a different node,
+      `eu-g6-014`, which explains why it fared relatively better): other tenants' jobs on
+      the same physical node competing for CPU scheduling / host memory bandwidth / local
+      SSD I/O, stalling our host-side code between GPU kernel launches. Not a bug in
+      `train_multiscene.py` — nothing here scales with our scene count in a way code
+      changes would fix.
+      **Sanity check attempt #1 (job 6962015) was INVALID — infra bug, not a real test.**
+      Tried to override `--train_scenes`/`--val_scenes` back to the historical 190/10 split
+      via `EXTRA_ARGS` passed through `sbatch --export=...,EXTRA_ARGS="--train_scenes
+      scene0000_00,scene0001_00,..."`. `sbatch --export` splits its whole argument on every
+      comma regardless of quoting, so the 190-scene comma-separated list got truncated to
+      just the first entry — the run silently trained on **1 scene** (log: `Train scenes
+      (1): ['scene0000_00']`), finished in 9 min, and was meaningless as a sanity check.
+      (Job 6944946's finding above is unaffected — its `EXTRA_ARGS` had no commas.)
+      **Fixed properly**: added a `SANITY200=1` flag to `slurm/train_full.sh` — when set, it
+      switches `TRAIN` to the original 190-scene pool via bash arithmetic (`seq`), no
+      comma-bearing value ever crosses `--export`. **Relaunched (job 6962655,
+      `d4rt_full_sanity200`, `--time 4:00:00`, `--mem-per-cpu 8000`,
+      `SANITY200=1`, `DATA_TAR` pinned to `scannet_official_gt_full.tar.zst`)** — this is the
+      real A/B test: does the exact original recipe still run at its historical
+      ~4h/850-epoch pace, or does it now also show the per-bundle stalls seen on the
+      500-scene job? Whichever way this comes back changes what "decision needed before
+      relaunching" (below) even means, so no 500-scene relaunch until this reports.
+
+      **Decision needed before relaunching** (resource commitment, not a code fix): at this
+      node's rate, caching alone for 490×3 bundles could take several hours, and training
+      still needs its own time on top — realistically an order of a day or more of
+      walltime, which only `gpuhe.120h`/`gpuhe.bulk` (15-day max) comfortably cover
+      (`gpuhe.24h` maxes at 48h). Options to weigh: (a) just request a very long walltime
+      on `gpuhe.bulk` and accept the queue/contention risk, (b) ask about `--exclusive`
+      node access to remove the noisy-neighbor variable (costs full-node GPU allocation),
+      (c) reduce `--bundles_per_scene` from 3 to lower the caching pass size at the cost of
+      less augmentation diversity. No relaunch attempted yet — awaiting a call on this.
 - [X] **Dataset extension to 500 scenes (DONE 2026-07-09; pack job 6423316 shipping the tar).**
       Scenes 0200–0499 had no SAM3-era subset frames, so new tooling streams each scene's
       `.sens` and extracts only the stride-5 subset jpgs with early abort (~10% of each file
