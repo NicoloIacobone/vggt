@@ -28,6 +28,7 @@ from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from vggt.utils.geometry import unproject_depth_map_to_point_map
 from models.d4rt_decoder import D4RTInstanceSegmentationHead
+from models.anchor_queries import build_anchors
 from train.postprocess import select_instances, upsample_assignment
 from data.scannet_overfit import IDX_TO_CLASS, decode_checkpoint_images
 
@@ -151,8 +152,21 @@ def compute_seg_colors(images_dev: torch.Tensor, mask_thr: float = 0.5, score_th
     coords = SEG["coords"].to(device)
     view_ids = SEG["view_ids"].to(device).clamp_max(S - 1)  # guard if scene has fewer frames
 
-    class_logits, _, pred_masks = SEG["head"](
-        coords, view_ids, images_dev, global_features, patch_start_idx
+    # Arm E (anchor3d): rebuild the 3D anchors from the frozen point head (deterministic
+    # given the same frames); coordinates become ignored placeholders.
+    head = SEG["head"]
+    anchors = None
+    if getattr(head, "query_mode", "point") == "anchor3d":
+        pts3d, pts3d_conf = model.point_head(
+            agg_list, images=images_dev, patch_start_idx=patch_start_idx)
+        anchors = build_anchors(global_features, patch_start_idx, pts3d, pts3d_conf,
+                                num_anchors=head.num_anchors, knn=head.anchor_knn)
+        K = anchors["xyz"].shape[1]
+        coords = torch.zeros(1, K, 2, device=device)
+        view_ids = torch.zeros(1, K, dtype=torch.long, device=device)
+
+    class_logits, _, pred_masks = head(
+        coords, view_ids, images_dev, global_features, patch_start_idx, anchors=anchors
     )
     class_logits = class_logits[0]   # [N, C]
     pred_masks = pred_masks[0]       # [N, S, h, w]

@@ -38,6 +38,7 @@ from train_overfit import D4RTModel
 from train.loss import PointBipartiteMatcher
 from train.postprocess import select_instances, upsample_assignment
 from data.scannet_overfit import IDX_TO_CLASS, decode_checkpoint_images
+from models.anchor_queries import build_anchors
 
 DEFAULT_SCANS_ROOT = "/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans"
 
@@ -136,8 +137,23 @@ def visualize_scene(model, scene: dict, out_dir: Path, device: str, args) -> int
     with torch.no_grad():
         agg_list, patch_start_idx = model.backbone.aggregator(images)
         global_features = agg_list[-1]
+        anchors = None
+        if mode == "anchor3d":
+            # Arm E: rebuild the 3D anchors from the frozen point head — deterministic given
+            # the same frames (FPS is deterministic), so nothing anchor-related needs to be
+            # stored in the checkpoint. Coordinates become placeholders (ignored by the head).
+            pts3d, pts3d_conf = model.backbone.point_head(
+                agg_list, images=images, patch_start_idx=patch_start_idx)
+            anchors = build_anchors(global_features, patch_start_idx, pts3d, pts3d_conf,
+                                    num_anchors=model.decoder_head.num_anchors,
+                                    knn=model.decoder_head.anchor_knn)
+            K = anchors["xyz"].shape[1]
+            coordinates = torch.zeros(1, K, 2, device=device)
+            view_ids = torch.zeros(1, K, dtype=torch.long, device=device)
+        # anchors passed only when set, so stub/legacy heads without the kwarg keep working.
+        extra = {"anchors": anchors} if anchors is not None else {}
         class_logits, mask_embeddings, pred_masks = model.decoder_head(
-            coordinates, view_ids, images, global_features, patch_start_idx
+            coordinates, view_ids, images, global_features, patch_start_idx, **extra
         )
     # Drop batch dim (B=1)
     class_logits = class_logits[0]       # [N, C]
@@ -145,8 +161,9 @@ def visualize_scene(model, scene: dict, out_dir: Path, device: str, args) -> int
     pred_masks = pred_masks[0]           # [N, S, h, w]
 
     # --- Match predictions to GT (same matcher as training: weights all 1.0) ------------------
-    # Learned/hybrid coordinates are placeholders → drop the coord cost (matches training).
-    coord_weight = 0.0 if mode in ("learned", "hybrid") else 1.0
+    # Learned/hybrid/anchor3d coordinates are placeholders → drop the coord cost (matches
+    # training).
+    coord_weight = 0.0 if mode in ("learned", "hybrid", "anchor3d") else 1.0
     matcher = PointBipartiteMatcher(class_weight=1.0, mask_weight=1.0, coord_weight=coord_weight)
     pred_idx, gt_idx, _ = matcher(
         class_logits, mask_embeddings, coordinates[0],
@@ -317,6 +334,8 @@ def main():
         num_learned_queries=head_config.get("num_learned_queries",
                                             ck_args.get("num_learned_queries", 0)),
         mask_upsample=head_config.get("mask_upsample", ck_args.get("mask_upsample", 1)),
+        num_anchors=head_config.get("num_anchors", ck_args.get("num_anchors", 0)),
+        anchor_knn=head_config.get("anchor_knn", ck_args.get("anchor_knn", 8)),
     ).to(device)
     model.decoder_head.load_state_dict(ckpt["decoder_head_state_dict"])
     model.eval()

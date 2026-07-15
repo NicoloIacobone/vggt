@@ -65,8 +65,8 @@ def eval_bundle_at_grid_sizes(
 
     mode = getattr(decoder_head, "query_mode", "point")
     M = getattr(decoder_head, "num_learned_queries", 0)
-    if mode == "learned":
-        raise ValueError("learned-query heads ignore coordinates; grid density is undefined")
+    if mode in ("learned", "anchor3d"):
+        raise ValueError(f"{mode}-query heads ignore coordinates; grid density is undefined")
 
     S = images.shape[1]
     runs = {}
@@ -126,8 +126,9 @@ def main():
     ck_args = ckpt.get("args", {})
     head_config = ckpt.get("head_config", {}) or {}
     query_mode = head_config.get("query_mode", ck_args.get("query_mode", "point"))
-    if query_mode == "learned":
-        raise SystemExit("This checkpoint uses learned queries — grid density does not apply.")
+    if query_mode in ("learned", "anchor3d"):
+        raise SystemExit(f"This checkpoint uses {query_mode} queries — grid density "
+                         "does not apply.")
 
     scenes = [(label, s) for label, s in scenes_from_checkpoint(ckpt)
               if args.split == "all" or s.get("split", "train") == args.split]

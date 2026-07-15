@@ -54,6 +54,12 @@ def build_eval_args(ck_args: dict, cli) -> SimpleNamespace:
         bundles_per_scene=1,
         color_jitter=0.0,
         cache_device=None,
+        # Arm E: bundle building rebuilds the 3D anchors from the frozen point head, so the
+        # anchor settings must match the run's (train_multiscene.build_bundle branches on
+        # query_mode).
+        query_mode=ck_args.get("query_mode", "point"),
+        num_anchors=int(ck_args.get("num_anchors", 0)),
+        anchor_knn=int(ck_args.get("anchor_knn", 8)),
     )
 
 
@@ -119,6 +125,8 @@ def main():
         num_learned_queries=head_config.get("num_learned_queries",
                                             ck_args.get("num_learned_queries", 0)),
         mask_upsample=head_config.get("mask_upsample", ck_args.get("mask_upsample", 1)),
+        num_anchors=head_config.get("num_anchors", ck_args.get("num_anchors", 0)),
+        anchor_knn=head_config.get("anchor_knn", ck_args.get("anchor_knn", 8)),
     ).to(device)
     model.decoder_head.load_state_dict(ckpt["decoder_head_state_dict"])
     model.eval()
@@ -137,8 +145,8 @@ def main():
     print("\n" + header + "\n" + "-" * len(header))
     for label, m in mean.items():
         print(f"{label:>10} | " + " | ".join(f"{m[k]:8.3f}" for k in keys))
-    if query_mode == "learned":
-        print("(learned queries ignore coordinates: prompted == unprompted)")
+    if query_mode in ("learned", "anchor3d"):
+        print(f"({query_mode} queries ignore coordinates: prompted == unprompted)")
 
     tag = args.tag or Path(args.scans_root).parent.name or "crossgt"
     out_path = (Path(args.output) if args.output

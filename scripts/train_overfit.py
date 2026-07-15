@@ -53,6 +53,8 @@ class D4RTModel(nn.Module):
         query_mode: str = "point",
         num_learned_queries: int = 0,
         mask_upsample: int = 1,
+        num_anchors: int = 0,
+        anchor_knn: int = 8,
     ):
         super().__init__()
         self.freeze_backbone = freeze_backbone
@@ -88,6 +90,8 @@ class D4RTModel(nn.Module):
             query_mode=query_mode,
             num_learned_queries=num_learned_queries,
             mask_upsample=mask_upsample,
+            num_anchors=num_anchors,
+            anchor_knn=anchor_knn,
         )
 
     def forward(

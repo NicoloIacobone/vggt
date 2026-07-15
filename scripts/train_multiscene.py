@@ -54,6 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train.loss import D4RTLoss
 from train.eval_metrics import compute_instance_segmentation_metrics
 from data.scannet_overfit import ScanNetMultiSceneDataset
+from models.anchor_queries import build_anchors, jitter_anchors
 from train_overfit import (
     D4RTModel, build_gt_targets, generate_query_points, generate_grid_queries,
     _format_metrics,
@@ -143,6 +144,16 @@ def prepare_scene_bundles(
         num_patch_tokens = features.shape[2] - patch_start_idx
         gt = build_gt_targets(batch, patch_start_idx, num_patch_tokens, device,
                               mask_upsample=args.mask_upsample)
+        # Arm E: 3D anchors from the frozen point head, built once per bundle on the
+        # agg_list already in hand (the full pointmap is never cached — only the small
+        # anchor dict {"xyz": [1,K,3], "feats": [1,K,2048]} rides along in the bundle).
+        anchors = None
+        if getattr(args, "query_mode", "point") == "anchor3d":
+            pts3d, pts3d_conf = model.backbone.point_head(
+                agg_list, images=images, patch_start_idx=patch_start_idx)
+            anchors = build_anchors(features, patch_start_idx,
+                                    pts3d.detach(), pts3d_conf.detach(),
+                                    num_anchors=args.num_anchors, knn=args.anchor_knn)
         return {
             "images": images,
             "coordinates": coordinates,
@@ -153,6 +164,7 @@ def prepare_scene_bundles(
             "num_patch_tokens": int(num_patch_tokens),
             "gt": gt,
             "frame_names": batch.get("frame_names", None),
+            "anchors": anchors,
         }
 
     scenes = []
@@ -198,11 +210,15 @@ def make_train_queries(b: Dict, args, device: str):
       - Fresh random background query points + view ids (unless --fixed_bg).
       - Phase 3 query modes: 'learned' replaces all queries with M placeholders; 'hybrid'
         prepends M placeholders to the point queries (head turns them into learned queries).
+      - Arm E 'anchor3d': like 'learned', all slots are placeholders (the real queries come
+        from the bundle's cached 3D anchors, passed separately to the head).
     """
     query_mode = getattr(args, "query_mode", "point")
     B = b["coordinates"].shape[0]
     if query_mode == "learned":
         return learned_placeholder(B, args.num_learned_queries, device)
+    if query_mode == "anchor3d":
+        return learned_placeholder(B, args.num_anchors, device)
 
     coords = b["coordinates"].clone()
     view_ids = b["view_ids"].clone()
@@ -233,12 +249,14 @@ def make_train_queries(b: Dict, args, device: str):
     return coords, view_ids
 
 
-def head_forward(model: D4RTModel, b: Dict, coordinates=None, view_ids=None):
-    """Decoder-head-only forward on a device-resident bundle (cached backbone features)."""
+def head_forward(model: D4RTModel, b: Dict, coordinates=None, view_ids=None, anchors=None):
+    """Decoder-head-only forward on a device-resident bundle (cached backbone features).
+    `anchors` overrides the bundle's cached anchors (e.g. jittered for training)."""
     return model.decoder_head(
         coordinates if coordinates is not None else b["coordinates"],
         view_ids if view_ids is not None else b["view_ids"],
         b["images"], b["features"], b["patch_start_idx"],
+        anchors=anchors if anchors is not None else b.get("anchors"),
     )
 
 
@@ -250,9 +268,11 @@ def eval_scene(model: D4RTModel, scene: Dict, device: str, unprompted: bool = Fa
     b = bundle_to_device(scene["bundles"][0], device)
     mode = getattr(model.decoder_head, "query_mode", "point")
     M = getattr(model.decoder_head, "num_learned_queries", 0)
-    if mode == "learned":
+    if mode in ("learned", "anchor3d"):
         # Coordinates are ignored; prompted == unprompted (report under the unprompted column).
-        coords, view_ids = learned_placeholder(b["coordinates"].shape[0], M, device)
+        # anchor3d slots = the bundle's cached 3D anchors (GT-free, honest by construction).
+        n_slots = M if mode == "learned" else b["anchors"]["xyz"].shape[1]
+        coords, view_ids = learned_placeholder(b["coordinates"].shape[0], n_slots, device)
         class_logits, _, pred_masks = head_forward(model, b, coords, view_ids)
     else:
         base_c = b["grid_coordinates"] if unprompted else b["coordinates"]
@@ -393,6 +413,8 @@ def save_checkpoint(path: Path, model, optimizer, scheduler, epoch, args,
         "query_mode": getattr(args, "query_mode", "point"),
         "num_learned_queries": int(getattr(args, "num_learned_queries", 0)),
         "mask_upsample": int(getattr(args, "mask_upsample", 1)),
+        "num_anchors": int(getattr(args, "num_anchors", 0)),
+        "anchor_knn": int(getattr(args, "anchor_knn", 8)),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -473,12 +495,24 @@ def main():
     parser.add_argument("--num_frames", type=int, default=8, help="Frames per scene per bundle")
     parser.add_argument("--num_queries", type=int, default=32)
     parser.add_argument("--query_mode", type=str, default="point",
-                        choices=["point", "learned", "hybrid"],
+                        choices=["point", "learned", "hybrid", "anchor3d"],
                         help="Query type (Phase 3 ablation): 'point' = (u,v) prompts (default); "
                              "'learned' = DETR object queries (coords ignored, matcher "
-                             "coord_weight=0); 'hybrid' = learned queries + centroid prompts.")
+                             "coord_weight=0); 'hybrid' = learned queries + centroid prompts; "
+                             "'anchor3d' (Arm E) = queries seeded from 3D anchors FPS-sampled "
+                             "in VGGT's own predicted pointmap (coords ignored, GT-free).")
     parser.add_argument("--num_learned_queries", type=int, default=64,
                         help="Number of learned object queries for --query_mode learned/hybrid")
+    # --- Arm E: 3D-anchored queries ---
+    parser.add_argument("--num_anchors", type=int, default=64,
+                        help="Number of 3D anchor queries for --query_mode anchor3d (FPS over "
+                             "the point-head token positions; 64 matches arm C's query count)")
+    parser.add_argument("--anchor_knn", type=int, default=8,
+                        help="Patch-token neighbors (in 3D) pooled into each anchor's content "
+                             "feature")
+    parser.add_argument("--anchor_jitter", type=float, default=0.0,
+                        help="Std of Gaussian jitter on normalized anchor xyz during training "
+                             "(Arm-E analog of --query_jitter; 0 disables)")
     parser.add_argument("--learned_query_lr_scale", type=float, default=1.0,
                         help="LR multiplier for the learned object-query embeddings (own AdamW "
                              "param group; the cosine schedule applies per group). <1 tames the "
@@ -584,6 +618,8 @@ def main():
         query_mode=args.query_mode,
         num_learned_queries=args.num_learned_queries,
         mask_upsample=args.mask_upsample,
+        num_anchors=args.num_anchors,
+        anchor_knn=args.anchor_knn,
     ).to(device)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Trainable parameters: {trainable:,}")
@@ -592,10 +628,11 @@ def main():
     train_scenes = prepare_scene_bundles(model, train_dirs, args, device, "train")
     val_scenes = prepare_scene_bundles(model, val_dirs, args, device, "val")
 
-    # Learned/hybrid queries carry no meaningful coordinates, so drop the matcher's coord cost
-    # (Phase 3); point mode keeps the default coord_weight so prompts guide the matching.
+    # Learned/hybrid/anchor3d queries carry no meaningful (u,v) coordinates, so drop the
+    # matcher's coord cost; point mode keeps the default coord_weight so prompts guide the
+    # matching.
     matcher_kwargs = ({"coord_weight": 0.0}
-                      if args.query_mode in ("learned", "hybrid") else None)
+                      if args.query_mode in ("learned", "hybrid", "anchor3d") else None)
     loss_fn = D4RTLoss(
         num_classes=20,
         class_loss_weight=1.0,
@@ -668,9 +705,13 @@ def main():
             bundle = scene["bundles"][random.randrange(len(scene["bundles"]))]
             b = bundle_to_device(bundle, device)
             coords, view_ids = make_train_queries(b, args, device)
+            # Arm-E augmentation: jitter the anchor positions (not their content features).
+            anchors = (jitter_anchors(b["anchors"], args.anchor_jitter)
+                       if args.query_mode == "anchor3d" and args.anchor_jitter > 0 else None)
 
             optimizer.zero_grad()
-            class_logits, mask_embeddings, pred_masks = head_forward(model, b, coords, view_ids)
+            class_logits, mask_embeddings, pred_masks = head_forward(
+                model, b, coords, view_ids, anchors=anchors)
             total_loss, comps = loss_fn(
                 class_logits, mask_embeddings, coords,
                 b["gt"]["classes"],

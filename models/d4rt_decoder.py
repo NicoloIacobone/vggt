@@ -12,10 +12,11 @@ from models.mask_upsampler import MaskUpsampler
 
 class FourierPositionalEncoding(nn.Module):
     """
-    Fourier positional encoding for 2D coordinates.
+    Fourier positional encoding for low-dimensional coordinates.
 
-    Encodes (u, v) coordinates using sine and cosine at different frequencies.
-    Output dimension is 4 * num_freqs (sin & cos for each of u and v).
+    Encodes coordinates using sine and cosine at different frequencies. Works for any
+    coordinate dimension D (D=2 for image-space (u, v) prompts, D=3 for the Arm-E 3D
+    anchors); output dimension is 2 * D * num_freqs (sin & cos per coordinate).
 
     Args:
         num_freqs (int): Number of frequency bands
@@ -36,25 +37,26 @@ class FourierPositionalEncoding(nn.Module):
         Encode coordinates using Fourier features.
 
         Args:
-            coords (torch.Tensor): Coordinates with shape [B, N, 2] where last dim is (u, v)
+            coords (torch.Tensor): Coordinates with shape [B, N, D] (D=2 for (u, v),
+                D=3 for xyz anchors)
 
         Returns:
-            torch.Tensor: Fourier encoded features with shape [B, N, 4 * num_freqs]
+            torch.Tensor: Fourier encoded features with shape [B, N, 2 * D * num_freqs]
         """
         B, N, _ = coords.shape
 
-        # Expand coordinates for each frequency: [B, N, num_freqs, 2]
-        coords_expanded = coords.unsqueeze(2)  # [B, N, 1, 2]
+        # Expand coordinates for each frequency: [B, N, num_freqs, D]
+        coords_expanded = coords.unsqueeze(2)  # [B, N, 1, D]
         freqs = self.freqs.view(1, 1, -1, 1)  # [1, 1, num_freqs, 1]
-        scaled_coords = coords_expanded * freqs  # [B, N, num_freqs, 2]
+        scaled_coords = coords_expanded * freqs  # [B, N, num_freqs, D]
 
         # Apply sin and cos
-        sin_encoding = torch.sin(2 * math.pi * scaled_coords)  # [B, N, num_freqs, 2]
-        cos_encoding = torch.cos(2 * math.pi * scaled_coords)  # [B, N, num_freqs, 2]
+        sin_encoding = torch.sin(2 * math.pi * scaled_coords)  # [B, N, num_freqs, D]
+        cos_encoding = torch.cos(2 * math.pi * scaled_coords)  # [B, N, num_freqs, D]
 
-        # Interleave sin and cos: [B, N, num_freqs, 4]
-        encoding = torch.stack([sin_encoding, cos_encoding], dim=-1)  # [B, N, num_freqs, 2, 2]
-        encoding = encoding.view(B, N, self.num_freqs * 4)  # [B, N, 4 * num_freqs]
+        # Interleave sin and cos: [B, N, num_freqs, D, 2] -> [B, N, 2 * D * num_freqs]
+        encoding = torch.stack([sin_encoding, cos_encoding], dim=-1)
+        encoding = encoding.reshape(B, N, -1)
 
         return encoding
 
@@ -188,10 +190,12 @@ class QueryGenerator(nn.Module):
         max_freq: float = 10.0,
         query_mode: str = "point",
         num_learned_queries: int = 0,
+        memory_dim: int = 2048,
     ):
         super().__init__()
-        if query_mode not in ("point", "learned", "hybrid"):
-            raise ValueError(f"query_mode must be point/learned/hybrid, got {query_mode!r}")
+        if query_mode not in ("point", "learned", "hybrid", "anchor3d"):
+            raise ValueError(
+                f"query_mode must be point/learned/hybrid/anchor3d, got {query_mode!r}")
         if query_mode in ("learned", "hybrid") and num_learned_queries <= 0:
             raise ValueError(f"query_mode={query_mode} needs num_learned_queries > 0")
         self.num_views = num_views
@@ -219,11 +223,29 @@ class QueryGenerator(nn.Module):
             if query_mode in ("learned", "hybrid") else None
         )
 
+        # Arm E (anchor3d): queries from 3D anchor points sampled in VGGT's own predicted
+        # pointmap (models/anchor_queries.py builds the anchors at bundle-caching time).
+        # Query = proj(Fourier(xyz)) + proj(LayerNorm(pooled patch-token features)); the
+        # LayerNorm is essential for the same reason as the memory norm in InstanceDecoder —
+        # raw VGGT features have huge magnitudes. No view embedding: one query per 3D
+        # location, shared across all views by construction.
+        if query_mode == "anchor3d":
+            self.anchor_pos_proj = nn.Linear(6 * num_freqs, hidden_dim)  # 2 * 3 * num_freqs
+            self.anchor_feat_norm = nn.LayerNorm(memory_dim)
+            self.anchor_feat_proj = nn.Linear(memory_dim, hidden_dim)
+            self.anchor_query_proj = nn.Linear(hidden_dim, hidden_dim)
+        else:
+            self.anchor_pos_proj = None
+            self.anchor_feat_norm = None
+            self.anchor_feat_proj = None
+            self.anchor_query_proj = None
+
     def forward(
         self,
         coordinates: torch.Tensor,
         view_ids: torch.Tensor,
         images: torch.Tensor,
+        anchors: Optional[dict] = None,
     ) -> torch.Tensor:
         """
         Generate decoder queries. Output length always equals `coordinates.shape[1]`, so the
@@ -233,8 +255,18 @@ class QueryGenerator(nn.Module):
             caller passes a length-`num_learned_queries` placeholder).
           - "hybrid": the first `num_learned_queries` slots are learned object queries, the
             remaining slots are point-prompt queries from `coordinates[:, M:]`.
+          - "anchor3d": all slots come from `anchors` = {"xyz": [B, K, 3] normalized anchor
+            positions, "feats": [B, K, memory_dim] pooled patch-token features} (coordinates
+            ignored; the caller passes a length-K placeholder).
         """
         B, N = coordinates.shape[0], coordinates.shape[1]
+        if self.query_mode == "anchor3d":
+            if anchors is None:
+                raise ValueError("query_mode='anchor3d' requires the `anchors` argument "
+                                 "({'xyz': [B, K, 3], 'feats': [B, K, memory_dim]})")
+            pos = self.anchor_pos_proj(self.pos_encoder(anchors["xyz"]))       # [B, K, hidden]
+            content = self.anchor_feat_proj(self.anchor_feat_norm(anchors["feats"]))
+            return self.anchor_query_proj(pos + content)                       # [B, K, hidden]
         if self.query_mode == "learned":
             return self.learned_queries.weight.unsqueeze(0).expand(B, -1, -1)  # [B, M, hidden]
         if self.query_mode == "hybrid":
@@ -483,17 +515,27 @@ class D4RTInstanceSegmentationHead(nn.Module):
         query_mode: str = "point",
         num_learned_queries: int = 0,
         mask_upsample: int = 1,
+        num_anchors: int = 0,
+        anchor_knn: int = 8,
     ):
         super().__init__()
+        if query_mode == "anchor3d" and num_anchors <= 0:
+            raise ValueError("query_mode='anchor3d' needs num_anchors > 0")
         self.query_mode = query_mode
         self.num_learned_queries = num_learned_queries
         self.mask_upsample = mask_upsample
+        # Anchor-building parameters (Arm E). Not used by the module itself — anchors are
+        # built outside (models/anchor_queries.py) from the frozen point head — but stored
+        # here (and in head_config) so eval/viz tooling can rebuild identical anchors.
+        self.num_anchors = num_anchors
+        self.anchor_knn = anchor_knn
         self.query_generator = QueryGenerator(
             num_views=num_views,
             hidden_dim=hidden_dim,
             patch_size=patch_size,
             query_mode=query_mode,
             num_learned_queries=num_learned_queries,
+            memory_dim=memory_dim,
         )
         self.instance_decoder = InstanceDecoder(
             hidden_dim=hidden_dim,
@@ -512,6 +554,7 @@ class D4RTInstanceSegmentationHead(nn.Module):
         images: torch.Tensor,
         global_features: torch.Tensor,
         patch_start_idx: Optional[int] = None,
+        anchors: Optional[dict] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Generate queries and decode instance predictions.
@@ -522,6 +565,8 @@ class D4RTInstanceSegmentationHead(nn.Module):
             images (torch.Tensor): [B, S, 3, H, W] input images
             global_features (torch.Tensor): [B, S, P, 2*embed_dim] from VGGT aggregator
             patch_start_idx (int, optional): Index where patch tokens start
+            anchors (dict, optional): Arm-E 3D anchors {"xyz": [B, K, 3], "feats":
+                [B, K, memory_dim]}; required iff query_mode == "anchor3d"
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -530,7 +575,7 @@ class D4RTInstanceSegmentationHead(nn.Module):
                 - pred_masks:      [B, N, S, h, w] dense mask logits at patch resolution
         """
         # Generate queries
-        queries = self.query_generator(coordinates, view_ids, images)
+        queries = self.query_generator(coordinates, view_ids, images, anchors=anchors)
 
         # Decode predictions
         class_logits, mask_embeddings, pred_masks = self.instance_decoder(

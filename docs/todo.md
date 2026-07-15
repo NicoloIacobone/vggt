@@ -75,9 +75,54 @@ detail. This list tracks only what is still open.
       systemic issue) to absorb node-luck variance, and just retry if unlucky again.
 
       **Relaunched for real (job 6981912, `d4rt_full`, `--time 24:00:00`, `SANITY200` unset
-      → the 490-scene pool, `EXP_TAG=_learned_officialgt_500`, arm-C recipe) — pending as of
-      2026-07-13.** This is the actual result-producing attempt; check `metrics.jsonl` /
-      `sacct` for outcome before touching anything else in this item.
+      → the 490-scene pool, `EXP_TAG=_learned_officialgt_500`, arm-C recipe, node
+      `eu-g6-069`) — TIMED OUT AGAIN, worse than attempt #1.** Only reached **epoch 80/1000**
+      in the full 24h (vs. epoch 150/1000 in the first 12h attempt) — `metrics.jsonl`'s last
+      write (epoch 50, val mIoU 0.246/AP50 0.158) has an mtime ~14h into the 24h job, so
+      staging+caching+50 epochs alone ate more than half the budget. `sacct` MaxRSS ≈ 241 GiB
+      — again under the 350 GB request, so still not our own cgroup limit.
+      **This changes the diagnosis from "bad node luck" to "this job's footprint is
+      structurally contention-prone": two different large-footprint attempts (job 6442237 on
+      `eu-g6-014`, job 6981912 on `eu-g6-069`) have now both stalled hard on different nodes,
+      while the one small-footprint sanity run (190 scenes, ~240 GB less RAM pressure) sailed
+      through cleanly on a third node (`eu-g6-046`) in 2h39m.** Two data points isn't proof,
+      but it's no longer a single unlucky draw either — the common factor across both bad
+      runs is the ~250 GB actual / 350 GB requested memory footprint, which plausibly makes
+      this job much more sensitive to *any* neighboring tenant's memory/bandwidth/disk
+      pressure than the 190-scene job ever was. **Not relaunching blind a third time.**
+
+      **Root cause refined from "node luck" to a footprint/NUMA effect (2026-07-15) — user
+      asked the right question ("is it actually the dataset?"), which prompted re-checking
+      the per-bundle timing log by scene-ID range instead of assuming.** Split job 6944946's
+      per-bundle timings into old (0000–0199) vs new (0200–0499) scenes by bundle pass:
+      bundle 0 both ranges fast (mean ~2s); bundle 1 old scenes STILL fast (mean 1.8s) while
+      new scenes (processed later in that same pass) already show p90 21s/max 82s; bundle 2
+      old scenes (now badly late in the job) degrade to p90 30s/max 61s. **Same scene IDs
+      are fast early / slow late — the slowdown tracks how much has already accumulated in
+      the host RAM cache at that point in the job, not scene content.** `scontrol show node`
+      on both bad-run nodes reports `Sockets=16, CoresPerSocket=8` for 384100 MB RAM — an
+      unusually fragmented ~24 GB-per-NUMA-domain topology. A resident cache that grows past
+      a few domains' worth (our ~250–310 GB run does; the working 190-scene run's ~580
+      bundles/~122 GB likely doesn't) increasingly touches memory physically remote from the
+      compute cores — a deterministic effect of OUR footprint vs. this hardware, independent
+      of node identity or other tenants (explains recurring on two different nodes with the
+      same accumulation-shaped pattern). Practical corollary: splitting the *tar file* into
+      two ~250-scene halves would NOT by itself fix a genuine single N≈490 run —
+      `train_multiscene.py` caches every train scene's bundles simultaneously regardless of
+      how many tar files they shipped in; only two separate ~245-scene runs would reduce
+      footprint, at the cost of not answering the original N≈490-in-one-model question.
+
+      **Relaunched (job 7206201, `d4rt_full`, `--time 8:00:00`,
+      `EXP_TAG=_learned_officialgt_500_b1`, `EXTRA_ARGS="--query_mode learned
+      --num_learned_queries 64 --bundles_per_scene 1"`)** — keeps the single unified
+      490-scene run (still answers the original scaling question) but drops
+      `--bundles_per_scene` 3→1, cutting the resident cache to ~500 bundles (~105 GB),
+      safely inside the size that ran clean in the 190-scene sanity check (~580
+      bundles/~122 GB). Trade-off: loses the 2 extra randomly-sampled augmentation bundles
+      per scene that the arm-C recipe used at N=190 — a real recipe deviation, flag it if
+      this run's numbers are compared directly to the 0.367/0.199 baseline. Job 7206201 was
+      accidentally cancelled by the user before it could run; resubmitted identically as
+      **job 7219652**. Pending as of 2026-07-15.
 - [X] **Dataset extension to 500 scenes (DONE 2026-07-09; pack job 6423316 shipping the tar).**
       Scenes 0200–0499 had no SAM3-era subset frames, so new tooling streams each scene's
       `.sens` and extracts only the stride-5 subset jpgs with early abort (~10% of each file
@@ -160,16 +205,43 @@ query-strategy study (arms A–D) is. Direction: don't pivot, reposition.
       are NOT comparable numbers; note the difference explicitly), then EPS3D, FAST3DIS,
       PanSt3R. Check whether any already claims (a) a query-init ablation or (b) 3D-anchored
       queries — both would change the plan below. Record findings in RELATED_WORK.md.
-- [ ] **Arm E — 3D-anchored queries (the main new experiment).** Seed queries from VGGT's own
-      predicted pointmap geometry instead of image-space (u,v): `QueryGenerator` is currently
-      purely 2D (Fourier(u,v) + view embed + RGB patch). Design sketch: sample/cluster anchor
-      points in the predicted 3D point cloud (point head runs anyway during feature caching),
-      encode each anchor's 3D position (Fourier in xyz) + pooled multi-view features → one
-      query per 3D location shared across views. Rationale: (i) fills the one query-strategy
-      cell no competitor has published; (ii) a 3D anchor is a natural one-query-per-object
-      dedup mechanism → directly attacks the over-prediction failure (338 kept vs 144 GT).
-      Follow the arm protocol: N=50 first, scale to N=190 only on a win vs arm C
-      (official-GT numbers). Pair with the no-object-weight sweep (same target: duplicate FPs).
+- [ ] **Arm E — 3D-anchored queries (the main new experiment). CODE DONE + TESTED
+      2026-07-15; GPU runs pending.** Seed queries from VGGT's own predicted pointmap
+      geometry instead of image-space (u,v). Implemented as `--query_mode anchor3d`
+      (+ `--num_anchors 64 --anchor_knn 8 --anchor_jitter`):
+      `models/anchor_queries.py` — each patch token gets a 3D position (confidence-weighted
+      mean of its 14×14 pixels' point-head output), anchors = deterministic farthest-point
+      sampling over the confidence-filtered, per-scene-normalized (zero-mean/unit-RMS) token
+      positions, content = mean feature of each anchor's kNN tokens in 3D (inherently
+      multi-view); query = proj(Fourier(xyz)) + proj(LayerNorm(pooled feats)), NO view
+      embedding — one query per 3D location shared across views. All anchor building is
+      frozen preprocessing in `build_bundle` (the point head runs once per bundle on the
+      agg_list already in hand; only the small anchor dict is cached, not the pointmap).
+      Matcher treats it like learned mode (coord_weight 0, mask-only cost); eval is
+      GT-free by construction (prompted == unprompted, like arm C). Tooling wired:
+      visualize_masks/demo_gradio rebuild anchors from the point head (deterministic),
+      eval_checkpoint.py inherits support via prepare_scene_bundles, eval_grid_ablation
+      rejects anchor3d (no coordinates). Tests: `tests/test_anchor_queries.py` (Fourier-3D
+      backward compat, token positions, FPS, normalization invariance, kNN pooling, head
+      end-to-end + config round-trip, train-loop wiring) — full suite green.
+      Rationale: (i) fills the one query-strategy cell no competitor has published
+      (RELATED_WORK gap #1 — verify vs SegVGGT/EPS3D/FAST3DIS before claiming);
+      (ii) 3D-spread anchors are a natural one-query-per-object dedup mechanism → directly
+      attacks the over-prediction failure (338 kept vs 144 GT).
+      (a) Single-scene overfit smoke — PASSED 2026-07-15 (scene0000_00, 300 ep, 4 frames,
+      64 anchors, official GT, local 4090): loss 2.86→0.28, prompted == unprompted
+      mIoU 0.925 / AP50 1.000 / class_acc 1.000, and the honest GT-free selection kept
+      EXACTLY 10 predictions for 10 GT instances out of 64 anchors — the intended
+      one-query-per-object dedup behavior, visible already in overfit.
+      (b) N=50 runs SUBMITTED 2026-07-15: job 7212666 (arm E,
+      `EXTRA_ARGS="--query_mode anchor3d --num_anchors 64 --anchor_knn 8
+      --anchor_jitter 0.02"`, EXP_TAG=_anchor3d) and job 7212769 (arm-C N=50
+      official-GT CONTROL, learned/64 — needed because the existing N=50 arm-C numbers
+      0.259/0.146 are SAM3-GT), both `slurm/train_scale50.sh` with INSTANCE_LEVEL=1,
+      scenes 0000–0049, val 0080–0089. Compare best val mIoU + honest val AP50.
+      (c) Scale to N=190 only on a win vs 0.367/0.199 (arm protocol). Pre-registered
+      ablations: K ∈ {32, 64, 128}; positional-only queries (drop pooled feats); pair
+      with the no-object-weight sweep (same duplicate-FP target).
 - [ ] **Cross-view consistency metric** in `train/eval_metrics.py` (+ test). Our decoder is
       intrinsically consistent by construction (`pred_masks [B,N,S,h,w]`, one query = one
       instance in all views) vs the fuse-2D-masks paradigm (PanSt3R/MV3DIS) — quantify it
