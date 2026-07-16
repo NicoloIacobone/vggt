@@ -9,11 +9,12 @@ This is a fork of **VGGT** (Visual Geometry Grounded Transformer, CVPR 2025) —
 Project history, design decisions, and results live in `docs/`:
 - `docs/MILESTONES.md` — **the single consolidated summary** of Milestones 1–3 (architecture, hard-won constraints, all results, qualitative findings, dataset & storage status). Read this first.
 - `docs/todo.md` — current open task list.
+- `docs/ARMS_SUMMARY.md` — one-page comparison table of the query-strategy arms A–E (what differs, all results, verdicts). The quick answer to "which arm won and why".
 - `docs/RELATED_WORK.md` — competitor landscape & positioning (2026-07-08 arXiv survey): direct competitors (SegVGGT et al.), the open research gaps the query arms map onto, and the "why not splatting" answer. Read before framing any result as a contribution.
 - `docs/RIEPILOGO_PROGETTO_IT.md` — full project narrative in Italian (architecture, motivations, experiments, interpretations) for the project owner.
 - `docs/HOOK_PLAN.md` — where/how the decoder hooks into VGGT.
-- `docs/slides_meeting_jun_15.md` — most recent supervision-meeting slides.
-- `docs/old/` — archived per-milestone detail (`MILESTONE_1/2/3.md`), executed plans (`NEXT_STEPS_PLAN.md`), the scaling-protocol analysis (`SCALING_RUNS_ANALYSIS.md`), addressed supervisor feedback, the original project brief (`prompt.md`), and the SAM3 preprocessing prompt. Consult these for the full debugging narrative behind a result.
+- `docs/slides_meeting_jul_16.md` — most recent supervision-meeting slides (arm-E closure, official-GT baselines, data-scaling answer).
+- `docs/old/` — archived per-milestone detail (`MILESTONE_1/2/3.md`), executed plans (`NEXT_STEPS_PLAN.md`, `OFFICIAL_GT_MIGRATION_PLAN.md`), the scaling-protocol analysis (`SCALING_RUNS_ANALYSIS.md`), addressed supervisor feedback, past meeting slides, the stale repo snapshot, the original project brief (`prompt.md`), and the SAM3 preprocessing prompt. Consult these for the full debugging narrative behind a result.
 
 ## Environment & Commands
 
@@ -29,7 +30,7 @@ python tests/test_eval.py        # instance-segmentation metrics
 python tests/test_milestone2.py  # no-object loss, grid queries, augmentation, metrics.jsonl, early-stop, train-grid/query-mode queries
 python tests/test_visualize_masks.py  # visualize_masks checkpoint-format handling (float/uint8/light) + overlays
 python tests/test_mask_upsampler.py   # Phase-5 MaskUpsampler pixel decoder + GT-resolution match
-python tests/test_anchor_queries.py   # Arm-E 3D-anchored queries (FPS, anchor building, anchor3d head + train wiring)
+python tests/test_anchor_queries.py   # Arm-E 3D-anchored queries (FPS, anchor building, anchor3d head + train wiring, v1 anchor_content/anchor_coord_scale variants)
 python tests/test_grid_ablation.py    # eval-only grid-density sweep (eval_grid_ablation.py)
 python tests/test_build_official_masks.py  # official-GT converter (synthetic zips/tsv → SAM3 layout + loader round-trip)
 python tests/test_eval_checkpoint.py       # cross-GT eval plumbing (arg inheritance/overrides, scene resolution)
@@ -66,6 +67,10 @@ python scripts/train_multiscene.py \
 # nan_to_num-guards the Hungarian cost (warns instead of crashing on non-finite entries).
 # Rerun outcome (2026-07-07): both fixes verified (B's collapse and D's NaN are gone) but
 # neither arm beats arm C — arms B/D closed, arm C stays the base (docs/MILESTONES.md).
+# Arm E (anchor3d, closed 2026-07-16): v0 and all three v1 variants (--anchor_content
+# learned/none, --anchor_coord_scale 0.2) lose to arm C at N=50 → no scale-up; the keeper
+# is the ablation story + calibration finding (docs/ARMS_SUMMARY.md). The N=490 arm-C run
+# (job 7219652) also closed the data question: 0.350/0.177 ≤ the N=190 baseline.
 
 # Scaling experiments (docs/MILESTONES.md) as SLURM jobs — submit from anywhere, they cd
 # to the repo and use myenv/. Val scenes 0080-0082 are held out of every train set. Each job
@@ -135,7 +140,7 @@ The hook point is `aggregated_tokens_list[-1]` from the aggregator: global scene
 Pipeline (one component per file, each with its phase test):
 
 1. `data/scannet_overfit.py` — `ScanNetSingleSceneDataset` / `ScanNetMultiSceneDataset`. Loads frames from the scene's `subset/` dir (the ~100 stride-5 frames that actually have masks — **not** `color/`, which has >5500 unmasked frames) and per-class binary mask PNGs from `masks/<class>/`. Assigns one **global, cross-view-consistent instance ID per class** by default (the binary per-class masks can't separate same-class objects — data limitation, not code). Pass `instance_level=True` (CLI `--instance_level`) to instead read `masks_instance/<class>_<k>/` and assign one ID per `(class, instance)`, so same-class objects are separated and `classes` repeats class indices (matcher/loss/eval unchanged — already instance-based). Image size 518 (must be divisible by VGGT's patch size 14); mask/eval resolution is the 37×37 patch grid.
-2. `models/d4rt_decoder.py` — `QueryGenerator` (Fourier-encoded (u,v) + learned view embedding + 9×9 RGB patch MLP, summed → `[B, N, 256]`) and `InstanceDecoder` (4-layer/8-head `nn.TransformerDecoder`, queries as tgt, projected F as memory) with `class_head` (20 logits = 19 ScanNet classes + background at index 0), `mask_embed_head`, and a dense Mask2Former-style mask head → `pred_masks [B, N, S, h, w]`. `D4RTInstanceSegmentationHead` chains them. `query_mode` (`point` default / `learned` DETR object queries / `hybrid` / `anchor3d` Arm-E 3D anchors) and `mask_upsample` (1 default = 37×37 patch grid; 2/4 route through `models/mask_upsampler.py::MaskUpsampler` for sharper masks, with GT built at the matching resolution) are constructor + `head_config` options — keep the round-trip intact (anchor3d adds `num_anchors`/`anchor_knn` to `head_config`).
+2. `models/d4rt_decoder.py` — `QueryGenerator` (Fourier-encoded (u,v) + learned view embedding + 9×9 RGB patch MLP, summed → `[B, N, 256]`) and `InstanceDecoder` (4-layer/8-head `nn.TransformerDecoder`, queries as tgt, projected F as memory) with `class_head` (20 logits = 19 ScanNet classes + background at index 0), `mask_embed_head`, and a dense Mask2Former-style mask head → `pred_masks [B, N, S, h, w]`. `D4RTInstanceSegmentationHead` chains them. `query_mode` (`point` default / `learned` DETR object queries / `hybrid` / `anchor3d` Arm-E 3D anchors) and `mask_upsample` (1 default = 37×37 patch grid; 2/4 route through `models/mask_upsampler.py::MaskUpsampler` for sharper masks, with GT built at the matching resolution) are constructor + `head_config` options — keep the round-trip intact (anchor3d adds `num_anchors`/`anchor_knn`/`anchor_content`/`anchor_coord_scale` to `head_config`; the latter two are the Arm-E v1 levers — `anchor_content` `pooled` (v0) / `learned` (DAB-style E+C hybrid, per-slot embeddings) / `none` (positional-only), and `anchor_coord_scale` pre-scales the normalized anchor xyz before Fourier encoding because the 1..10 cycles/unit bands were sized for (u,v)∈[0,1], not the ±2.5 anchor span — CLI default 0.2, constructor default 1.0 so old checkpoints rebuild as v0).
    `models/anchor_queries.py` (Arm E) — builds the `anchors` dict consumed by `query_mode="anchor3d"`: per-patch-token 3D positions from the frozen point head (confidence-weighted 14×14 pixel mean), deterministic FPS over the per-scene-normalized token cloud, kNN-in-3D feature pooling. Runs once per bundle at caching time (`build_bundle` calls the point head on the agg_list it already has); queries are GT-free by construction, so prompted == unprompted at eval (reported under the unprompted/honest column, like learned mode). Viz/demo rebuild anchors from the point head — nothing anchor-related is stored in checkpoints beyond `head_config`.
 3. `train/loss.py` — `PointBipartiteMatcher` (Hungarian, mask-aware Dice+BCE cost) + `D4RTLoss` (Focal class loss + Dice + fg-weighted BCE; optional DETR-style no-object loss on unmatched queries via `no_object_weight`). Batch-aware: for `B > 1`, GT args are lists of per-sample tensors.
 4. `train/eval_metrics.py` — mIoU / AP50 / AP75 / mAP / class_acc. Evaluation reports **prompted** (queries at GT centroids) and **unprompted** (uniform grid, no GT) metrics; unprompted is the honest detection number.

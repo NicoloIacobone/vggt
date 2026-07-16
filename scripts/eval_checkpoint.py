@@ -127,6 +127,9 @@ def main():
         mask_upsample=head_config.get("mask_upsample", ck_args.get("mask_upsample", 1)),
         num_anchors=head_config.get("num_anchors", ck_args.get("num_anchors", 0)),
         anchor_knn=head_config.get("anchor_knn", ck_args.get("anchor_knn", 8)),
+        anchor_content=head_config.get("anchor_content", ck_args.get("anchor_content", "pooled")),
+        anchor_coord_scale=head_config.get("anchor_coord_scale",
+                                           ck_args.get("anchor_coord_scale", 1.0)),
     ).to(device)
     model.decoder_head.load_state_dict(ckpt["decoder_head_state_dict"])
     model.eval()

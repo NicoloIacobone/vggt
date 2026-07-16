@@ -415,6 +415,8 @@ def save_checkpoint(path: Path, model, optimizer, scheduler, epoch, args,
         "mask_upsample": int(getattr(args, "mask_upsample", 1)),
         "num_anchors": int(getattr(args, "num_anchors", 0)),
         "anchor_knn": int(getattr(args, "anchor_knn", 8)),
+        "anchor_content": getattr(args, "anchor_content", "pooled"),
+        "anchor_coord_scale": float(getattr(args, "anchor_coord_scale", 1.0)),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -513,6 +515,18 @@ def main():
     parser.add_argument("--anchor_jitter", type=float, default=0.0,
                         help="Std of Gaussian jitter on normalized anchor xyz during training "
                              "(Arm-E analog of --query_jitter; 0 disables)")
+    parser.add_argument("--anchor_content", type=str, default="pooled",
+                        choices=["pooled", "learned", "none"],
+                        help="Arm-E query content source: 'pooled' (v0 default) = kNN-pooled "
+                             "frozen patch-token features; 'learned' (v1, DAB-DETR-style E+C "
+                             "hybrid) = per-slot learned embeddings on anchor positions; "
+                             "'none' = positional-only ablation.")
+    parser.add_argument("--anchor_coord_scale", type=float, default=0.2,
+                        help="Scale on normalized anchor xyz before Fourier encoding. The "
+                             "Fourier bands (1..10 cycles/unit) were designed for (u,v) in "
+                             "[0,1]; anchor xyz spans ~±2.5, so the v0 value 1.0 wraps the "
+                             "base band (no unambiguous coarse position). Default 0.2 maps "
+                             "the span into one base-band period; pass 1.0 to reproduce v0.")
     parser.add_argument("--learned_query_lr_scale", type=float, default=1.0,
                         help="LR multiplier for the learned object-query embeddings (own AdamW "
                              "param group; the cosine schedule applies per group). <1 tames the "
@@ -620,6 +634,8 @@ def main():
         mask_upsample=args.mask_upsample,
         num_anchors=args.num_anchors,
         anchor_knn=args.anchor_knn,
+        anchor_content=args.anchor_content,
+        anchor_coord_scale=args.anchor_coord_scale,
     ).to(device)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Trainable parameters: {trainable:,}")

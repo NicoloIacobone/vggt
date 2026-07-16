@@ -55,6 +55,8 @@ class D4RTModel(nn.Module):
         mask_upsample: int = 1,
         num_anchors: int = 0,
         anchor_knn: int = 8,
+        anchor_content: str = "pooled",
+        anchor_coord_scale: float = 1.0,
     ):
         super().__init__()
         self.freeze_backbone = freeze_backbone
@@ -92,6 +94,8 @@ class D4RTModel(nn.Module):
             mask_upsample=mask_upsample,
             num_anchors=num_anchors,
             anchor_knn=anchor_knn,
+            anchor_content=anchor_content,
+            anchor_coord_scale=anchor_coord_scale,
         )
 
     def forward(

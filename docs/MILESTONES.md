@@ -233,6 +233,61 @@ finished, so only the auto-render was cut; overlays re-rendered afterwards, and
 Full detail (incl. the SCALING_RUNS_ANALYSIS protocol fixes that made the curve fair):
 `docs/old/MILESTONE_3.md`, `docs/old/SCALING_RUNS_ANALYSIS.md`.
 
+**Arm E — 3D-anchored queries (v0 2026-07-15, v1 ablation 2026-07-16 — CLOSED: no variant
+beats arm C; the deliverable is the failure decomposition + calibration finding):**
+`--query_mode anchor3d` seeds queries from VGGT's *own* predicted pointmap instead of
+image-space (u,v) or pure embeddings: each patch token gets a 3D position
+(confidence-weighted mean of its 14×14 pixels from the frozen point head), anchors =
+deterministic FPS over the per-scene-normalized token cloud (K=64), v0 content =
+kNN(8)-pooled frozen token features; GT-free by construction (prompted == unprompted).
+Motivation: the one query-init cell no competitor covers (RELATED_WORK gap #1) + 3D spread
+as a built-in duplicate suppressor against the known over-prediction failure.
+
+| N=50 head-to-head (instance-level official GT, wide val) | best val mIoU | honest AP50 | kept preds / GT (final ep, 10 val scenes) |
+|---|---|---|---|
+| E v0 anchor3d (job 7212666, `d4rt_m2_scale50_inst_anchor3d_20260715_172331`) | 0.179 @ep350 | 0.072 @ep350 | **144 / 133 = 1.08×** |
+| C learned control (job 7212769, `d4rt_m2_scale50_inst_learned_officialgt_20260715_172355`) | **0.269** @ep200 | **0.144** @ep200 | 184 / 133 = 1.38× |
+
+- **The dedup hypothesis held** (1.08× vs 1.38× kept/GT; the single-scene overfit kept
+  exactly 10 predictions for 10 GT out of 64 anchors) — what loses is mask/detection
+  quality, not calibration.
+- **v0 post-mortem (2026-07-16 code review):** (i) the Fourier bands (1..10 cycles/unit,
+  sized for (u,v)∈[0,1]) *wrap* the normalized anchor xyz (span ≈ ±2.5) — no unambiguous
+  coarse position, the positional half of every query was effectively scrambled; (ii) v0
+  also **underfits train** (train mIoU 0.535 @ep1000 vs arm C 0.731) with class loss
+  plateauing 10× higher (0.086 vs 0.008) — kNN(8)-pooled surface-point features are weak,
+  scene-specific content the class head struggles with, and no slot can specialize.
+- **v1 levers** (both in `head_config`; old checkpoints rebuild as exact v0):
+  `--anchor_coord_scale` (default 0.2 maps the span into one base-band period; 1.0 = v0)
+  and `--anchor_content {pooled,learned,none}` — `learned` is the DAB-DETR-style E+C
+  hybrid (per-slot learned embeddings on anchor geometry: keeps the dedup, restores
+  trainable content), `none` the positional-only ablation. Win bar = arm C N=50
+  0.269/0.144; per protocol, N=190 only on a win.
+
+**Arm-E v1 results (2026-07-16, N=50 official GT, all 1000 ep; kept/GT = honest kept
+predictions vs GT at the best-mIoU checkpoint, same protocol for every row):**
+
+| Variant | best val mIoU | honest AP50 | kept/GT | job |
+|---------|---------------|-------------|---------|-----|
+| E v0 (pooled, scale 1.0) | 0.179 @350 | 0.072 | 0.83× | 7212666 |
+| E v1 pooled + Fourier fix | 0.156 @400 | 0.086 | 0.59× | 7322625 |
+| E v1 hybrid (learned content) | 0.207 @350 | **0.121** @750 | 0.65× | 7322623 |
+| E v1 positional-only | **0.230** @900 | 0.099 | 0.86× | 7322624 |
+| arm C control (the bar) | **0.269** @200 | **0.144** | 1.23× | 7212769 |
+
+- **Arm E is CLOSED** (no variant clears the bar → no N=190 scale-up), but the ablation
+  decomposes v0's failure cleanly: the Fourier fix alone changes nothing (pooled+fix ≈ v0)
+  → **the kNN-pooled frozen features were actively harmful**, not just badly encoded;
+  learned content on the same geometry recovers +0.05 AP50; *removing content entirely* is
+  even better on mIoU — 0.230 from pure geometry, within 0.04 of arm C, and the **least
+  overfit run of any arm** (train mIoU 0.397 @ep1000 with val still ~0.22, vs arm C's
+  0.73/0.17 decay).
+- **Geometry regularizes but caps detection:** every E variant calibrates below 1× kept/GT
+  (C over-predicts at 1.23×) and none reaches C's AP50 — the 3D-spread prior suppresses
+  duplicates as designed but its slots can't specialize enough at N=50. Thesis-usable
+  form: this decomposition + the calibration finding (`docs/ARMS_SUMMARY.md`), not a new
+  base arm.
+
 ---
 
 ## Persistent qualitative findings (carry into next experiments)
@@ -320,6 +375,39 @@ cross-class duplicates.** New default tar: `scannet_official_gt_500.tar.zst`.
   `--tmp=24000` MB. No unpacked `scans/` tree exists on work; the official-GT build tree is
   currently also unpacked at `/cluster/scratch/niacobone/scannet_official_build/scans` (scratch,
   purgeable — the tar on work is canonical). Old `scannet_build*` scratch trees are hollow.
+
+**N=490 scaling point on the 500-scene tar (2026-07-16, job 7219652) — plateau holds, with a
+recipe caveat.** Arm C (learned queries, instance GT) rerun on all 490 non-val scenes
+(0000–0079+0090–0499, same held-out val 0080–0089): best val mIoU **0.350** @ep150, best
+honest val[grid] AP50 **0.177** @ep100, both then declining as train mIoU kept climbing
+(0.38→0.68 by ep700) — classic overfitting, not a still-improving curve. **The N=200 plateau
+is not broken by 2.6x more official-GT data**: N=490's mIoU ceiling (0.350) matches the N=190
+sanity rerun's own ceiling (0.350 @ep500, same day, same recipe — see below) rather than
+exceeding it, and AP50 is if anything slightly below the 0.196–0.199 baseline range.
+**Caveat — not a fully clean N comparison**: this run used `--bundles_per_scene 1` (vs. 3 at
+N=190), a forced infra tradeoff (below), so it has less augmentation/regularization than the
+arm-C recipe the baseline was measured with; the earlier overfitting onset (peak at ep100–150
+vs. ep450–500) is consistent with either "more data converges faster" or "less augmentation
+overfits sooner" and this run alone can't separate the two. Directionally, though, it lands
+in the same 0.35/0.18-ish band the N=190–200 runs already occupy, not above it.
+
+- **Infra finding: this job's own memory footprint, not the node, was the bottleneck.**
+  Two prior full-recipe attempts (`--bundles_per_scene 3` → ~1480 cached bundles, ~250–310 GB
+  host RAM) timed out after 12h (epoch 150/1000) and 24h (epoch 80/1000) on two different
+  nodes, while a 190-scene control (~580 bundles, ~122 GB) completed cleanly in 2h39m on a
+  third. Per-bundle timing logs showed the *same* scene IDs fast early / slow late within a
+  single job — the slowdown tracks accumulated cache size, not scene content or which node.
+  `scontrol show node` on both bad runs reports an unusually fragmented topology
+  (`Sockets=16, CoresPerSocket=8` for 384 GB RAM, ~24 GB/NUMA-domain) — consistent with a
+  resident set that outgrows local-domain memory forcing increasingly remote (slow) access,
+  a deterministic effect of footprint vs. this hardware rather than other tenants. Dropping
+  `--bundles_per_scene` to 1 (~500 bundles, ~105 GB, confirmed via `sacct` MaxRSS ≈ 99 GB)
+  fixed it — this run reached epoch 750/1000 in its 8h budget with no pathological stalls.
+  Splitting the *tar file* into smaller shards would not have helped a single unified run:
+  `train_multiscene.py` caches every train scene's bundles simultaneously regardless of how
+  many archives they shipped in, so total resident memory is set by scene count, not
+  packaging. A true apples-to-apples N=490-at-bundles=3 comparison would need a code change
+  (stream/chunk the bundle cache instead of holding it all host-resident) — not attempted.
 
 ## Storage layout
 - Repo: `/cluster/scratch/niacobone/vggt`. Runs/checkpoints:

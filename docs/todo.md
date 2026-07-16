@@ -5,8 +5,9 @@ detail. This list tracks only what is still open.
 
 ## Open — next experiments (GPU)
 
-- [ ] **Arm-C rerun on the full 500-scene official GT — TIMED OUT, inconclusive, needs
-      relaunch (job 6442237, submitted 2026-07-09, killed at the 12h limit 2026-07-10).**
+- [X] **Arm-C rerun on the full 500-scene official GT — RESOLVED 2026-07-16 (job 7219652):
+      N=490 does NOT beat N=190.** (Saga of the earlier attempts below, kept for the
+      NUMA/footprint diagnosis.)
       `slurm/train_full.sh` updated to pull its "whole dataset" train pool from
       `scannet_official_gt_500.tar.zst` — 0000–0079 + 0090–0499 (490 scenes, was 190), same
       held-out val 0080–0089; submitted with the arm-C recipe (`INSTANCE_LEVEL=1,
@@ -122,7 +123,19 @@ detail. This list tracks only what is still open.
       per scene that the arm-C recipe used at N=190 — a real recipe deviation, flag it if
       this run's numbers are compared directly to the 0.367/0.199 baseline. Job 7206201 was
       accidentally cancelled by the user before it could run; resubmitted identically as
-      **job 7219652**. Pending as of 2026-07-15.
+      **job 7219652**.
+      **RESULT (2026-07-16, run `d4rt_full_inst_learned_officialgt_500_b1_20260716_053748`):
+      the footprint fix WORKED — no stalls, ~750/1000 epochs inside the 8h limit (TIMEOUT
+      only cut the overfitting tail; val had peaked by ep150 and was declining, bests
+      saved).** Best val mIoU **0.350** @ep150 / honest AP50 **0.177** @ep100, vs the
+      N=190 baseline 0.367/0.199. **2.6× more scenes does NOT improve arm C** — if
+      anything slightly below baseline, and it now overfits *faster* (peak @ep100–150 vs
+      @ep450–500 at N=190; ep700: train 0.677 vs val 0.272). Caveats before calling the
+      data-scaling question fully closed: `--bundles_per_scene` 1 vs 3 removes the
+      augmentation bundles (a real recipe deviation), and the new scenes 0200–0499 are
+      distribution-unvetted. But the direction is clear: data quantity is not the current
+      lever for arm C either (consistent with the arm-A plateau); protocol/capacity levers
+      (frame sampling, splits — see the SegVGGT-alignment item) matter more.
 - [X] **Dataset extension to 500 scenes (DONE 2026-07-09; pack job 6423316 shipping the tar).**
       Scenes 0200–0499 had no SAM3-era subset frames, so new tooling streams each scene's
       `.sens` and extracts only the stride-5 subset jpgs with early abort (~10% of each file
@@ -205,8 +218,9 @@ query-strategy study (arms A–D) is. Direction: don't pivot, reposition.
       are NOT comparable numbers; note the difference explicitly), then EPS3D, FAST3DIS,
       PanSt3R. Check whether any already claims (a) a query-init ablation or (b) 3D-anchored
       queries — both would change the plan below. Record findings in RELATED_WORK.md.
-- [ ] **Arm E — 3D-anchored queries (the main new experiment). CODE DONE + TESTED
-      2026-07-15; GPU runs pending.** Seed queries from VGGT's own predicted pointmap
+- [X] **Arm E — 3D-anchored queries (CLOSED 2026-07-16: v0 + all three v1 variants lose to
+      arm C at N=50 → no scale-up; the deliverable is the ablation story — see (d) and
+      `docs/ARMS_SUMMARY.md`).** Seed queries from VGGT's own predicted pointmap
       geometry instead of image-space (u,v). Implemented as `--query_mode anchor3d`
       (+ `--num_anchors 64 --anchor_knn 8 --anchor_jitter`):
       `models/anchor_queries.py` — each patch token gets a 3D position (confidence-weighted
@@ -233,15 +247,74 @@ query-strategy study (arms A–D) is. Direction: don't pivot, reposition.
       mIoU 0.925 / AP50 1.000 / class_acc 1.000, and the honest GT-free selection kept
       EXACTLY 10 predictions for 10 GT instances out of 64 anchors — the intended
       one-query-per-object dedup behavior, visible already in overfit.
-      (b) N=50 runs SUBMITTED 2026-07-15: job 7212666 (arm E,
-      `EXTRA_ARGS="--query_mode anchor3d --num_anchors 64 --anchor_knn 8
-      --anchor_jitter 0.02"`, EXP_TAG=_anchor3d) and job 7212769 (arm-C N=50
-      official-GT CONTROL, learned/64 — needed because the existing N=50 arm-C numbers
-      0.259/0.146 are SAM3-GT), both `slurm/train_scale50.sh` with INSTANCE_LEVEL=1,
-      scenes 0000–0049, val 0080–0089. Compare best val mIoU + honest val AP50.
-      (c) Scale to N=190 only on a win vs 0.367/0.199 (arm protocol). Pre-registered
-      ablations: K ∈ {32, 64, 128}; positional-only queries (drop pooled feats); pair
-      with the no-object-weight sweep (same duplicate-FP target).
+      (b) N=50 head-to-head (2026-07-15, both COMPLETED 1000 ep, scenes 0000–0049, val
+      0080–0089, instance-level official GT): **arm E v0 LOSES to arm C on quality but
+      WINS on calibration.** Arm E (job 7212666, run
+      `d4rt_m2_scale50_inst_anchor3d_20260715_172331`): best val mIoU **0.179** / honest
+      AP50 **0.072**, both @ep350, then overfits (final 0.118/0.038, train−val gap 0.42).
+      Arm-C control (job 7212769, run
+      `d4rt_m2_scale50_inst_learned_officialgt_20260715_172355`): best val mIoU
+      **0.269** / AP50 **0.144** @ep200 (≈ the SAM3-GT N=50 numbers 0.259/0.146 — arm C
+      is GT-robust at this scale). BUT the dedup hypothesis held: final-epoch kept
+      predictions on the 10 val scenes total **144 vs 133 GT (1.08×) for arm E** against
+      **184 vs 133 (1.38×) for arm C** — 3D-spread anchors calibrate the prediction
+      count as designed; what loses is mask/detection quality, i.e. the v0 query
+      *content* (frozen kNN-pooled features + Fourier(xyz)) is weaker than fully
+      learned embeddings. Per the arm protocol: **NO N=190 scale-up for v0.**
+      (c) **v1 CODE DONE + TESTED 2026-07-16; GPU runs pending.** Code review of v0 found a
+      real bug alongside the known content weakness: the Fourier bands
+      (`logspace(1..10)` cycles/unit, designed for (u,v) ∈ [0,1]) wrap the normalized
+      anchor xyz (span ≈ ±2.5, unit-RMS + FPS favoring hull extremes) — the base band has
+      period 1.0, so there is NO unambiguous coarse-position signal; v0's positional half
+      was effectively scrambled. Consistent with v0's metrics: it *underfits train* too
+      (train mIoU 0.535 @ep1000 vs arm C 0.731) and its class loss plateaus 10× higher
+      (0.086 vs 0.008 — pooled surface-point features are hard for the class head). Two
+      new levers, both in `head_config` (old checkpoints rebuild as exact v0 via
+      constructor defaults; verified against the v0 checkpoint):
+      - `--anchor_coord_scale` (CLI default **0.2** = the fix, mapping the ±2.5 span into
+        one base-band period; 1.0 reproduces v0) — pre-scales xyz before Fourier encoding.
+      - `--anchor_content {pooled,learned,none}` (default pooled = v0): **learned** is the
+        DAB-DETR-style E+C hybrid — PER-SLOT `nn.Embedding(num_anchors, hidden)` content on
+        anchor positions (per-slot, not shared: with the linear query projection a single
+        shared vector would collapse to positional-only + a bias), keeps the geometric
+        dedup, restores trainable content, ignores the pooled feats; **none** is the
+        positional-only ablation isolating whether v0's pooled features help or hurt.
+      Wiring: train_multiscene/train_overfit(D4RTModel)/visualize_masks/eval_checkpoint
+      all pass the new keys through; demo_gradio inherits via `**head_config`;
+      `--learned_query_lr_scale` deliberately does NOT cover the anchor content embeddings
+      (main param group, default behavior). Tests extended
+      (`tests/test_anchor_queries.py`: coord-scale equivalence + base-band-wrap premise,
+      learned/none content, K-mismatch error, v0/v1 round-trips) — full suite green.
+      Next GPU runs (N=50, same protocol/win bar as (b): arm C 0.269/0.144): (i) hybrid
+      `--anchor_content learned`, (ii) positional-only `--anchor_content none`,
+      (iii) optionally pooled + default scale to isolate the Fourier fix alone; K ∈ {32,
+      128} only if (i) wins.
+      **LAUNCHED 2026-07-16** via `slurm/train_scale50.sh` (INSTANCE_LEVEL=1, all with
+      `--anchor_jitter 0.02`): job **7322623** = (i) hybrid (`EXP_TAG=_anchor3d_hybrid`),
+      job **7322624** = (ii) positional-only (`_anchor3d_posonly`), job **7322625** =
+      (iii) pooled + coord-scale fix only (`_anchor3d_pooled_fixscale`). All three differ
+      from v0 by the default `--anchor_coord_scale 0.2`, so (iii) isolates the Fourier fix
+      and (i)/(ii) isolate the content source on top of it.
+      (d) **v1 RESULTS (2026-07-16, all three COMPLETED 1000 ep) — no variant clears the
+      arm-C bar (0.269/0.144); arm E CLOSED per the decision rule.** Best val mIoU /
+      honest AP50 / kept-vs-GT calibration at the best-mIoU checkpoint (same-protocol
+      figures for the older runs: v0 0.179/0.072/0.83×, arm C 0.269/0.144/1.23×; the
+      final-epoch counts quoted in (b) are the ep1000 version of the same comparison):
+      - (iii) pooled+fix (`..._pooled_fixscale_20260716_121539`): **0.156 / 0.086 /
+        0.59×** — the Fourier fix alone is a wash → the encoding was NOT the binding
+        failure; the kNN-pooled frozen features themselves were.
+      - (i) hybrid (`..._anchor3d_hybrid_20260716_121540`): **0.207 / 0.121 / 0.65×** —
+        best E-family AP50 (+0.05 over v0), learned content helps, but still −0.023
+        below arm C.
+      - (ii) positional-only (`..._anchor3d_posonly_20260716_121541`): **0.230 / 0.099 /
+        0.86×** — best E-family mIoU, within 0.04 of arm C, from PURE geometry (zero
+        content), and the least overfit run of any arm (train mIoU 0.397 @ep1000 with
+        val still ~0.22, vs arm C's train 0.73 / val 0.17 decay).
+      Reading: the v1 ablation cleanly decomposes v0's failure (pooled features harmful >
+      encoding scrambled); every E variant calibrates below 1× kept/GT while C
+      over-predicts at 1.23×; geometry-only queries are a strong regularizer that still
+      caps detection at N=50. Thesis chapter = this decomposition + the calibration
+      finding. K ∈ {32,128} sweeps dropped (were contingent on a win).
 - [ ] **Cross-view consistency metric** in `train/eval_metrics.py` (+ test). Our decoder is
       intrinsically consistent by construction (`pred_masks [B,N,S,h,w]`, one query = one
       instance in all views) vs the fuse-2D-masks paradigm (PanSt3R/MV3DIS) — quantify it

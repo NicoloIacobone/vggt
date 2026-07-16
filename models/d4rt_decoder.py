@@ -191,6 +191,9 @@ class QueryGenerator(nn.Module):
         query_mode: str = "point",
         num_learned_queries: int = 0,
         memory_dim: int = 2048,
+        num_anchors: int = 0,
+        anchor_content: str = "pooled",
+        anchor_coord_scale: float = 1.0,
     ):
         super().__init__()
         if query_mode not in ("point", "learned", "hybrid", "anchor3d"):
@@ -198,11 +201,18 @@ class QueryGenerator(nn.Module):
                 f"query_mode must be point/learned/hybrid/anchor3d, got {query_mode!r}")
         if query_mode in ("learned", "hybrid") and num_learned_queries <= 0:
             raise ValueError(f"query_mode={query_mode} needs num_learned_queries > 0")
+        if anchor_content not in ("pooled", "learned", "none"):
+            raise ValueError(
+                f"anchor_content must be pooled/learned/none, got {anchor_content!r}")
+        if query_mode == "anchor3d" and anchor_content == "learned" and num_anchors <= 0:
+            raise ValueError("anchor_content='learned' needs num_anchors > 0")
         self.num_views = num_views
         self.hidden_dim = hidden_dim
         self.patch_size = patch_size
         self.query_mode = query_mode
         self.num_learned_queries = num_learned_queries
+        self.anchor_content = anchor_content
+        self.anchor_coord_scale = anchor_coord_scale
 
         # Point-prompt branch (Fourier pos + view embedding + local RGB patch). Always built
         # for point/hybrid; harmless (and kept) for "learned" so the module is uniform.
@@ -225,20 +235,32 @@ class QueryGenerator(nn.Module):
 
         # Arm E (anchor3d): queries from 3D anchor points sampled in VGGT's own predicted
         # pointmap (models/anchor_queries.py builds the anchors at bundle-caching time).
-        # Query = proj(Fourier(xyz)) + proj(LayerNorm(pooled patch-token features)); the
-        # LayerNorm is essential for the same reason as the memory norm in InstanceDecoder —
-        # raw VGGT features have huge magnitudes. No view embedding: one query per 3D
-        # location, shared across all views by construction.
+        # Positional part: Fourier(anchor_coord_scale * xyz). The scale matters — the
+        # Fourier bands (1..max_freq cycles/unit) were designed for (u,v) in [0, 1], while
+        # normalized anchor xyz spans roughly ±2.5 (unit-RMS with FPS favoring hull
+        # extremes), so unscaled coordinates wrap the base band and carry no unambiguous
+        # coarse position. 1.0 keeps the v0 behavior for old checkpoints; ~0.2 maps the
+        # span into one base-band period.
+        # Content part (anchor_content):
+        #   "pooled"  (v0) — proj(LayerNorm(kNN-pooled patch-token features)); the LayerNorm
+        #             is essential for the same reason as the memory norm in InstanceDecoder.
+        #   "learned" (v1, DAB-DETR-style E+C hybrid) — per-slot learned embeddings; anchors
+        #             supply only geometry (dedup), content is trainable like arm C.
+        #   "none"    — positional-only ablation (content = 0).
+        # No view embedding in any variant: one query per 3D location, shared across views.
         if query_mode == "anchor3d":
             self.anchor_pos_proj = nn.Linear(6 * num_freqs, hidden_dim)  # 2 * 3 * num_freqs
-            self.anchor_feat_norm = nn.LayerNorm(memory_dim)
-            self.anchor_feat_proj = nn.Linear(memory_dim, hidden_dim)
             self.anchor_query_proj = nn.Linear(hidden_dim, hidden_dim)
+            self.anchor_feat_norm = nn.LayerNorm(memory_dim) if anchor_content == "pooled" else None
+            self.anchor_feat_proj = nn.Linear(memory_dim, hidden_dim) if anchor_content == "pooled" else None
+            self.anchor_content_queries = (
+                nn.Embedding(num_anchors, hidden_dim) if anchor_content == "learned" else None)
         else:
             self.anchor_pos_proj = None
             self.anchor_feat_norm = None
             self.anchor_feat_proj = None
             self.anchor_query_proj = None
+            self.anchor_content_queries = None
 
     def forward(
         self,
@@ -264,8 +286,19 @@ class QueryGenerator(nn.Module):
             if anchors is None:
                 raise ValueError("query_mode='anchor3d' requires the `anchors` argument "
                                  "({'xyz': [B, K, 3], 'feats': [B, K, memory_dim]})")
-            pos = self.anchor_pos_proj(self.pos_encoder(anchors["xyz"]))       # [B, K, hidden]
-            content = self.anchor_feat_proj(self.anchor_feat_norm(anchors["feats"]))
+            xyz = anchors["xyz"] * self.anchor_coord_scale
+            pos = self.anchor_pos_proj(self.pos_encoder(xyz))                  # [B, K, hidden]
+            if self.anchor_content == "pooled":
+                content = self.anchor_feat_proj(self.anchor_feat_norm(anchors["feats"]))
+            elif self.anchor_content == "learned":
+                K = anchors["xyz"].shape[1]
+                if K != self.anchor_content_queries.num_embeddings:
+                    raise ValueError(
+                        f"anchor_content='learned' has {self.anchor_content_queries.num_embeddings} "
+                        f"per-slot embeddings but got {K} anchors — num_anchors must match")
+                content = self.anchor_content_queries.weight.unsqueeze(0).expand(B, -1, -1)
+            else:  # "none": positional-only ablation
+                content = torch.zeros_like(pos)
             return self.anchor_query_proj(pos + content)                       # [B, K, hidden]
         if self.query_mode == "learned":
             return self.learned_queries.weight.unsqueeze(0).expand(B, -1, -1)  # [B, M, hidden]
@@ -517,6 +550,8 @@ class D4RTInstanceSegmentationHead(nn.Module):
         mask_upsample: int = 1,
         num_anchors: int = 0,
         anchor_knn: int = 8,
+        anchor_content: str = "pooled",
+        anchor_coord_scale: float = 1.0,
     ):
         super().__init__()
         if query_mode == "anchor3d" and num_anchors <= 0:
@@ -524,11 +559,16 @@ class D4RTInstanceSegmentationHead(nn.Module):
         self.query_mode = query_mode
         self.num_learned_queries = num_learned_queries
         self.mask_upsample = mask_upsample
-        # Anchor-building parameters (Arm E). Not used by the module itself — anchors are
-        # built outside (models/anchor_queries.py) from the frozen point head — but stored
-        # here (and in head_config) so eval/viz tooling can rebuild identical anchors.
+        # Anchor-building parameters (Arm E). num_anchors/anchor_knn are not used by the
+        # module itself — anchors are built outside (models/anchor_queries.py) from the
+        # frozen point head — but stored here (and in head_config) so eval/viz tooling can
+        # rebuild identical anchors. anchor_content/anchor_coord_scale DO shape the
+        # QueryGenerator (v1 variants); defaults = v0 behavior so old checkpoints rebuild
+        # identically from a head_config that lacks the keys.
         self.num_anchors = num_anchors
         self.anchor_knn = anchor_knn
+        self.anchor_content = anchor_content
+        self.anchor_coord_scale = anchor_coord_scale
         self.query_generator = QueryGenerator(
             num_views=num_views,
             hidden_dim=hidden_dim,
@@ -536,6 +576,9 @@ class D4RTInstanceSegmentationHead(nn.Module):
             query_mode=query_mode,
             num_learned_queries=num_learned_queries,
             memory_dim=memory_dim,
+            num_anchors=num_anchors,
+            anchor_content=anchor_content,
+            anchor_coord_scale=anchor_coord_scale,
         )
         self.instance_decoder = InstanceDecoder(
             hidden_dim=hidden_dim,

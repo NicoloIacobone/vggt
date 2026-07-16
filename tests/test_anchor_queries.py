@@ -10,6 +10,8 @@ CPU-only, no backbone weights. Covers:
     kNN content pooling, tiny-scene padding
   - QueryGenerator/D4RTInstanceSegmentationHead anchor3d forward: shapes, no NaN,
     gradient flow, anchors-required error, head_config round-trip
+  - v1 variants: anchor_coord_scale (Fourier-band fix) and anchor_content
+    learned (DAB-style E+C hybrid) / none (positional-only), incl. v0 backward compat
   - jitter_anchors augmentation
 """
 
@@ -193,6 +195,111 @@ def test_anchor3d_query_generator():
     print("✅ passed\n")
 
 
+def test_anchor_coord_scale():
+    print("=== anchor_coord_scale (v1 Fourier-band fix) ===")
+    torch.manual_seed(0)
+    B, K, C = 1, 8, 64
+    qg = QueryGenerator(num_views=4, hidden_dim=32, query_mode="anchor3d", memory_dim=C,
+                        anchor_coord_scale=0.2)
+    qg_v0 = QueryGenerator(num_views=4, hidden_dim=32, query_mode="anchor3d", memory_dim=C)
+    qg_v0.load_state_dict(qg.state_dict())  # identical weights, scale 1.0 (default)
+    assert qg_v0.anchor_coord_scale == 1.0, "constructor default must stay the v0 value"
+
+    anchors = {"xyz": torch.randn(B, K, 3) * 2.5, "feats": torch.randn(B, K, C)}
+    ph_c, ph_v = torch.zeros(B, K, 2), torch.zeros(B, K, dtype=torch.long)
+    images = torch.rand(B, 2, 3, 56, 56)
+
+    # Scaling inside the module == feeding pre-scaled coordinates to the v0 module.
+    q_scaled = qg(ph_c, ph_v, images, anchors=anchors)
+    q_manual = qg_v0(ph_c, ph_v, images,
+                     anchors={"xyz": anchors["xyz"] * 0.2, "feats": anchors["feats"]})
+    assert torch.allclose(q_scaled, q_manual, atol=1e-6), \
+        "anchor_coord_scale must be exactly a pre-scale on xyz"
+    assert not torch.allclose(q_scaled, qg_v0(ph_c, ph_v, images, anchors=anchors)), \
+        "scale 0.2 must actually change the queries vs v0"
+
+    # The v0 base-band ambiguity: at scale 1.0, translating every anchor by exactly one
+    # base-band period (1.0) leaves the encoding's first band unchanged; at scale 0.2 the
+    # same shift moves within the period. Check the fix separates a pair that v0's base
+    # band confuses.
+    enc = FourierPositionalEncoding(num_freqs=16, max_freq=10.0)
+    x = torch.tensor([[[0.3, 0.0, 0.0]]])
+    x_shift = x + torch.tensor([1.0, 0.0, 0.0])
+    base = slice(0, 2)  # sin/cos of the first (lowest) frequency band, x coordinate
+    assert torch.allclose(enc(x)[..., base], enc(x_shift)[..., base], atol=1e-5), \
+        "test premise: v0 base band wraps at distance 1.0"
+    assert not torch.allclose(enc(x * 0.2)[..., base], enc(x_shift * 0.2)[..., base],
+                              atol=1e-3), "scaled base band must distinguish the pair"
+    print("✅ passed\n")
+
+
+def test_anchor_content_variants():
+    print("=== anchor_content: learned (E+C hybrid) / none (positional-only) ===")
+    torch.manual_seed(0)
+    B, K, C, hidden = 1, 8, 64, 32
+    anchors = {"xyz": torch.randn(B, K, 3), "feats": torch.randn(B, K, C) * 100.0}
+    ph_c, ph_v = torch.zeros(B, K, 2), torch.zeros(B, K, dtype=torch.long)
+    images = torch.rand(B, 2, 3, 56, 56)
+
+    # --- learned: per-slot embeddings, anchors supply geometry only -----------------------
+    qg = QueryGenerator(num_views=4, hidden_dim=hidden, query_mode="anchor3d",
+                        memory_dim=C, num_anchors=K, anchor_content="learned")
+    assert qg.anchor_content_queries is not None
+    assert qg.anchor_feat_norm is None and qg.anchor_feat_proj is None, \
+        "learned content must not build the pooled-feature branch"
+    q = qg(ph_c, ph_v, images, anchors=anchors)
+    assert q.shape == (B, K, hidden) and torch.isfinite(q).all()
+
+    # Pooled features must be ignored: perturbing them cannot change the queries.
+    q2 = qg(ph_c, ph_v, images,
+            anchors={"xyz": anchors["xyz"], "feats": torch.randn(B, K, C)})
+    assert torch.allclose(q, q2), "learned content must ignore anchors['feats']"
+    # ... but positions still matter, and slots differ (per-slot embeddings).
+    q3 = qg(ph_c, ph_v, images,
+            anchors={"xyz": anchors["xyz"] + 1.0, "feats": anchors["feats"]})
+    assert not torch.allclose(q, q3), "positions must still shape the queries"
+    assert (q[0, 0] - q[0, 1]).abs().max() > 1e-4
+
+    # Gradients reach the content embeddings.
+    q.sum().backward()
+    assert qg.anchor_content_queries.weight.grad is not None
+
+    # Anchor-count mismatch with the embedding table is a hard error.
+    bad = {"xyz": torch.randn(B, K + 1, 3), "feats": torch.randn(B, K + 1, C)}
+    try:
+        qg(torch.zeros(B, K + 1, 2), torch.zeros(B, K + 1, dtype=torch.long),
+           images, anchors=bad)
+        raise AssertionError("K != num_anchors should raise for learned content")
+    except ValueError:
+        pass
+
+    # learned content requires num_anchors at construction.
+    try:
+        QueryGenerator(query_mode="anchor3d", memory_dim=C, anchor_content="learned")
+        raise AssertionError("learned content without num_anchors should raise")
+    except ValueError:
+        pass
+
+    # --- none: positional-only ablation ----------------------------------------------------
+    qn = QueryGenerator(num_views=4, hidden_dim=hidden, query_mode="anchor3d",
+                        memory_dim=C, anchor_content="none")
+    assert (qn.anchor_content_queries is None and qn.anchor_feat_norm is None
+            and qn.anchor_feat_proj is None)
+    qa = qn(ph_c, ph_v, images, anchors=anchors)
+    qb = qn(ph_c, ph_v, images,
+            anchors={"xyz": anchors["xyz"], "feats": torch.zeros(B, K, C)})
+    assert torch.allclose(qa, qb), "none content must ignore anchors['feats']"
+    assert torch.isfinite(qa).all()
+
+    # Invalid content mode rejected.
+    try:
+        QueryGenerator(query_mode="anchor3d", memory_dim=C, anchor_content="fourier")
+        raise AssertionError("bad anchor_content should raise")
+    except ValueError:
+        pass
+    print("✅ passed\n")
+
+
 def test_anchor3d_head_end_to_end():
     print("=== D4RTInstanceSegmentationHead anchor3d end-to-end (CPU, small dims) ===")
     torch.manual_seed(0)
@@ -217,6 +324,8 @@ def test_anchor3d_head_end_to_end():
     assert torch.isfinite(pred_masks).all()
 
     # head_config round-trip: rebuilding from the stored config must accept the state dict.
+    # A v0 checkpoint's head_config has NO anchor_content/anchor_coord_scale keys — the
+    # constructor defaults must reproduce the v0 module exactly.
     cfg = dict(num_views=4, hidden_dim=32, num_classes=20, num_decoder_layers=1,
                patch_size=9, mask_embed_dim=16, memory_dim=C, dropout=0.0,
                query_mode="anchor3d", num_learned_queries=0, mask_upsample=1,
@@ -224,6 +333,23 @@ def test_anchor3d_head_end_to_end():
     head2 = D4RTInstanceSegmentationHead(**cfg)
     head2.load_state_dict(head.state_dict())
     assert head2.num_anchors == K and head2.anchor_knn == 2
+    assert head2.anchor_content == "pooled" and head2.anchor_coord_scale == 1.0
+
+    # v1 round-trip: the new keys ride in head_config and rebuild a matching module.
+    cfg_v1 = dict(cfg, anchor_content="learned", anchor_coord_scale=0.2)
+    head_v1 = D4RTInstanceSegmentationHead(**cfg_v1)
+    head_v1b = D4RTInstanceSegmentationHead(**cfg_v1)
+    head_v1b.load_state_dict(head_v1.state_dict())
+    assert head_v1b.anchor_content == "learned" and head_v1b.anchor_coord_scale == 0.2
+    out_a = head_v1(coords, view_ids, images, feats, patch_start_idx, anchors=anchors)
+    out_b = head_v1b(coords, view_ids, images, feats, patch_start_idx, anchors=anchors)
+    assert torch.allclose(out_a[2], out_b[2]), "v1 config round-trip must be exact"
+    # v0 and v1 state dicts are structurally different — loading across must fail loudly.
+    try:
+        head_v1.load_state_dict(head.state_dict())
+        raise AssertionError("v0 state dict into a v1 (learned-content) head should fail")
+    except RuntimeError:
+        pass
 
     # anchor3d without num_anchors must be rejected (checkpoint config safety).
     try:
@@ -308,6 +434,8 @@ if __name__ == "__main__":
     test_fps()
     test_build_anchors()
     test_anchor3d_query_generator()
+    test_anchor_coord_scale()
+    test_anchor_content_variants()
     test_anchor3d_head_end_to_end()
     test_jitter()
     test_train_multiscene_wiring()
