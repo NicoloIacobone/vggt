@@ -34,6 +34,7 @@ python tests/test_anchor_queries.py   # Arm-E 3D-anchored queries (FPS, anchor b
 python tests/test_grid_ablation.py    # eval-only grid-density sweep (eval_grid_ablation.py)
 python tests/test_build_official_masks.py  # official-GT converter (synthetic zips/tsv → SAM3 layout + loader round-trip)
 python tests/test_eval_checkpoint.py       # cross-GT eval plumbing (arg inheritance/overrides, scene resolution)
+python tests/test_render_topdown.py        # top-down point-cloud renderer (projection, up-axis estimation, colors)
 
 # Single-scene overfit (sanity check for gradient flow / new components). No unpacked tree
 # lives on work anymore — point --scene_dir at the official-GT build tree on scratch (below),
@@ -100,6 +101,14 @@ python scripts/eval_grid_ablation.py --checkpoint <run_dir>/checkpoint_best_ap50
 # Visualize predictions manually (re-render or filter scenes)
 python scripts/visualize_masks.py --checkpoint <run_dir>/checkpoint.pth   # 2D overlays → <run_dir>/visualizations/ (multi-scene ckpt: one subfolder per train/val scene; --scenes to filter)
 python demos/demo_gradio.py --seg_checkpoint <path>   # 3D viewer; auto-discovers latest checkpoint, scene dropdown, "Color By: Predicted Instances"
+
+# Slide-ready top-down point-cloud figure: RGB cloud | instance-colored cloud (same honest
+# selection as the viewer). --scene_dir renders ~32 evenly-spaced subset frames (full-room
+# coverage); --scenes uses the stored 8-frame bundle instead. Points come from the depth
+# head + camera unprojection (the clean branch); up = camera-roll gravity + floor-slab
+# refinement. --gray_classes wall,floor gives the floor-plan look; needs GPU.
+python scripts/render_pointcloud_topdown.py --checkpoint <run_dir>/checkpoint_best.pth \
+    --scene_dir <scans_root>/scene0080_00/raw_data --gray_classes wall,floor   # → <run_dir>/pointcloud_views/
 ```
 
 The 2D overlay and the 3D viewer share ONE instance-selection rule — `train/postprocess.py::select_instances`

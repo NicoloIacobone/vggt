@@ -5,6 +5,30 @@ detail. This list tracks only what is still open.
 
 ## Open — next experiments (GPU)
 
+- [ ] **All-arms sweep at N=490 (LAUNCHED 2026-07-17; results pending).** Completes the
+      500-scene scaling point for every closed arm so the whole ablation table has a
+      large-N column on the official GT, matching the arm-C N=490 recipe exactly
+      (`slurm/train_full.sh`, `INSTANCE_LEVEL=1`, official 500-scene tar,
+      `--bundles_per_scene 1` — the NUMA-footprint fix, flag it as the same recipe
+      deviation vs the N=190 rows). Arm C is NOT resubmitted — job 7219652
+      (`d4rt_full_inst_learned_officialgt_500_b1`, 0.350/0.177) is its 500-scene point.
+      Caveat when reading results: arms A/B/D were previously measured at N=50/190 on the
+      SAM3 GT — their new numbers are on official GT, so compare against the (O)-tagged
+      rows only. Jobs (each `EXTRA_ARGS` ends with `--bundles_per_scene 1`):
+      - **7505766** arm A point (`EXP_TAG=_point_officialgt_500_b1`, no extra flags)
+      - **7505768** arm B fixed (`_gridq_fix_officialgt_500_b1`,
+        `--train_grid_queries --no_object_norm matched`)
+      - **7505769** arm D fixed (`_hybrid_fix_officialgt_500_b1`,
+        `--query_mode hybrid --num_learned_queries 64 --learned_query_lr_scale 0.1`)
+      - **7505893** arm E v1 hybrid — the best-AP50 E variant (`_anchor3d_hybrid_officialgt_500_b1`,
+        `--query_mode anchor3d --num_anchors 64 --anchor_content learned
+        --anchor_coord_scale 0.2 --anchor_jitter 0.02`; first submission 7505797 lacked
+        `--anchor_jitter` and was cancelled unstarted). E v1 pos-only not launched (one
+        config per arm); add it only if the hybrid result makes the geometry-only point
+        interesting at scale.
+      On completion: pull best val mIoU / honest AP50 from each run's `metrics.jsonl`,
+      add an N=490 column to `docs/ARMS_SUMMARY.md`, and update MILESTONES.
+
 - [X] **Arm-C rerun on the full 500-scene official GT — RESOLVED 2026-07-16 (job 7219652):
       N=490 does NOT beat N=190.** (Saga of the earlier attempts below, kept for the
       NUMA/footprint diagnosis.)

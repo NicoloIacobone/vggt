@@ -1,6 +1,9 @@
 # Query-strategy arms — one-page comparison
 
-Last updated: **2026-07-16** (arm-E v1 results in — arm E closed, arm C confirmed as base).
+Last updated: **2026-07-17** (arm-E v1 results in — arm E closed, arm C confirmed as base).
+**In flight (2026-07-17):** N=490 official-GT runs of arms A/B-fixed/D-fixed/E-v1-hybrid
+(jobs 7505766/7505768/7505769/7505893, arm-C N=490 recipe incl. `--bundles_per_scene 1`)
+to complete the large-N column of the table below — details in `docs/todo.md`.
 
 The "arms" are the query-initialization strategies tested on the identical
 frozen-VGGT + D4RT-decoder pipeline (same matcher, losses, eval). This is the project's
