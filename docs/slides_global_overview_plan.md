@@ -1,3 +1,12 @@
+> **Deck in progress: `docs/slides_global_overview.md`** (Marp, same style as
+> `slides_meeting_jul_16.md`). Currently covers Parts 1–2 (title, architecture, matching +
+> loss), Part 3 (dataset/GT), Part 6 (metrics), Part 4 (arms A–E with results, through
+> N=490), and a first pass at Part 7 (competitors — case-study slide on VGGT-Segmentor's
+> problem/idea + a literature-paths slide, added 2026-07-23; SegVGGT/EPS3D/FAST3DIS/PanSt3R
+> positioning table+quadrant still open). Still open: Parts 5 (side-lever table), 8
+> (qualitative/failure screenshots), 9 (wrap-up) — all figures/charts listed below are
+> still unbuilt placeholders.
+
 # Plan-backbone: "Global overview" presentation (requested by supervisor, meeting 2026-07-16)
 
 > Purpose of this file: the skeleton for a self-contained deck giving a **global understanding
@@ -108,21 +117,26 @@ Uniform per-arm template — same layout for A, B, C, D, E so comparison is visu
 - **Right:** Results table (N=50 and, where run, N≈190–200) + qualitative note.
 - **Bottom strip:** Strengths / Limitations / Verdict (closed or base).
 
-Per-arm content (all numbers already in `docs/ARMS_SUMMARY.md` — tag (S)/(O) for GT!):
+Per-arm content (all numbers already in `docs/ARMS_SUMMARY.md` — tag (S)/(O) for GT!).
+**Updated 2026-07-22: the N=490 all-arm sweep is now complete** (every closed arm's best
+variant re-run at the same 500-scene scale as arm C's existing N=490 point) — add the N=490
+column below; it does not change any verdict, it confirms them at scale:
 
-| Arm | How it works (1-liner) | Quote | Strengths | Limitations / verdict |
-|---|---|---|---|---|
-| **A point** | Fourier(u,v) + view emb + RGB patch; GT centroids at train, uniform grid at honest eval | N=50: 0.212/0.125 (S); plateaus by N=100–200 (0.216/0.105) | simple, promptable | honest eval needs grid → duplicate FPs, no NMS; **plateaued** — superseded |
-| **B trained grid** | A + random-offset grid queries trained too (`--no_object_norm matched` fix) | fixed: 0.284[grid]/0.161 (S); N=190: 0.372[grid]/0.185 unstable | best point-family AP50 at N=50 | v0 collapsed masks (loss dilution — good failure-analysis story); AP50 never stable at scale — closed |
-| **C learned (DETR)** | 64 learned `nn.Embedding` object queries, no coordinates at all | **BASE. N=190 official GT: val mIoU 0.367 / honest AP50 0.199**; (S) N=200: 0.371/0.228 | GT-free ⇒ prompted==honest; broke the plateau (>2× point AP50); overfitting resolved at scale | over-predicts (kept/GT 1.23–1.38×); slight val decay late in training |
-| **D hybrid** | learned slots + centroid prompts (`--learned_query_lr_scale 0.1` NaN fix) | 0.247/0.146 (S), then decays | was best-arm before v0 crash | v0 NaN'd (fixed); centroid path reintroduces overfitting; only ties C — closed |
-| **E anchor3d (v0 + 3-variant v1)** | queries seeded from VGGT's *own* predicted pointmap: FPS anchors over token cloud; content ∈ {pooled, learned, none} | best E: pos-only 0.230 mIoU / hybrid 0.121 AP50 (O); bar was C 0.269/0.144 | **calibration**: only lever that fixed over-prediction (kept/GT 0.59–0.86× vs C 1.23×); least-overfit run of all arms (pos-only); clean failure decomposition (pooled frozen features actively harmful, not the Fourier encoding) | never beats C on quality at N=50 — closed; deliverable = the ablation story |
+| Arm | How it works (1-liner) | N=50 | N≈190–200 | N=490 (O) | Strengths | Limitations / verdict |
+|---|---|---|---|---|---|---|
+| **A point** | Fourier(u,v) + view emb + RGB patch; GT centroids at train, uniform grid at honest eval | 0.212/0.125 (S) | 0.216/0.105 (S) — plateaued | **0.264/0.102** — job 7974138 | simple, promptable | honest eval needs grid → duplicate FPs, no NMS; **plateaued past N=50, N=490 just reproduces it on cleaner GT** — superseded |
+| **B trained grid** | A + random-offset grid queries trained too (`--no_object_norm matched` fix) | 0.284[grid]/0.161 (S) | 0.372[grid]/0.185 (S), unstable (0.071 @ep1000) | **0.110/0.172** [grid] — job 7974150 | best point-family AP50 at N=50 | v0 collapsed masks (loss dilution — good failure-analysis story); AP50 never stable, and N=490 prompted mIoU regresses hard — closed |
+| **C learned (DETR)** | 64 learned `nn.Embedding` object queries, no coordinates at all | 0.259/0.146 (S); 0.269/0.144 (O) | **BASE. N=190 official GT: val mIoU 0.367 / honest AP50 0.199**; (S) N=200: 0.371/0.228 | **0.350/0.177** (O, bundles=1) — job 7219652 | GT-free ⇒ prompted==honest; broke the plateau (>2× point AP50); overfitting resolved at N=190 | over-predicts (kept/GT 1.23–1.38×); N=490 doesn't beat N=190 (2.6× data ⇒ no gain, overfits *faster*) — **wins at every N tested, still the base** |
+| **D hybrid** | learned slots + centroid prompts (`--learned_query_lr_scale 0.1` NaN fix) | 0.247/0.146 (S), then decays | — (no win → not scaled) | **NaN @ep110** — best-before-divergence 0.295/0.174 @ep100 — job 7974164 | was best-arm before v0 crash | v0 NaN'd at N=50 (fixed); N=490 shows the fix doesn't hold at scale — the instability *recurs*; only ties C at N=50 — closed |
+| **E anchor3d (v0 + 3-variant v1)** | queries seeded from VGGT's *own* predicted pointmap: FPS anchors over token cloud; content ∈ {pooled, learned, none} | best E: pos-only 0.230 mIoU / hybrid 0.121 AP50 (O); bar was C 0.269/0.144 | — (no win → not scaled) | hybrid **0.248/0.139** — job 7974169, zero non-finite warnings (stable where D was not) | **calibration**: only lever that fixed over-prediction (kept/GT 0.59–0.86× vs C 1.23×); least-overfit run of all arms (pos-only); clean failure decomposition (pooled frozen features actively harmful, not the Fourier encoding); most numerically robust at scale (survived the exact epoch range where D diverged) | never beats C on quality at any N tested — closed; deliverable = the ablation story |
 
 Close Part 4 with **one summary slide**: the `ARMS_SUMMARY.md` results table condensed +
-the three cross-arm takeaways: (1) GT-free query generation (C, E) is both more honest and
+the four cross-arm takeaways: (1) GT-free query generation (C, E) is both more honest and
 stronger; (2) grid-based honest eval dies by duplicate FPs (architectural, confirmed by the
 grid-density sweep 2–12: best grid 0.185 < C 0.228, kept preds explode with density);
-(3) geometry regularizes and calibrates but caps detection.
+(3) geometry regularizes and calibrates but caps detection; (4) **the ranking (C > E-hybrid
+> B-fixed ≈ D-fixed > A) is scale-invariant — confirmed unchanged from N=50/190 to N=490,
+so data quantity does not change the query-strategy verdict.**
 
 **Figures**
 - [BUILD — the key schema set] 5 small query-init diagrams (same canvas): A = dots at
@@ -151,6 +165,10 @@ grid-density sweep 2–12: best grid 0.185 < C 0.228, kept preds explode with de
    MILESTONES). Arm C at N=490 (2.6× data, official GT): **0.350/0.177 ≤ the N=190
    baseline** → data quantity is not the lever (caveat: bundles=1 recipe deviation, forced
    by the NUMA/RAM infra finding — 30-second aside, it's a good war story).
+   **Update 2026-07-22: this is no longer just an arm-C anecdote — the all-arm N=490 sweep
+   (Part 4 table) confirms the exact N=50/190 ranking (C > E-hybrid > B-fixed ≈ D-fixed > A)
+   holds at N=490 for every arm**, so the strongest framing is "we tested whether more data
+   changes the query-strategy verdict, across the whole ablation, and it doesn't."
 2. **Side levers, all neutral/negative (one table slide):** mask upsampling ×2 (wash:
    0.236 vs 0.228 AP50 → resolution not the bottleneck; confusion is semantic);
    grid-density sweep (negative, architectural); score threshold 0.5→0.3 (negative: +76
@@ -187,6 +205,13 @@ grid-density sweep 2–12: best grid 0.185 < C 0.228, kept preds explode with de
 ---
 
 ## Part 7 — Competitors (2 slides)
+
+> **Drafted 2026-07-23** (2 slides in `slides_global_overview.md`, after the arms
+> summary): a case-study slide on VGGT-Segmentor (problem/idea/results) plus a
+> literature-paths slide (cross-view geometric modeling → ego-exo object correspondence →
+> promptable segmentation foundations) with a positioning note back to our project. Still
+> missing from below: the SegVGGT/EPS3D/FAST3DIS/PanSt3R landscape slide and the
+> quadrant figure — those are the direct ScanNet-task competitors, not yet slotted in.
 
 1. **Landscape.** "VGGT-X" genre exploded in the last 12 months (822-paper harvest, 113
    on-topic). Direct lane: SegVGGT (closest — object queries on multi-level VGGT features,

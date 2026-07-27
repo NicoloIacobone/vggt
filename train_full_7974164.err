@@ -1,0 +1,17 @@
+Many modules are hidden in this stack. Use "module --show_hidden spider SOFTWARE" if you are not able to find the required software
+/cluster/scratch/niacobone/vggt/train/loss.py:260: UserWarning: PointBipartiteMatcher: 1152/1152 non-finite entries in the matching cost (exploding logits?); replacing with large finite cost so training can continue.
+  warnings.warn(
+/cluster/scratch/niacobone/vggt/train/loss.py:260: UserWarning: PointBipartiteMatcher: 672/672 non-finite entries in the matching cost (exploding logits?); replacing with large finite cost so training can continue.
+  warnings.warn(
+/cluster/scratch/niacobone/vggt/train/loss.py:260: UserWarning: PointBipartiteMatcher: 960/960 non-finite entries in the matching cost (exploding logits?); replacing with large finite cost so training can continue.
+  warnings.warn(
+/cluster/scratch/niacobone/vggt/train/loss.py:260: UserWarning: PointBipartiteMatcher: 1056/1056 non-finite entries in the matching cost (exploding logits?); replacing with large finite cost so training can continue.
+  warnings.warn(
+/cluster/scratch/niacobone/vggt/train/loss.py:260: UserWarning: PointBipartiteMatcher: 2592/2592 non-finite entries in the matching cost (exploding logits?); replacing with large finite cost so training can continue.
+  warnings.warn(
+/cluster/scratch/niacobone/vggt/train/loss.py:260: UserWarning: PointBipartiteMatcher: 1824/1824 non-finite entries in the matching cost (exploding logits?); replacing with large finite cost so training can continue.
+  warnings.warn(
+/cluster/scratch/niacobone/vggt/train/loss.py:260: UserWarning: PointBipartiteMatcher: 2208/2208 non-finite entries in the matching cost (exploding logits?); replacing with large finite cost so training can continue.
+  warnings.warn(
+/cluster/scratch/niacobone/vggt/train/loss.py:260: UserWarning: PointBipartiteMatcher: 1440/1440 non-finite entries in the matching cost (exploding logits?); replacing with large finite cost so training can continue.
+  warnings.warn(

@@ -5,29 +5,34 @@ detail. This list tracks only what is still open.
 
 ## Open — next experiments (GPU)
 
-- [ ] **All-arms sweep at N=490 (LAUNCHED 2026-07-17; results pending).** Completes the
-      500-scene scaling point for every closed arm so the whole ablation table has a
-      large-N column on the official GT, matching the arm-C N=490 recipe exactly
-      (`slurm/train_full.sh`, `INSTANCE_LEVEL=1`, official 500-scene tar,
-      `--bundles_per_scene 1` — the NUMA-footprint fix, flag it as the same recipe
-      deviation vs the N=190 rows). Arm C is NOT resubmitted — job 7219652
+- [X] **All-arms sweep at N=490 (DONE 2026-07-22).** Completed the 500-scene scaling
+      point for every closed arm so the whole ablation table has a large-N column on the
+      official GT, matching the arm-C N=490 recipe exactly (`slurm/train_full.sh`,
+      `INSTANCE_LEVEL=1`, official 500-scene tar, `--bundles_per_scene 1` — the
+      NUMA-footprint fix). Arm C was NOT resubmitted — job 7219652
       (`d4rt_full_inst_learned_officialgt_500_b1`, 0.350/0.177) is its 500-scene point.
-      Caveat when reading results: arms A/B/D were previously measured at N=50/190 on the
-      SAM3 GT — their new numbers are on official GT, so compare against the (O)-tagged
-      rows only. Jobs (each `EXTRA_ARGS` ends with `--bundles_per_scene 1`):
-      - **7505766** arm A point (`EXP_TAG=_point_officialgt_500_b1`, no extra flags)
-      - **7505768** arm B fixed (`_gridq_fix_officialgt_500_b1`,
-        `--train_grid_queries --no_object_norm matched`)
-      - **7505769** arm D fixed (`_hybrid_fix_officialgt_500_b1`,
-        `--query_mode hybrid --num_learned_queries 64 --learned_query_lr_scale 0.1`)
-      - **7505893** arm E v1 hybrid — the best-AP50 E variant (`_anchor3d_hybrid_officialgt_500_b1`,
-        `--query_mode anchor3d --num_anchors 64 --anchor_content learned
-        --anchor_coord_scale 0.2 --anchor_jitter 0.02`; first submission 7505797 lacked
-        `--anchor_jitter` and was cancelled unstarted). E v1 pos-only not launched (one
-        config per arm); add it only if the hybrid result makes the geometry-only point
-        interesting at scale.
-      On completion: pull best val mIoU / honest AP50 from each run's `metrics.jsonl`,
-      add an N=490 column to `docs/ARMS_SUMMARY.md`, and update MILESTONES.
+      **Original jobs (7505766/68/69/7505893) were cancelled/never started — the venv got
+      rebuilt mid-wait, so all four were resubmitted identically and re-verified clean
+      against the new venv** (jobs 7974138/7974150/7974164/7974169). Results (all official
+      GT, val mIoU / honest AP50 unless noted; full table + narrative in
+      `docs/ARMS_SUMMARY.md`):
+      - **7974138** arm A point: **0.264 / 0.102** — clean completion, reproduces the
+        N=190 SAM3-GT plateau (0.216/0.105) on cleaner GT.
+      - **7974150** arm B fixed (`--train_grid_queries --no_object_norm matched`):
+        **0.110 / 0.172** [grid] — clean completion, but prompted val mIoU regresses hard
+        vs the N=190 point (0.372).
+      - **7974164** arm D fixed (`--query_mode hybrid --learned_query_lr_scale 0.1`):
+        **NaN @ep110** — the N=50 NaN fix did not hold at N=490; best-before-divergence
+        checkpoint (ep100) scored 0.295/0.174. Job completed (matcher's `nan_to_num` guard
+        kept it alive) but loss was NaN for the remaining ~900 epochs.
+      - **7974169** arm E v1 hybrid (`--query_mode anchor3d --anchor_content learned
+        --anchor_coord_scale 0.2 --anchor_jitter 0.02`): **0.248 / 0.139** — clean
+        completion, zero non-finite warnings, notably stable through the exact epoch range
+        (~100–130) where arm D diverged.
+      **Verdict: arm C remains the winner at every N tested (50/190/490) — the
+      query-strategy ranking established at small scale does not change with more data.**
+      `docs/ARMS_SUMMARY.md` N=490 column + narrative updated; MILESTONES update still
+      open if a dedicated data-scaling section wants these numbers folded in.
 
 - [X] **Arm-C rerun on the full 500-scene official GT — RESOLVED 2026-07-16 (job 7219652):
       N=490 does NOT beat N=190.** (Saga of the earlier attempts below, kept for the

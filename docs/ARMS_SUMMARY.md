@@ -1,9 +1,7 @@
 # Query-strategy arms — one-page comparison
 
-Last updated: **2026-07-17** (arm-E v1 results in — arm E closed, arm C confirmed as base).
-**In flight (2026-07-17):** N=490 official-GT runs of arms A/B-fixed/D-fixed/E-v1-hybrid
-(jobs 7505766/7505768/7505769/7505893, arm-C N=490 recipe incl. `--bundles_per_scene 1`)
-to complete the large-N column of the table below — details in `docs/todo.md`.
+Last updated: **2026-07-22** (N=490 sweep complete for all arms — arm C confirmed the winner
+at every scale tested, no ranking change from N=50/190).
 
 The "arms" are the query-initialization strategies tested on the identical
 frozen-VGGT + D4RT-decoder pipeline (same matcher, losses, eval). This is the project's
@@ -39,18 +37,27 @@ open items: `docs/todo.md`.
 
 ## Results
 
-| Arm | N=50: val mIoU / honest AP50 | N≈190–200: val mIoU / honest AP50 | Verdict |
-|-----|------------------------------|-----------------------------------|---------|
-| **A** point | 0.212 / 0.125 (S) | 0.216 / 0.105 (S) — **plateaued** past N=50 | superseded baseline: more scenes stopped helping (ceiling was the head, not data) |
-| **B** v0 | 0.047 / 0.146 (S) | — | mask learning collapsed (no-object loss diluted matched gradients) |
-| **B** fixed | 0.284 [grid] / **0.161** (S) | 0.372 [grid] / 0.185 unstable, 0.071 @ep1000 (S) | **closed** — fix works, AP50 never stable, loses to C |
-| **C** learned | 0.259 / 0.146 (S); **0.269 / 0.144 (O)** | **0.371 / 0.228** (S); **0.367 / 0.199 (O) ← quotable baseline**; N=490: 0.350 / 0.177 (O, bundles=1 — no gain from 2.6× data) | **CURRENT BASE** — broke the point plateau, >2× honest AP50, GT-robust at N=50 |
-| **D** v0 | crashed (NaN @~ep555) (S) | — | exploding gradients in mixed path |
-| **D** fixed | 0.247 / 0.146 (S), then overfits | — (no win → not scaled) | **closed** — only ties C, centroid prompts reintroduce overfitting |
-| **E** v0 | 0.179 / 0.072 (O), kept/GT **0.83×** (C: 1.23×)¹ | — (no win → not scaled) | loses on quality, **wins on calibration** — dedup hypothesis validated; superseded by v1 |
-| **E** v1 hybrid | 0.207 / **0.121** (O), kept/GT 0.65× — job 7322623 | — (no win) | best E on AP50 (+0.05 over v0) but still −0.023 below C — **closed** |
-| **E** v1 pos-only | **0.230** / 0.099 (O), kept/GT 0.86× — job 7322624 | — (no win) | best E on mIoU, least overfit of ALL arms (train 0.40 @ep1000); pure geometry ≈ C −0.04 — **closed** |
-| **E** v1 pooled+fix | 0.156 / 0.086 (O), kept/GT 0.59× — job 7322625 | — (no win) | Fourier fix alone ≈ wash → **v0's pooled features were the poison, not just the encoding** — closed |
+| Arm | N=50: val mIoU / honest AP50 | N≈190–200: val mIoU / honest AP50 | N=490 (O): val mIoU / honest AP50 | Verdict |
+|-----|------------------------------|-----------------------------------|------------------------------------|---------|
+| **A** point | 0.212 / 0.125 (S) | 0.216 / 0.105 (S) — **plateaued** past N=50 | **0.264 / 0.102** — job 7974138 | superseded baseline: more scenes stopped helping (ceiling was the head, not data); N=490 essentially reproduces the N=190 plateau on cleaner GT |
+| **B** v0 | 0.047 / 0.146 (S) | — | — | mask learning collapsed (no-object loss diluted matched gradients) |
+| **B** fixed | 0.284 [grid] / **0.161** (S) | 0.372 [grid] / 0.185 unstable, 0.071 @ep1000 (S) | **0.110 / 0.172** [grid] — job 7974150 | **closed** — fix works, AP50 never stable, loses to C; N=490 val mIoU regresses hard (prompted path degrades even though grid AP50 holds) |
+| **C** learned | 0.259 / 0.146 (S); **0.269 / 0.144 (O)** | **0.371 / 0.228** (S); **0.367 / 0.199 (O) ← quotable baseline** | **0.350 / 0.177** (O, bundles=1 — no gain from 2.6× data) — job 7219652 | **CURRENT BASE** — broke the point plateau, >2× honest AP50, GT-robust at N=50, best at every N tested |
+| **D** v0 | crashed (NaN @~ep555) (S) | — | — | exploding gradients in mixed path |
+| **D** fixed | 0.247 / 0.146 (S), then overfits | — (no win → not scaled) | **NaN @ep110** — best-before-divergence 0.295 / 0.174 @ep100 — job 7974164 | **closed, and the instability recurs at scale** — the N=50 fix (lr_scale 0.1 + grad clip) was not sufficient at N=490; run completed (guard kept it alive) but loss was NaN from ep110 onward |
+| **E** v0 | 0.179 / 0.072 (O), kept/GT **0.83×** (C: 1.23×)¹ | — (no win → not scaled) | — | loses on quality, **wins on calibration** — dedup hypothesis validated; superseded by v1 |
+| **E** v1 hybrid | 0.207 / **0.121** (O), kept/GT 0.65× — job 7322623 | — (no win) | **0.248 / 0.139** — job 7974169, zero non-finite warnings (stable where D was not) | best E on AP50 (+0.05 over v0) but still below C at every N tested — **closed** |
+| **E** v1 pos-only | **0.230** / 0.099 (O), kept/GT 0.86× — job 7322624 | — (no win) | — | best E on mIoU, least overfit of ALL arms (train 0.40 @ep1000); pure geometry ≈ C −0.04 — **closed** |
+| **E** v1 pooled+fix | 0.156 / 0.086 (O), kept/GT 0.59× — job 7322625 | — (no win) | — | Fourier fix alone ≈ wash → **v0's pooled features were the poison, not just the encoding** — closed |
+
+**N=490 sweep (2026-07-21/22, all official GT, `--bundles_per_scene 1`):** ran every closed arm's
+best variant at the same 500-scene scale as arm C's existing N=490 point. **Arm C wins at every
+scale tested — the ranking established at N=50/190 (C > E-hybrid > B-fixed ≈ D-fixed > A) holds
+at N=490 too, so data scale does not change the query-strategy verdict.** Notable: arm E v1
+hybrid stayed numerically stable (zero non-finite warnings) through the exact epoch range
+(~100–130) where arm D fixed's "fixed" NaN-guard still let the loss diverge — anchor3d's
+3D-anchor queries are more robust at scale than the learned+centroid hybrid path, even though
+E still trails C on both metrics.
 
 ¹ kept/GT = honest kept predictions vs GT instances over the 10 val scenes, parsed from the
 auto-viz "Honest selection" at the **best-val-mIoU checkpoint** (same protocol for every row;
