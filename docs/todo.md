@@ -3,6 +3,38 @@
 See `docs/MILESTONES.md` for the consolidated summary; `docs/old/` for full per-milestone
 detail. This list tracks only what is still open.
 
+## Open — MaskDINO trial (parallel track, opened 2026-07-27)
+
+Supervisor request: replicate the MaskDINO decoder on top of frozen VGGT, **single frame only**;
+if it is promising, extend to multi-frame. Plan, architecture mapping, deviations from upstream
+and the evaluation protocol: `docs/MASKDINO_TRIAL.md`. The D4RT arms are untouched — the trial
+has its own package (`models/maskdino/`), script (`scripts/train_maskdino.py`), test
+(`tests/test_maskdino.py`) and job (`slurm/train_maskdino.sh`).
+
+- [X] Port the decoder (deformable enc/dec, DAB anchor boxes, two-stage query selection,
+      denoising, deep supervision, box losses) with a pure-PyTorch MSDeformAttn — no
+      detectron2/fvcore/CUDA extension. CPU test suite green; 4-scene GPU smoke test reaches
+      train mIoU 0.97 / AP50 0.99 (memorisation sanity check).
+- [X] `scripts/eval_perframe.py` — scores existing D4RT checkpoints under the SAME per-frame
+      protocol. Needed because the trial's numbers are per frame while every arm's number is
+      per 8-frame bundle; without it the comparison is meaningless.
+- [X] **First two runs read (2026-07-27).** Jobs 8748952 (N=50) and 8754527 (N=190), both
+      COMPLETED. **N=190 beats the arm-C per-frame bar (0.451/0.294) on every metric:
+      0.594 mIoU / 0.624 AP50 / 0.440 AP75 / 0.418 mAP** — +32% / +112% relative on
+      mIoU / AP50. N=50 peaks at 0.451/0.440. Full write-up: `docs/MASKDINO_TRIAL.md` §7.
+      Two caveats: both runs overfit (peak val at 38% of schedule, train mIoU → 1.0), and the
+      gain is not yet attributed to any specific MaskDINO ingredient.
+- [ ] **N=490 run — highest value next step.** The scaling curve is still climbing steeply and
+      both runs are data-starved. Shorten the schedule (peak was at 38%) and regularize
+      (`--bundles_per_scene 2 --color_jitter 0.2`). NOTE this contradicts the arm-C data-scaling
+      result (0.367@190 → 0.350@490): that head was architecture-limited, not data-limited.
+- [ ] Cheap follow-ups, one flag each: `--mask_upsample 2` (74×74 masks, sharper supervision)
+      and `--feature_mode bundle` (VGGT global attention makes the tokens multi-view aware
+      while the decoder stays single-frame).
+- [ ] Ablate what actually carries the gain (`--dn no`, `--no-two_stage`,
+      `--initialize_box_type no`, `--enc_layers 0`) before claiming "MaskDINO works here".
+- [ ] Only if it wins: the multi-frame extension, in the order in MASKDINO_TRIAL.md §8.
+
 ## Open — next experiments (GPU)
 
 - [X] **All-arms sweep at N=490 (DONE 2026-07-22).** Completed the 500-scene scaling

@@ -10,6 +10,7 @@ Project history, design decisions, and results live in `docs/`:
 - `docs/MILESTONES.md` — **the single consolidated summary** of Milestones 1–3 (architecture, hard-won constraints, all results, qualitative findings, dataset & storage status). Read this first.
 - `docs/todo.md` — current open task list.
 - `docs/ARMS_SUMMARY.md` — one-page comparison table of the query-strategy arms A–E (what differs, all results, verdicts). The quick answer to "which arm won and why".
+- `docs/MASKDINO_TRIAL.md` — **the parallel MaskDINO track** (started 2026-07-27, supervisor request): a faithful port of the MaskDINO decoder (deformable encoder/decoder, DAB anchor boxes, two-stage query selection, denoising, deep supervision, box losses) onto frozen VGGT, **single-frame only**. Separate package/script/test/job; read it before touching anything under `models/maskdino/`.
 - `docs/RELATED_WORK.md` — competitor landscape & positioning (2026-07-08 arXiv survey): direct competitors (SegVGGT et al.), the open research gaps the query arms map onto, and the "why not splatting" answer. Read before framing any result as a contribution.
 - `docs/RIEPILOGO_PROGETTO_IT.md` — full project narrative in Italian (architecture, motivations, experiments, interpretations) for the project owner.
 - `docs/HOOK_PLAN.md` — where/how the decoder hooks into VGGT.
@@ -35,6 +36,7 @@ python tests/test_grid_ablation.py    # eval-only grid-density sweep (eval_grid_
 python tests/test_build_official_masks.py  # official-GT converter (synthetic zips/tsv → SAM3 layout + loader round-trip)
 python tests/test_eval_checkpoint.py       # cross-GT eval plumbing (arg inheritance/overrides, scene resolution)
 python tests/test_render_topdown.py        # top-down point-cloud renderer (projection, up-axis estimation, colors)
+python tests/test_maskdino.py              # MaskDINO trial: deformable attn vs naive ref, pixel decoder, decoder configs, matcher/criterion, per-frame GT + metrics, head_config round-trip, synthetic overfit
 
 # Single-scene overfit (sanity check for gradient flow / new components). No unpacked tree
 # lives on work anymore — point --scene_dir at the official-GT build tree on scratch (below),
@@ -97,6 +99,18 @@ python scripts/eval_checkpoint.py --checkpoint <run_dir>/checkpoint_best_ap50.pt
 # rejects learned-query checkpoints (their queries ignore coordinates). Results →
 # <run_dir>/grid_ablation_<ckpt>.json. Batch job for the trained runs: sbatch slurm/eval_grid_ablation.sh
 python scripts/eval_grid_ablation.py --checkpoint <run_dir>/checkpoint_best_ap50.pth --grid_sizes 2,4,6,8,10,12
+
+# --- MaskDINO trial (parallel track, docs/MASKDINO_TRIAL.md) — SINGLE FRAME ---------------
+# Own package (models/maskdino/), own script, own job; the D4RT arms are untouched. The batch
+# dimension is FRAMES, GT is per frame (labels+masks+boxes), losses/metrics follow MaskDINO.
+sbatch slurm/train_maskdino.sh                                   # 50 scenes, ~20k steps
+sbatch --export=ALL,N_SCENES=200 slurm/train_maskdino.sh         # epochs auto-scale to hold the step budget
+sbatch --export=ALL,EXTRA_ARGS='--mask_upsample 2' slurm/train_maskdino.sh   # 74x74 masks
+python scripts/train_maskdino.py --train_scenes scene0000_00 --val_scenes scene0080_00 \
+    --num_epochs 50 --num_queries 300 --scans_root <scans_root>  # local smoke test
+# Per-frame metrics are NOT comparable to the arms' multi-view numbers. To score an existing
+# D4RT checkpoint under the identical per-frame protocol (the apples-to-apples baseline):
+python scripts/eval_perframe.py --checkpoint <d4rt_run>/checkpoint_best.pth   # → perframe_eval_*.json
 
 # Visualize predictions manually (re-render or filter scenes)
 python scripts/visualize_masks.py --checkpoint <run_dir>/checkpoint.pth   # 2D overlays → <run_dir>/visualizations/ (multi-scene ckpt: one subfolder per train/val scene; --scenes to filter)

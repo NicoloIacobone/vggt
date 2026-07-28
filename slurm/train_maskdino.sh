@@ -1,0 +1,69 @@
+#!/bin/bash
+#
+# MaskDINO-on-VGGT trial, single frame (docs/MASKDINO_TRIAL.md).
+# Submit from anywhere: sbatch slurm/train_maskdino.sh
+#
+# Knobs (all via --export=ALL,VAR=...):
+#   N_SCENES     number of train scenes, scene0000..scene<N-1>  (default 50)
+#   EXTRA_ARGS   appended verbatim to the python call (e.g. '--mask_upsample 2')
+#   EXP_TAG      appended to the run directory name
+#   DATA_TAR     which dataset tar to stage (default: 500-scene official GT)
+#
+#SBATCH --job-name=maskdino_sf
+#SBATCH --output=maskdino_%j.log
+#SBATCH --error=maskdino_%j.err
+#SBATCH --open-mode=append
+#SBATCH --time=08:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem-per-cpu=6144
+#SBATCH --tmp=24000
+#SBATCH --gpus=rtx_4090:1
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mail-user=niacobone@student.ethz.ch
+
+module purge
+module load stack/2024-06 python/3.12.8 cuda/12.8.0 eth_proxy
+cd /cluster/scratch/niacobone/vggt
+source myenv/bin/activate
+PYTHON=myenv/bin/python
+# Unbuffered: without this, stdout is block-buffered into the .log and the run looks frozen for
+# the first ~10 minutes (feature caching) even though it is progressing normally.
+export PYTHONUNBUFFERED=1
+
+# Same dataset staging as every other run: one tar → node-local scratch → SCANNET_ROOT.
+export DATA_TAR="${DATA_TAR:-/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scannet_official_gt_500.tar.zst}"
+source slurm/stage_dataset.sh
+
+N_SCENES="${N_SCENES:-50}"
+# Scene 0080–0089 are the held-out val scenes of every D4RT scaling run; skip them if the
+# train range would otherwise swallow them.
+TRAIN=$(seq -f "scene%04g_00" 0 $((N_SCENES - 1)) | grep -v -E "scene008[0-9]_00" | paste -sd, -)
+VAL=$(seq -f "scene%04g_00" 80 89 | paste -sd, -)
+OUT=/cluster/work/igp_psr/niacobone/distillation/output
+RUN=$OUT/maskdino_sf_n${N_SCENES}${EXP_TAG:-}_$(date +%Y%m%d_%H%M%S)
+
+# One step = one batch of 8 frames, one epoch = every training frame once → steps/epoch ≈
+# N_SCENES. Hold the TOTAL gradient-step budget roughly constant (~20k) across scene counts,
+# so the comparison across N is about data, not about training length.
+EPOCHS="${EPOCHS:-$(( 20000 / N_SCENES ))}"
+[ "$EPOCHS" -lt 60 ] && EPOCHS=60
+[ "$EPOCHS" -gt 400 ] && EPOCHS=400
+WARMUP=$(( EPOCHS / 20 )); [ "$WARMUP" -lt 5 ] && WARMUP=5
+EVAL_EVERY=$(( EPOCHS / 40 )); [ "$EVAL_EVERY" -lt 1 ] && EVAL_EVERY=1
+echo "[cfg] scenes=$N_SCENES epochs=$EPOCHS warmup=$WARMUP eval_every=$EVAL_EVERY"
+
+# MaskDINO's COCO instance recipe (300 queries, 9 decoder / 6 encoder layers, two-stage, DN
+# "seg", mask-enhanced box init), single-frame, on the 37x37 patch grid so the mask metrics sit
+# on the same grid as the D4RT arms. float16 feature cache keeps 500 scenes inside host RAM.
+$PYTHON scripts/train_maskdino.py \
+    --scans_root $SCANNET_ROOT \
+    --train_scenes $TRAIN --val_scenes $VAL \
+    --num_frames 8 --batch_frames 8 --eval_batch_frames 8 \
+    --num_queries 300 --enc_layers 6 --dec_layers 9 \
+    --two_stage --dn seg --dn_num 100 --initialize_box_type bitmask \
+    --num_epochs $EPOCHS --warmup_epochs $WARMUP --learning_rate 1e-4 --weight_decay 0.05 \
+    --eval_interval $EVAL_EVERY --log_interval $EVAL_EVERY \
+    --cache_device cpu --cache_dtype float16 \
+    --save_checkpoint $RUN/checkpoint.pth \
+    ${EXTRA_ARGS:-}   # last, so EXTRA_ARGS can override any flag above

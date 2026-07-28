@@ -105,6 +105,7 @@ def compute_instance_segmentation_metrics(
     score_threshold: float = 0.0,
     background_class: int = 0,
     iou_thresholds: Optional[List[float]] = None,
+    score_mode: str = "softmax",
 ) -> Dict[str, float]:
     """
     Compute instance-segmentation metrics for a single scene.
@@ -119,6 +120,12 @@ def compute_instance_segmentation_metrics(
         background_class (int): class index treated as background (predictions of this class are
             dropped before evaluation).
         iou_thresholds (list[float], optional): IoU thresholds for mAP (default 0.50:0.05:0.95).
+        score_mode (str): how `class_logits` become per-query (label, score).
+            "softmax" (default, every D4RT arm): scores = softmax probs, so "is this an object?"
+            is decided by argmax != background_class.
+            "sigmoid" (MaskDINO trial, docs/MASKDINO_TRIAL.md §6): scores = per-class sigmoid
+            probabilities — there is no background column, so objectness comes purely from
+            `score_threshold`. Callers pass a logits tensor whose background column is -inf.
 
     Returns:
         dict with keys: mIoU, AP50, AP75, mAP, class_acc, num_pred, num_gt.
@@ -127,11 +134,18 @@ def compute_instance_segmentation_metrics(
         iou_thresholds = [round(0.5 + 0.05 * i, 2) for i in range(10)]  # 0.50 .. 0.95
 
     n_gt = gt_masks.shape[0]
-    pred_masks = pred_masks.reshape(pred_masks.shape[0], -1)
-    gt_flat = (gt_masks.reshape(n_gt, -1) > 0.5)
+    # flatten(1), not reshape(n, -1): the latter raises on a zero-row tensor (which callers can
+    # legitimately produce, e.g. after filtering out predictions that claim no pixels).
+    pred_masks = pred_masks.flatten(1)
+    gt_flat = (gt_masks.flatten(1) > 0.5)
 
-    # Predicted label = argmax class; score = its softmax probability.
-    probs = torch.softmax(class_logits, dim=-1)
+    # Predicted label = argmax class; score = its softmax (or sigmoid) probability.
+    if score_mode == "softmax":
+        probs = torch.softmax(class_logits, dim=-1)
+    elif score_mode == "sigmoid":
+        probs = torch.sigmoid(class_logits)
+    else:
+        raise ValueError(f"score_mode must be 'softmax' or 'sigmoid', got {score_mode!r}")
     scores_all, labels_all = probs.max(dim=-1)
 
     # Keep only confident, non-background detections.
