@@ -4,7 +4,7 @@ Score an existing D4RT checkpoint under the MaskDINO trial's PER-FRAME protocol.
 
 Why this exists: the D4RT arms (A–E) score one multi-view instance against its 8-frame GT mask
 (a single IoU over the concatenated frames), while the single-frame MaskDINO trial scores each
-frame on its own (docs/MASKDINO_TRIAL.md §6). Those two numbers are not interchangeable, so
+frame on its own (docs/MASKDINO.md §6). Those two numbers are not interchangeable, so
 "is MaskDINO better than arm C?" can only be answered by running arm C through the *same*
 per-frame protocol. That is what this script does.
 
@@ -20,81 +20,19 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict
 
 import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The D4RT arms are retired but still the baseline this script scores; see legacy/README.md.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "legacy" / "d4rt" / "scripts"))
 
 from data.scannet_overfit import decode_checkpoint_images
-from train.eval_metrics import compute_instance_segmentation_metrics
-from train_multiscene import DEFAULT_SCANS_ROOT
-
-
-def drop_empty_masks(pred_masks: torch.Tensor, class_logits: torch.Tensor,
-                     mask_threshold: float = 0.5):
-    """
-    Keep only the predictions that actually claim pixels in this frame.
-
-    THE rule that makes the per-frame protocol fair to both model families: a multi-view D4RT
-    query is *supposed* to be empty in the frames where its object is not visible, so counting
-    those as false positives would punish it for behaving correctly. A single-frame MaskDINO
-    query with an empty mask is likewise not a detection. Mask2Former/MaskDINO reach the same
-    place by multiplying the class score with the mask's mean foreground probability, which
-    sinks empty masks to the bottom of the ranking.
-
-    Args:
-        pred_masks: [N, h, w] mask logits for one frame; class_logits: [N, C].
-    Returns:
-        (pred_masks_kept, class_logits_kept) — possibly zero rows.
-    """
-    nonempty = (torch.sigmoid(pred_masks).flatten(1) > mask_threshold).any(dim=1)
-    return pred_masks[nonempty], class_logits[nonempty]
-
-
-def perframe_metrics(pred_masks: torch.Tensor, class_logits: torch.Tensor,
-                     gt_masks: torch.Tensor, gt_classes: torch.Tensor,
-                     score_threshold: float = 0.0, score_mode: str = "softmax",
-                     background_class: int = 0, mask_threshold: float = 0.5
-                     ) -> List[Dict[str, float]]:
-    """
-    Per-frame instance metrics from multi-view predictions.
-
-    Args:
-        pred_masks: [N, S, h, w] mask logits; class_logits: [N, C].
-        gt_masks:   [Ng, S, h, w] binary; gt_classes: [Ng].
-    Returns:
-        one metric dict per frame that has at least one visible GT instance (frames with no GT
-        are skipped: their mIoU/AP are undefined and would only dilute the mean). Predictions
-        that are empty in the frame are dropped first — see `drop_empty_masks`.
-    """
-    rows = []
-    S = pred_masks.shape[1]
-    for f in range(S):
-        visible = (gt_masks[:, f].flatten(1).sum(dim=1) > 0).nonzero(as_tuple=True)[0]
-        if visible.numel() == 0:
-            continue
-        pm, cl = drop_empty_masks(pred_masks[:, f], class_logits, mask_threshold)
-        rows.append(compute_instance_segmentation_metrics(
-            pred_masks=pm,
-            class_logits=cl,
-            gt_masks=gt_masks[visible, f],
-            gt_classes=gt_classes[visible],
-            score_threshold=score_threshold,
-            background_class=background_class,
-            score_mode=score_mode,
-            mask_threshold=mask_threshold,
-        ))
-    return rows
-
-
-def _mean(rows: List[Dict[str, float]]) -> Dict[str, float]:
-    keys = ["mIoU", "AP50", "AP75", "mAP", "class_acc", "num_pred", "num_gt"]
-    if not rows:
-        return {k: 0.0 for k in keys}
-    return {k: float(np.mean([r[k] for r in rows])) for k in keys}
+from train.common import DEFAULT_SCANS_ROOT
+from train.perframe import mean_rows, perframe_metrics
 
 
 def build_model_from_checkpoint(ckpt: Dict, device: str):
@@ -165,7 +103,8 @@ def eval_checkpoint(ckpt_path: Path, args) -> Dict:
         rows = perframe_metrics(pred_masks[0], class_logits[0],
                                 gt["masks"].to(device), gt["classes"].to(device),
                                 score_threshold=args.score_threshold, score_mode="softmax")
-        per_scene[scene["name"]] = {"split": scene.get("split"), "frames": len(rows), **_mean(rows)}
+        per_scene[scene["name"]] = {"split": scene.get("split"), "frames": len(rows),
+                                    **mean_rows(rows)}
         print(f"  [{scene.get('split')}] {scene['name']}: frames={len(rows)} "
               f"mIoU={per_scene[scene['name']]['mIoU']:.3f} "
               f"AP50={per_scene[scene['name']]['AP50']:.3f}")
@@ -176,7 +115,7 @@ def eval_checkpoint(ckpt_path: Path, args) -> Dict:
         if rows:
             summary[split] = {k: float(np.mean([r[k] for r in rows]))
                               for k in ("mIoU", "AP50", "AP75", "mAP", "class_acc", "num_pred")}
-    return {"checkpoint": str(ckpt_path), "protocol": "per-frame (MASKDINO_TRIAL.md §6)",
+    return {"checkpoint": str(ckpt_path), "protocol": "per-frame (MASKDINO.md §6)",
             "query_mode": query_mode, "score_threshold": args.score_threshold,
             "grid_size": args.grid_size, "per_scene": per_scene, "summary": summary}
 

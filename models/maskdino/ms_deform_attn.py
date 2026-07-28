@@ -4,10 +4,10 @@ Multi-scale deformable attention (Deformable DETR / MaskDINO), **pure PyTorch**.
 MaskDINO ships this module with a fused CUDA extension (`MultiScaleDeformableAttention`) plus a
 `grid_sample`-based reference path used for debugging. This repo has no compiled extension (and
 the trial's tests must run on CPU), so the reference path is the only path here — see
-docs/MASKDINO_TRIAL.md §2. At our sizes (≈1830 memory tokens, ≤400 queries, 8 heads, 4 points,
+docs/MASKDINO.md §2. At our sizes (≈1830 memory tokens, ≤400 queries, 8 heads, 4 points,
 3 levels) the fused kernel would buy little: the whole op is three `grid_sample` calls.
 
-Numerically identical to the CUDA op up to floating-point ordering; `tests/test_maskdino.py`
+Numerically identical to the CUDA op up to floating-point ordering; `tests/test_maskdino_model.py`
 checks it against a naive explicit-loop implementation.
 """
 

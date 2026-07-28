@@ -123,7 +123,7 @@ def compute_instance_segmentation_metrics(
         score_mode (str): how `class_logits` become per-query (label, score).
             "softmax" (default, every D4RT arm): scores = softmax probs, so "is this an object?"
             is decided by argmax != background_class.
-            "sigmoid" (MaskDINO trial, docs/MASKDINO_TRIAL.md §6): scores = per-class sigmoid
+            "sigmoid" (MaskDINO trial, docs/MASKDINO.md §6): scores = per-class sigmoid
             probabilities — there is no background column, so objectness comes purely from
             `score_threshold`. Callers pass a logits tensor whose background column is -inf.
 

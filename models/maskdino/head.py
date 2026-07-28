@@ -1,6 +1,6 @@
 """
 `MaskDINOVGGTHead` — the trainable head of the MaskDINO trial: pixel decoder + MaskDINO decoder
-on top of frozen VGGT aggregator tokens (docs/MASKDINO_TRIAL.md).
+on top of frozen VGGT aggregator tokens (docs/MASKDINO.md).
 
 Everything the head needs to be rebuilt from a checkpoint lives in `head_config` (mirroring the
 D4RT head's round-trip contract in CLAUDE.md), so the visualizer / any eval script can
@@ -48,6 +48,11 @@ class MaskDINOVGGTHead(nn.Module):
         mask_upsample: int = 1,
     ):
         super().__init__()
+        # The checkpoint round-trip contract: `head_config` must describe every constructor
+        # argument. Capturing locals() here rather than restating them keeps a newly added
+        # argument from being silently absent from saved checkpoints.
+        self.head_config = {k: v for k, v in locals().items()
+                            if k not in ("self", "__class__")}
         self.pixel_decoder = VGGTPixelDecoder(
             memory_dim=memory_dim, conv_dim=hidden_dim, mask_dim=mask_dim,
             num_feature_levels=num_feature_levels, enc_layers=enc_layers, nheads=nheads,
@@ -62,16 +67,6 @@ class MaskDINOVGGTHead(nn.Module):
             initial_pred=initial_pred, learn_tgt=learn_tgt,
             total_num_feature_levels=num_feature_levels, dropout=dropout,
             dec_n_points=dec_n_points,
-        )
-        self.head_config = dict(
-            memory_dim=memory_dim, hidden_dim=hidden_dim, mask_dim=mask_dim,
-            num_classes=num_classes, num_queries=num_queries,
-            num_feature_levels=num_feature_levels, enc_layers=enc_layers, dec_layers=dec_layers,
-            nheads=nheads, enc_dim_feedforward=enc_dim_feedforward,
-            dec_dim_feedforward=dec_dim_feedforward, dropout=dropout, enc_n_points=enc_n_points,
-            dec_n_points=dec_n_points, two_stage=two_stage, learn_tgt=learn_tgt,
-            initial_pred=initial_pred, initialize_box_type=initialize_box_type, dn=dn,
-            dn_num=dn_num, noise_scale=noise_scale, mask_upsample=mask_upsample,
         )
 
     @property

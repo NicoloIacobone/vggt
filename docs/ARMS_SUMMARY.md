@@ -6,7 +6,7 @@ at every scale tested, no ranking change from N=50/190).
 The "arms" are the query-initialization strategies tested on the identical
 frozen-VGGT + D4RT-decoder pipeline (same matcher, losses, eval). This is the project's
 core ablation study (`docs/RELATED_WORK.md`: the architecture alone is a crowded genre;
-the query-strategy study is the contribution). Full narrative: `docs/MILESTONES.md`;
+the query-strategy study is the contribution). Full narrative: `docs/old/MILESTONES.md`;
 open items: `docs/todo.md`.
 
 **How to read the numbers**
@@ -21,7 +21,7 @@ open items: `docs/todo.md`.
   official val. Each cell below is tagged (S) = SAM3 GT, (O) = official GT.
 - **Decision rule**: an arm is scaled to N≈190 only if it beats arm C at N=50.
 - All rows: instance-level GT, wide val (scene0080–0089), 8 frames, 1000 epochs,
-  `slurm/train_scale50.sh` / `train_full.sh` recipes.
+  `legacy/d4rt/slurm/train_scale50.sh` / `train_full.sh` recipes.
 
 ## The arms — what actually differs
 

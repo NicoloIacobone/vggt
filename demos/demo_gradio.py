@@ -27,9 +27,9 @@ from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from vggt.utils.geometry import unproject_depth_map_to_point_map
-from models.d4rt_decoder import D4RTInstanceSegmentationHead
-from models.anchor_queries import build_anchors
-from train.postprocess import select_instances, upsample_assignment
+from legacy.d4rt.models.d4rt_decoder import D4RTInstanceSegmentationHead
+from legacy.d4rt.models.anchor_queries import build_anchors
+from legacy.d4rt.train.postprocess import select_instances, upsample_assignment
 from data.scannet_overfit import IDX_TO_CLASS, decode_checkpoint_images
 
 # Root for reloading frames from --checkpoint_light checkpoints (no stored pixels).

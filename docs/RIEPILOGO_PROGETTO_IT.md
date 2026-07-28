@@ -9,7 +9,7 @@ parametri della testa.
 Questo documento racconta *tutto* ciò che è stato fatto finora: l'architettura, le
 **motivazioni** dietro ogni scelta, gli esperimenti con i loro risultati e — soprattutto —
 come vanno interpretati. È aggiornato al **7 luglio 2026**. Le fonti sono
-`docs/MILESTONES.md` (riassunto consolidato), `docs/todo.md` (lavoro aperto) e
+`docs/old/MILESTONES.md` (riassunto consolidato), `docs/todo.md` (lavoro aperto) e
 `docs/old/` (narrativa completa per milestone).
 
 ---
@@ -60,7 +60,7 @@ le **feature globali di scena** `F : [B, S, P, 2048]`, dove `P` = token patch + 
 + 4 register token (`patch_start_idx` li separa; con immagini 518×518 e patch 14×14 si hanno
 37×37 = 1369 patch token).
 
-Motivazioni (da `docs/HOOK_PLAN.md`):
+Motivazioni (da `docs/old/HOOK_PLAN.md`):
 - Ogni token `F[b, s, p, :]` contiene sia feature locali del frame (1024 dim) sia feature
   globali cross-vista (1024 dim): è esattamente la "memoria" ricca di informazione 3D che un
   decoder a cross-attention vuole.
@@ -153,7 +153,7 @@ Metriche: mIoU / AP50 / AP75 / mAP / class_acc
 istanza globale), `coordinates` (centroide (u,v) normalizzato dell'istanza nel suo frame
 "rappresentativo" = quello con area massima), `frame_ids`, `instance_ids`.
 
-### 4.2 `models/d4rt_decoder.py` — query e decoder
+### 4.2 `legacy/d4rt/models/d4rt_decoder.py` — query e decoder
 
 **`QueryGenerator`** — tre modalità (`query_mode`, salvato nel `head_config` del checkpoint):
 - **`point`** (default storico): ogni query è un *prompt a punto* = somma di
@@ -173,11 +173,11 @@ testa densa in stile Mask2Former: un `mask_feature_proj` trasforma i patch token
 mappa di feature per-pixel, e la maschera di ogni query è la **similarità coseno** del suo
 embedding con quella mappa (temperatura apprendibile) → `pred_masks [B, N, S, 37, 37]`.
 
-Con `mask_upsample 2/4` la mappa passa prima per `models/mask_upsampler.py::MaskUpsampler`
+Con `mask_upsample 2/4` la mappa passa prima per `legacy/d4rt/models/mask_upsampler.py::MaskUpsampler`
 (stadi bilinear + conv 3×3 + GroupNorm + ReLU) → 74×74 o 148×148, con la GT costruita alla
 stessa risoluzione.
 
-### 4.3 `train/loss.py` — matching e loss
+### 4.3 `legacy/d4rt/train/loss.py` — matching e loss
 
 - **`PointBipartiteMatcher`**: matrice di costo = costo di classe (1 − p_corretta) + L2 sulle
   coordinate (peso 0 con query apprese) + **costo di maschera** Dice+BCE denso (stile
@@ -201,7 +201,7 @@ mIoU / AP50 / AP75 / mAP / class_acc, riportate in **due regimi**:
   "trova tu le istanze". **L'AP50 unprompted su validation (val[grid] AP50) è il numero
   di detection onesto del progetto** (vedi §6).
 
-### 4.5 `scripts/train_multiscene.py` — il loop di training
+### 4.5 `legacy/d4rt/scripts/train_multiscene.py` — il loop di training
 
 Il trucco di efficienza che rende tutto il progetto iterabile: il backbone congelato gira
 **una sola volta per "bundle" di scena all'inizio** e le sue feature vengono messe in cache;
@@ -499,9 +499,9 @@ no-object weight, non la soglia. Soglia confermata a 0.5.
 
 ## 11. Visualizzazioni (standardizzate 2026-07-02)
 
-Overlay 2D (`scripts/visualize_masks.py`, resi automaticamente a fine training) e viewer 3D
+Overlay 2D (`legacy/d4rt/scripts/visualize_masks.py`, resi automaticamente a fine training) e viewer 3D
 Gradio (`demos/demo_gradio.py`) condividono **una sola regola di selezione delle istanze**:
-`train/postprocess.py::select_instances` (scarta background/score<0.5, winner-takes-all per
+`legacy/d4rt/train/postprocess.py::select_instances` (scarta background/score<0.5, winner-takes-all per
 pixel, zero GT, nessuna assunzione sull'ordine delle query). La figura 2D ha 4 pannelli:
 RGB | GT | **Predizione "onesta"** (senza GT; identica per costruzione alla colorazione del
 viewer 3D) | Predizione "oracolo" (matchata con Hungarian alla GT — il limite superiore
@@ -532,11 +532,11 @@ chiusi; pixel decoder → neutro; sweep soglia → negativo).
 
 ## 13. Mappa di file, run e documenti
 
-- **Codice del progetto:** `data/scannet_overfit.py` (loader), `models/d4rt_decoder.py`
-  (query + decoder), `models/mask_upsampler.py` (pixel decoder), `train/loss.py`
-  (matcher + loss), `train/eval_metrics.py` (metriche), `train/postprocess.py` (selezione
-  istanze condivisa 2D/3D), `scripts/train_multiscene.py` (training vero),
-  `scripts/train_overfit.py` (sanity check su singola scena), `scripts/visualize_masks.py`,
+- **Codice del progetto:** `data/scannet_overfit.py` (loader), `legacy/d4rt/models/d4rt_decoder.py`
+  (query + decoder), `legacy/d4rt/models/mask_upsampler.py` (pixel decoder), `legacy/d4rt/train/loss.py`
+  (matcher + loss), `train/eval_metrics.py` (metriche), `legacy/d4rt/train/postprocess.py` (selezione
+  istanze condivisa 2D/3D), `legacy/d4rt/scripts/train_multiscene.py` (training vero),
+  `legacy/d4rt/scripts/train_overfit.py` (sanity check su singola scena), `legacy/d4rt/scripts/visualize_masks.py`,
   `demos/demo_gradio.py`, `slurm/` (job + staging del dataset), `tests/` (test standalone per
   ogni componente, su CPU senza pesi del backbone).
 - **Run/checkpoint:** `/cluster/work/igp_psr/niacobone/distillation/output/<run_name>/` —
@@ -544,7 +544,7 @@ chiusi; pixel decoder → neutro; sweep soglia → negativo).
   `checkpoint_best_ap50.pth`, `metrics.jsonl`. I checkpoint sono autosufficienti (pesi testa +
   `head_config` + bundle di scena + optimizer/scheduler); il backbone si riscarica da HF
   (`facebook/VGGT-1B`), mai salvato.
-- **Documentazione:** `docs/MILESTONES.md` (riassunto consolidato — la fonte primaria),
-  `docs/todo.md` (aperto), `docs/HOOK_PLAN.md` (analisi dell'hook), `CLAUDE.md` (comandi,
+- **Documentazione:** `docs/old/MILESTONES.md` (riassunto consolidato — la fonte primaria),
+  `docs/todo.md` (aperto), `docs/old/HOOK_PLAN.md` (analisi dell'hook), `CLAUDE.md` (comandi,
   storage, vincoli), `docs/old/` (dettaglio per milestone, piani eseguiti, analisi dei run di
   scaling, feedback del supervisore, brief originale, prompt del preprocessing SAM3).

@@ -1,5 +1,5 @@
 """
-Box utilities for the MaskDINO trial (docs/MASKDINO_TRIAL.md).
+Box utilities for the MaskDINO trial (docs/MASKDINO.md).
 
 Ported from MaskDINO's `maskdino/utils/box_ops.py` (itself from DETR), plus a local
 `masks_to_boxes` that replaces detectron2's `BitMasks.get_bounding_boxes` (not installed here).

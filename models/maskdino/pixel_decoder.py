@@ -5,16 +5,15 @@ MaskDINO's `MaskDINOEncoder` consumes a CNN backbone's res2..res5 pyramid. VGGT'
 a plain ViT-style stack: one token resolution (37×37 patches at 518 px input), so the pyramid is
 synthesised **ViTDet-style** (a "simple feature pyramid" from the last block — shown to match FPN
 for plain-ViT detectors) before the deformable encoder runs. Full rationale + diagram:
-docs/MASKDINO_TRIAL.md §3.
+docs/MASKDINO.md §3.
 
 Everything downstream (the encoder, the two-stage proposal generation, the decoder) is the
 upstream MaskDINO code path.
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.init import constant_, normal_, xavier_uniform_
 

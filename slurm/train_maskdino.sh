@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# MaskDINO-on-VGGT trial, single frame (docs/MASKDINO_TRIAL.md).
+# MaskDINO-on-VGGT trial, single frame (docs/MASKDINO.md).
 # Submit from anywhere: sbatch slurm/train_maskdino.sh
 #
 # Knobs (all via --export=ALL,VAR=...):
@@ -10,8 +10,8 @@
 #   DATA_TAR     which dataset tar to stage (default: 500-scene official GT)
 #
 #SBATCH --job-name=maskdino_sf
-#SBATCH --output=maskdino_%j.log
-#SBATCH --error=maskdino_%j.err
+#SBATCH --output=/cluster/scratch/niacobone/vggt/slurm/logs/maskdino_%j.log
+#SBATCH --error=/cluster/scratch/niacobone/vggt/slurm/logs/maskdino_%j.err
 #SBATCH --open-mode=append
 #SBATCH --time=08:00:00
 #SBATCH --ntasks=1

@@ -151,3 +151,7 @@ skyseg.onnx
 # pixi environments
 .pixi
 *.egg-info
+
+# SLURM job logs (see slurm/logs/)
+slurm/logs/*.log
+slurm/logs/*.err

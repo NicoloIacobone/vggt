@@ -1,5 +1,5 @@
 """
-Small building blocks for the MaskDINO trial (docs/MASKDINO_TRIAL.md).
+Small building blocks for the MaskDINO trial (docs/MASKDINO.md).
 
 Everything here is a port of code MaskDINO pulls in from other packages, so that the trial has
 NO dependency on detectron2 / fvcore (neither is installed in this repo's `myenv`):
@@ -53,9 +53,8 @@ def _get_activation_fn(activation: str):
     raise RuntimeError(f"activation should be relu/gelu, not {activation}.")
 
 
-def _get_clones(module: nn.Module, n: int, layer_share: bool = False) -> nn.ModuleList:
-    if layer_share:
-        return nn.ModuleList([module for _ in range(n)])
+def _get_clones(module: nn.Module, n: int) -> nn.ModuleList:
+    """n independent deep copies of `module` (upstream's `layer_share=True` mode is unused)."""
     return nn.ModuleList([copy.deepcopy(module) for _ in range(n)])
 
 

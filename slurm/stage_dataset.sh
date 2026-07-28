@@ -14,7 +14,7 @@
 # everything off fast local disk. The tar contains `scans/<scene>/raw_data/...`.
 #
 # Usage: `source slurm/stage_dataset.sh` after activating the venv. Exports SCANNET_ROOT,
-# which scripts/train_multiscene.py picks up as the default --scans_root.
+# which legacy/d4rt/scripts/train_multiscene.py picks up as the default --scans_root.
 #
 # Requires `zstd` (present at /usr/bin/zstd on the GPU nodes; no module needed). Request
 # enough node-local scratch in the SBATCH header: peak = tar + unpacked tree before the
