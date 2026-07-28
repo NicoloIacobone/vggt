@@ -194,42 +194,76 @@ removing the held-out 0080–0089). Both: official 500-scene GT tar, per-instanc
 scenes 0080–0089, ~20 k gradient steps (epochs auto-scale with scene count so the comparison
 across N is about data, not training length).
 
-| Run | Scenes | val mIoU | val AP50 | val AP75 | val mAP | Peak at |
-|---|---|---|---|---|---|---|
-| **arm C — the bar** | 190 | 0.451 | 0.294 | 0.141 | 0.154 | converged |
-| job 8748952 | 50 | 0.451 | 0.440 | 0.314 | 0.290 | ep 150 / 400 |
-| **job 8754527** | 190 | **0.594** | **0.624** | **0.440** | **0.418** | ep 38 / 100 |
+### 7.2.1 Data scaling (jobs 8748952 / 8754527 / 8774050)
 
-Both COMPLETED cleanly (3 h 34 m and 2 h 38 m on one RTX 4090; MaxRSS 21 GB / 24 GB).
+All runs: official 500-scene GT, per-instance masks, val = scenes 0080-0089, identical recipe
+(300 queries, 6 encoder + 9 decoder layers, two-stage, DN "seg", mask-enhanced box init),
+epochs auto-scaled to hold the ~20-29 k gradient-step budget. All COMPLETED cleanly.
 
-**The 190-scene run beats the arm-C bar on every metric**: +32 % relative mIoU, **+112 % AP50**,
-3.1x AP75, 2.7x mAP. It predicts ~6 instances/frame against ~7 GT, so the detection gain is not
-bought with a flood of false positives, and per-scene class accuracy is 0.77-0.98. Qualitatively
-the masks are coherent object-shaped regions (`<run_dir>/visualizations/`), with the residual
-errors being class confusions of the counter-vs-cabinet kind rather than broken masks.
+| Run | Scenes | val mIoU | val AP50 | val AP75 | val mAP | peak @ | train mIoU |
+|---|---|---|---|---|---|---|---|
+| **arm C — the bar** | 190 | 0.451 | 0.294 | 0.141 | 0.154 | converged | — |
+| job 8748952 | 50 | 0.451 | 0.440 | 0.314 | 0.290 | ep 150/400 | 1.000 |
+| job 8754527 | 190 | 0.594 | 0.624 | 0.440 | 0.418 | ep 38/100 | 0.994 |
+| **job 8774050** | **490** | **0.669** | **0.699** | **0.506** | **0.475** | ep 31/60 | 0.947 |
 
-**Both runs overfit, early and hard.** Peak val is at 38 % of the schedule in both cases, after
-which train mIoU saturates (1.000 at N=50, 0.994 at N=190) while val decays ~0.06 mIoU. The
-schedules are simply too long for the data: `checkpoint_best.pth` captures the peak, but the
-honest reading is that this model is **data-starved, not under-trained**.
+**At 490 scenes the trial beats arm C by +48 % mIoU, +138 % AP50, 3.6x AP75, 3.1x mAP.** The
+curve is still rising at the largest scale available (0.440 -> 0.624 -> 0.699 AP50 for
+50 -> 190 -> 490 scenes) and the overfitting eases as data grows (train mIoU 1.000 -> 0.994 ->
+0.947), so the model remains data-limited even at 490 scenes. Every run still peaks around
+half-way through its schedule; `checkpoint_best.pth` captures it.
 
-**The data-scaling behaviour is the opposite of the D4RT arms', and that is the second finding.**
-Arm C got *worse* with more data (0.367 at N=190 -> 0.350 at N=490, `docs/ARMS_SUMMARY.md`), which
-the project read as "the dataset is not the bottleneck". MaskDINO goes 0.451/0.440 at N=50 ->
-0.594/0.624 at N=190 -- a large jump from the same 4x more scenes. So the D4RT head was
-**architecture-limited, not data-limited**, and the earlier data-scaling conclusion is a property
-of that head rather than of the task. This reopens the 500-scene question for this architecture.
+**This inverts the project's data-scaling conclusion.** Arm C got *worse* with more data
+(0.367@190 -> 0.350@490, `docs/ARMS_SUMMARY.md`), which read as "the dataset is not the
+bottleneck". On the same data MaskDINO gains +0.26 AP50 going 50 -> 490. The D4RT head was
+**architecture-limited, not data-limited**; the old scaling result was a property of that head,
+not of the task.
 
-### 7.2.1 What to run next (in priority order)
+### 7.2.2 Ablations — no single ingredient carries the win
 
-1. **N=490** — the scaling curve is still climbing steeply and both runs are data-starved; this
-   is the single highest-value run. Shorten the schedule (peak was at 38 %) and add
-   regularization (`--bundles_per_scene 2 --color_jitter 0.2`).
-2. **Ablations** (`--dn no`, `--no-two_stage`, `--initialize_box_type no`, `--enc_layers 0`) —
-   required before attributing the gain to "MaskDINO" rather than to, say, simply having 20 M
-   parameters and deep supervision.
-3. `--mask_upsample 2` (74x74 masks) and `--feature_mode bundle` (multi-view-aware tokens,
-   still a single-frame decoder) — one flag each.
+Each removes ONE MaskDINO component at N=190, everything else identical (jobs 8774052 /
+8778736 / 8774056 / 8774065, all COMPLETED). Sorted by cost of removal:
+
+| Config | val mIoU | val AP50 | ΔAP50 vs full | train mIoU |
+|---|---|---|---|---|
+| full recipe | 0.594 | 0.624 | — | 0.994 |
+| `--no-two_stage` (no query selection) | 0.592 | 0.578 | −0.046 | 0.995 |
+| `--enc_layers 0` (no deformable encoder) | 0.551 | 0.580 | −0.044 | 0.871 |
+| `--dn no` (no denoising) | 0.586 | 0.594 | −0.030 | 0.986 |
+| `--initialize_box_type no` (no mask-enhanced box init) | 0.610 | 0.608 | −0.016 | 0.993 |
+
+Two honest readings:
+
+1. **No component is decisive.** Each is worth 0.02-0.05 AP50, and box-init is within the
+   ±0.04 eval-to-eval noise (its mIoU is actually *higher* than the full recipe's). The full
+   recipe is still the best AP50 of the five, so the pieces are additive rather than redundant —
+   but nobody should claim "denoising is what made this work".
+2. **Every crippled variant still beats arm C by ~2x on AP50** (0.578-0.608 vs 0.294). The credit
+   belongs to the architecture *class* — deformable attention over a multi-scale pyramid,
+   per-layer anchor-box refinement, deep supervision, 20.5 M params — not to any one trick.
+   And **data scale dominates all of it**: +0.26 AP50 from 50->490 scenes, versus ≤0.05 from any
+   single component.
+
+`--enc_layers 0` is the only ablation that also drops train mIoU (0.871 vs ~0.99), i.e. it
+removes real capacity rather than just a training aid.
+
+### 7.2.3 Cost note — eval must not scale with the training set
+
+The first N=200 submission (job 8748972) reached only epoch 2 in 30 minutes and was cancelled:
+it scored **all 190 train scenes** at every eval, and `_average_precision` loops over every kept
+prediction at 10 IoU thresholds, so ~1600 frames x ~180 ms = ~5 min per eval, every 2 epochs.
+Two fixes in `scripts/train_maskdino.py`: `--eval_topk 100` (COCO's `test_topk_per_image` —
+protocol-correct *and* 3x faster per frame) and `--eval_train_scenes 10` (the train metric is
+only an overfit read-out). Eval went ~180 s -> ~6 s.
+
+### 7.2.4 What to run next
+
+1. **Multi-frame extension** (§8) — the single-frame question is answered; this is the actual
+   research goal.
+2. **More data / augmentation**: the curve has not flattened at 490 scenes, which is all the
+   official-GT tar holds. `--bundles_per_scene 2 --color_jitter 0.2` adds frame draws without
+   new scenes (costs cache memory).
+3. `--mask_upsample 2` (74x74 masks) — the masks are still supervised on a 37x37 grid.
 
 ### 7.3 The baseline these must beat (measured 2026-07-27)
 

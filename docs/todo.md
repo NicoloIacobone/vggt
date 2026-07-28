@@ -24,16 +24,22 @@ has its own package (`models/maskdino/`), script (`scripts/train_maskdino.py`), 
       mIoU / AP50. N=50 peaks at 0.451/0.440. Full write-up: `docs/MASKDINO_TRIAL.md` §7.
       Two caveats: both runs overfit (peak val at 38% of schedule, train mIoU → 1.0), and the
       gain is not yet attributed to any specific MaskDINO ingredient.
-- [ ] **N=490 run — highest value next step.** The scaling curve is still climbing steeply and
-      both runs are data-starved. Shorten the schedule (peak was at 38%) and regularize
-      (`--bundles_per_scene 2 --color_jitter 0.2`). NOTE this contradicts the arm-C data-scaling
-      result (0.367@190 → 0.350@490): that head was architecture-limited, not data-limited.
-- [ ] Cheap follow-ups, one flag each: `--mask_upsample 2` (74×74 masks, sharper supervision)
-      and `--feature_mode bundle` (VGGT global attention makes the tokens multi-view aware
-      while the decoder stays single-frame).
-- [ ] Ablate what actually carries the gain (`--dn no`, `--no-two_stage`,
-      `--initialize_box_type no`, `--enc_layers 0`) before claiming "MaskDINO works here".
-- [ ] Only if it wins: the multi-frame extension, in the order in MASKDINO_TRIAL.md §8.
+- [X] **N=490 scaling run + 4 ablations (DONE 2026-07-27, all COMPLETED).**
+      Scaling (AP50): 0.440 @N=50 → 0.624 @N=190 → **0.699 @N=490** (mIoU 0.669, AP75 0.506,
+      mAP 0.475; job 8774050). **+48% mIoU / +138% AP50 over the arm-C per-frame bar.** Curve
+      still rising, overfit easing with scale (train mIoU 1.000→0.994→0.947) → still
+      data-limited at 490 scenes, which is all the official-GT tar holds.
+      Ablations at N=190 (ΔAP50 vs full 0.624): `--no-two_stage` −0.046, `--enc_layers 0`
+      −0.044, `--dn no` −0.030, `--initialize_box_type no` −0.016 (within noise).
+      **No single ingredient carries the win, and every crippled variant still beats arm C by
+      ~2x** — credit goes to the architecture class, and data scale dominates everything
+      (+0.26 AP50 from scenes vs ≤0.05 from any component). Details: MASKDINO_TRIAL.md §7.2.
+- [ ] **Multi-frame extension — the actual research goal, now unblocked.** Single-frame is
+      answered; follow MASKDINO_TRIAL.md §8 in cost order (`--feature_mode bundle` first, then
+      shared cross-frame queries, then 3D anchors).
+- [ ] Cheap follow-ups, one flag each: `--mask_upsample 2` (74×74 masks — masks are still
+      supervised on the 37×37 patch grid) and `--bundles_per_scene 2 --color_jitter 0.2`
+      (more frame draws without new scenes; costs cache memory).
 
 ## Open — next experiments (GPU)
 
