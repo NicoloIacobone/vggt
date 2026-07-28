@@ -27,6 +27,7 @@ import json
 import random
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -41,8 +42,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from data.scannet_overfit import IDX_TO_CLASS, ScanNetMultiSceneDataset
 from eval_perframe import drop_empty_masks
-from models.maskdino import (HungarianMatcher, MaskDINOVGGTHead, SetCriterion,
-                             build_head_from_config, build_weight_dict, to_scannet_class_logits)
+from models.maskdino import (NUM_SCANNET_CLASSES, HungarianMatcher, MaskDINOVGGTHead,
+                             SetCriterion, build_head_from_config, build_weight_dict,
+                             to_scannet_class_logits)
 from models.maskdino.box_ops import masks_to_boxes_normalized
 from train.eval_metrics import compute_instance_segmentation_metrics
 from train_multiscene import (DEFAULT_SCANS_ROOT, append_jsonl, build_scheduler,
@@ -91,7 +93,8 @@ def _squeeze_batch(t):
 
 
 @torch.no_grad()
-def build_frame_targets(batch: Dict, out_hw: Tuple[int, int], device: str) -> List[Dict]:
+def build_frame_targets(batch: Dict, out_hw: Tuple[int, int], device: str,
+                        num_classes: int = NUM_SCANNET_CLASSES) -> List[Dict]:
     """
     Split a scene sample into per-frame MaskDINO targets.
 
@@ -100,15 +103,39 @@ def build_frame_targets(batch: Dict, out_hw: Tuple[int, int], device: str) -> Li
     2D target. Masks are area-downsampled to the mask grid with the same peak-preserving rule as
     the D4RT `build_gt_targets`, so a small-but-visible object never disappears.
 
+    `num_classes` is the class head's width (default 19). Instances whose dataset class index
+    falls outside 1..num_classes are DROPPED — treated as background, exactly as the official-GT
+    builder already does upstream (`scripts/build_official_masks.py` maps every NYU40 class
+    outside the 19 trainable ones, `otherfurniture` included, to background). Without this a GT
+    tree built against the full 20-name `data/scannet_overfit.py::SCANNET_CLASSES` list produces
+    label 19 against a 19-logit head, which is an IndexError in the matcher and in the denoising
+    label embedding — a crash, not a degradation. The drop is reported once per call, never
+    silent. Neither official-GT tar nor the SAM3 tar contains such a class today, so this changes
+    nothing for any completed run.
+
     Returns one dict per frame with:
-        labels     [n]      class index 0..18 (dataset classes are 1..19)
+        labels     [n]      class index 0..num_classes-1 (dataset classes are 1..num_classes)
         masks      [n,h,w]  binary float
         boxes      [n,4]    normalized cxcywh, derived from `masks`
         global_ids [n]      the dataset's global instance id (bookkeeping / visualisation)
     """
-    classes = _squeeze_batch(batch["classes"]).to(device)   # [Ng], values 1..19
+    classes = _squeeze_batch(batch["classes"]).to(device)   # [Ng], values 1..num_classes
     masks = _squeeze_batch(batch["masks"]).to(device)       # [S, H, W] global-id map
     S = masks.shape[0]
+
+    # Decide per global instance id (1-based) whether the head can represent its class.
+    class_list = [int(c) for c in classes.tolist()]
+    droppable = {gid for gid, c in enumerate(class_list, start=1)
+                 if not 1 <= c <= num_classes}
+    if droppable:
+        counts = Counter(IDX_TO_CLASS.get(class_list[gid - 1], f"class_{class_list[gid - 1]}")
+                         for gid in sorted(droppable))
+        scene = batch.get("scene_name", "?")
+        scene = scene[0] if isinstance(scene, (list, tuple)) else scene
+        detail = ", ".join(f"{name} x{n}" for name, n in sorted(counts.items()))
+        print(f"⚠ build_frame_targets [{scene}]: dropped {len(droppable)} instance(s) whose class "
+              f"is outside the {num_classes}-class head and is therefore treated as background "
+              f"({detail}).")
 
     per_frame = []
     for f in range(S):
@@ -116,6 +143,8 @@ def build_frame_targets(batch: Dict, out_hw: Tuple[int, int], device: str) -> Li
         ids = ids[ids > 0]
         frame_masks, frame_labels, frame_ids = [], [], []
         for gid in ids.tolist():
+            if gid in droppable:
+                continue
             binary = (masks[f] == gid).float()
             occ = F.interpolate(binary[None, None], size=out_hw, mode="area")[0, 0]
             thr = min(0.5, float(occ.max()))
@@ -123,7 +152,7 @@ def build_frame_targets(batch: Dict, out_hw: Tuple[int, int], device: str) -> Li
             if small.sum() == 0:
                 continue
             frame_masks.append(small)
-            frame_labels.append(int(classes[gid - 1]) - 1)  # 1..19 → 0..18
+            frame_labels.append(class_list[gid - 1] - 1)  # 1..num_classes → 0..num_classes-1
             frame_ids.append(gid)
 
         if frame_masks:
@@ -212,7 +241,7 @@ def prepare_scenes(model: MaskDINOVGGTModel, scene_dirs: List[str], args, device
         num_patch = features.shape[1] - patch_start_idx
         grid = int(round(num_patch ** 0.5))
         out_hw = (grid * args.mask_upsample, grid * args.mask_upsample)
-        targets = build_frame_targets(batch, out_hw, device)
+        targets = build_frame_targets(batch, out_hw, device, num_classes=model.head.num_classes)
         return {
             "features": features.to(args.cache_device, dtype=cache_dtype),
             "patch_start_idx": patch_start_idx,
@@ -554,7 +583,7 @@ def main():
 
     head_kwargs = dict(
         memory_dim=2048 * len(args.feature_layers), hidden_dim=args.hidden_dim,
-        mask_dim=args.hidden_dim, num_classes=19, num_queries=args.num_queries,
+        mask_dim=args.hidden_dim, num_classes=NUM_SCANNET_CLASSES, num_queries=args.num_queries,
         num_feature_levels=args.num_feature_levels, enc_layers=args.enc_layers,
         dec_layers=args.dec_layers, nheads=args.nheads, dropout=args.dropout,
         two_stage=args.two_stage, learn_tgt=not args.two_stage, initial_pred=True,
@@ -589,7 +618,8 @@ def main():
     weight_dict = build_weight_dict(args.class_weight, args.mask_weight, args.dice_weight,
                                     args.box_weight, args.giou_weight, dec_layers=args.dec_layers,
                                     two_stage=args.two_stage, dn=args.dn)
-    criterion = SetCriterion(19, matcher, weight_dict, losses=["labels", "masks", "boxes"],
+    criterion = SetCriterion(model.head.num_classes, matcher, weight_dict,
+                             losses=["labels", "masks", "boxes"],
                              num_points=args.train_num_points, dn=args.dn,
                              dn_losses=["labels", "masks", "boxes"]).to(device)
 

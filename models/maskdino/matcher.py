@@ -15,6 +15,32 @@ from .box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 from .utils import point_sample
 
 
+def check_target_labels(targets, num_classes: int, where: str = "matcher") -> None:
+    """
+    Fail loudly on a GT label the class head cannot represent.
+
+    Labels must be 0..num_classes-1 (no background column — DINO's sigmoid convention). An
+    out-of-range label otherwise dies as an opaque `IndexError: index out of bounds` inside
+    `pos_cost_class[:, tgt_ids]` here, or inside the denoising `label_enc` embedding in
+    `decoder.py`. `scripts/train_maskdino.py::build_frame_targets` already drops such instances;
+    this guards any other caller that builds targets itself.
+    """
+    for b, t in enumerate(targets):
+        labels = t.get("labels")
+        if labels is None or labels.numel() == 0:
+            continue
+        lo, hi = int(labels.min()), int(labels.max())
+        if lo < 0 or hi >= num_classes:
+            raise AssertionError(
+                f"{where}: target labels for batch element {b} are out of range for a "
+                f"{num_classes}-class head (got min={lo}, max={hi}, expected 0..{num_classes - 1}). "
+                f"The dataset stores ScanNet classes 1..{num_classes} (0 = background) and "
+                f"data/scannet_overfit.py::SCANNET_CLASSES has one extra name ('otherfurniture', "
+                f"index 20) that this head has no logit for — build targets with "
+                f"scripts/train_maskdino.py::build_frame_targets, which drops those instances."
+            )
+
+
 def batch_dice_loss(inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     inputs = inputs.sigmoid().flatten(1)
     numerator = 2 * torch.einsum("nc,mc->nm", inputs, targets)
@@ -54,6 +80,7 @@ class HungarianMatcher(nn.Module):
             list of B (pred_idx, tgt_idx) int64 tensor pairs.
         """
         bs, num_queries = outputs["pred_logits"].shape[:2]
+        check_target_labels(targets, outputs["pred_logits"].shape[-1], where="HungarianMatcher")
         indices = []
 
         for b in range(bs):

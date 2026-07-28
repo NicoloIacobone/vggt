@@ -78,6 +78,11 @@ class MaskDINOVGGTHead(nn.Module):
     def num_queries(self) -> int:
         return self.predictor.num_queries
 
+    @property
+    def num_classes(self) -> int:
+        """Width of the class head — the GT builder needs it to drop unrepresentable classes."""
+        return self.predictor.num_classes
+
     def forward(self, tokens: Tensor, patch_start_idx: int = 5,
                 targets: Optional[List[Dict[str, Tensor]]] = None) -> Tuple[Dict, Optional[Dict]]:
         """

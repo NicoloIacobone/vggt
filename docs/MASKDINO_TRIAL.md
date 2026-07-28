@@ -60,7 +60,9 @@ Everything here is a deliberate, documented deviation — the decoder logic itse
 4. **19 classes, sigmoid-focal, no background column.** MaskDINO/DINO classify with `num_classes`
    sigmoid logits and represent "no object" as *all logits low*, whereas the D4RT arms used 20
    softmax logits with background at index 0. Ported faithfully → the eval protocol needs the
-   `score_mode="sigmoid"` switch (§6).
+   `score_mode="sigmoid"` switch (§6). The width comes from `models/maskdino/head.py::
+   NUM_SCANNET_CLASSES`; instances of the 20th `SCANNET_CLASSES` name (`otherfurniture`) are
+   dropped rather than crashing the matcher — see §4.
 5. **Mask resolution** is the VGGT patch grid (37×37) by default, so the mask metrics are computed
    on exactly the same grid as arms A–E. `--mask_upsample 2` gives 74×74 (a transposed-conv step
    in the pixel decoder, GT rebuilt to match) — a separate run, not the headline number.
@@ -106,6 +108,26 @@ is the last layer only — identical cache footprint to every other arm.
 - **GT** is per frame: for each frame, every ScanNet instance visible in it becomes one target
   with `labels` (0..18), `masks` (binary, at the mask resolution) and `boxes` (cxcywh normalized,
   derived from the mask). Frames with no visible instance are skipped in training.
+- **Classes the head cannot represent are dropped** (added 2026-07-28). `build_frame_targets`
+  takes `num_classes` (wired from `model.head.num_classes`, no longer a hardcoded `19`) and skips
+  any instance whose dataset class index is outside `1..num_classes`, reporting one aggregated
+  warning per scene naming the class and the count. This matters because
+  `data/scannet_overfit.py::SCANNET_CLASSES` has **twenty** names — index 20 is `otherfurniture`,
+  which the 19-logit sigmoid head has no column for. Such an instance used to become label 19 and
+  **crash**: `IndexError` in `matcher.py` (`pos_cost_class[:, tgt_ids]`) and in the DN
+  `label_enc` `nn.Embedding(19)` in `decoder.py`; `criterion.py::loss_labels` did not crash but
+  silently folded it into the no-object column. Dropping matches what
+  `scripts/build_official_masks.py` already does upstream (every NYU40 class outside the 19
+  trainable ones → background).
+  **Nothing changes for the completed runs.** Verified 2026-07-28 by listing both GT sources
+  without unpacking them: the official-GT build tree has no `otherfurniture` folders, and the
+  SAM3 tar (`scannet_instance_dataset_full.tar.zst`, the realistic trigger since SAM3 ran against
+  the full 20-name list) contains **exactly the 19 trainable classes** in both `masks/` and
+  `masks_instance/` — `zstd -dc … | tar -t` over all 200 scenes returns zero `otherfurniture`
+  entries. The bug was latent, reachable only by a future GT build that keeps the 20th class.
+  As a backstop, `matcher.py::check_target_labels` (called from `HungarianMatcher.forward` and
+  `SetCriterion.forward`) turns an out-of-range or negative label from any *other* caller into a
+  named `AssertionError` instead of an opaque `IndexError`.
 - **Cross-view instance identity is not used and not required.** That is the whole point of the
   single-frame restriction — and the reason the numbers are not directly comparable to arms A–E
   (§6).
@@ -119,7 +141,7 @@ is the last layer only — identical cache footprint to every other arm.
 | `models/maskdino/box_ops.py` | cxcywh↔xyxy, GIoU, `masks_to_boxes` |
 | `models/maskdino/pixel_decoder.py` | `VGGTPixelDecoder` (§3) + the MSDeformAttn encoder |
 | `models/maskdino/decoder.py` | `MaskDINODecoder` — two-stage selection, DAB anchors, iterative box refinement, DN, deep supervision |
-| `models/maskdino/matcher.py` | `HungarianMatcher` (class/mask/dice/box/giou, point-sampled mask cost) |
+| `models/maskdino/matcher.py` | `HungarianMatcher` (class/mask/dice/box/giou, point-sampled mask cost) + `check_target_labels` (out-of-range GT-label guard, §4) |
 | `models/maskdino/criterion.py` | `SetCriterion` (focal / point-sampled BCE+Dice / L1+GIoU, aux + interm + DN losses) |
 | `models/maskdino/head.py` | `MaskDINOVGGTHead` = pixel decoder + decoder, `head_config` round-trip |
 | `scripts/train_maskdino.py` | single-frame training + per-frame eval + checkpoints + `metrics.jsonl` + overlays |

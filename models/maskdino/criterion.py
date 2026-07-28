@@ -21,6 +21,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from . import box_ops
+from .matcher import check_target_labels
 from .utils import (calculate_uncertainty, cat_matched,
                     get_uncertain_point_coords_with_randomness, point_sample)
 
@@ -163,6 +164,10 @@ class SetCriterion(nn.Module):
     def forward(self, outputs, targets, mask_dict=None):
         """Returns the (unweighted) loss dict; multiply by `weight_dict` to get the total."""
         device = outputs["pred_logits"].device
+        # Guard before anything indexes with a label: `loss_labels` would silently fold a label
+        # == num_classes into the no-object column and crash on anything larger, and the DN path
+        # below never reaches the matcher's own check.
+        check_target_labels(targets, self.num_classes, where="SetCriterion")
         outputs_without_aux = {k: v for k, v in outputs.items()
                                if k not in ("aux_outputs", "interm_outputs")}
 

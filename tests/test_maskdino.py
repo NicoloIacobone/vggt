@@ -292,6 +292,76 @@ def test_frame_targets_builder():
     print("✅ build_frame_targets produces per-frame labels/masks/boxes\n")
 
 
+def test_frame_targets_out_of_range_class():
+    """
+    `data/scannet_overfit.py::SCANNET_CLASSES` has TWENTY names — index 20 ('otherfurniture')
+    has no logit in the 19-class MaskDINO head. Such instances must be dropped (= background,
+    what the official-GT builder already does), never crash the matcher / DN label embedding.
+    """
+    print("=== Testing out-of-range GT class handling ===")
+    from train_maskdino import build_frame_targets
+
+    S, H, W, out_hw = 2, 16, 16, (8, 8)
+    masks = torch.zeros(S, H, W, dtype=torch.long)
+    masks[:, 2:10, 2:10] = 1     # instance 1: class 3 (trainable)
+    masks[:, 12:15, 12:15] = 2   # instance 2: class 20 = 'otherfurniture' → unrepresentable
+    batch = {"classes": torch.tensor([3, 20]), "masks": masks, "scene_name": "sceneXXXX_00"}
+
+    per_frame = build_frame_targets(batch, out_hw, "cpu", num_classes=19)
+    for f, t in enumerate(per_frame):
+        assert t["labels"].tolist() == [2], (f, t["labels"])          # only the trainable one
+        assert t["global_ids"].tolist() == [1], (f, t["global_ids"])
+        assert t["masks"].shape == (1, 8, 8) and t["boxes"].shape == (1, 4)
+        assert int(t["labels"].max()) < 19
+
+    # ... and the dropped instance must not resurface just because the head is wider
+    wide = build_frame_targets(batch, out_hw, "cpu", num_classes=20)
+    assert wide[0]["labels"].tolist() == [2, 19], wide[0]["labels"]
+
+    # Everything in range → byte-identical to the default 19-class behaviour (the official-GT
+    # path: labels 0..18 must be produced exactly as before this guard existed).
+    ok = {"classes": torch.tensor([3, 7]), "masks": masks}
+    a = build_frame_targets(ok, out_hw, "cpu")
+    b = build_frame_targets(ok, out_hw, "cpu", num_classes=19)
+    for ta, tb in zip(a, b):
+        assert ta["labels"].tolist() == tb["labels"].tolist() == [2, 6]
+        assert torch.equal(ta["masks"], tb["masks"]) and torch.equal(ta["boxes"], tb["boxes"])
+    print("✅ out-of-range classes dropped with a warning; in-range GT unchanged\n")
+
+
+def test_out_of_range_label_guard():
+    """A caller that bypasses build_frame_targets must get a clear error, not an IndexError."""
+    print("=== Testing defensive out-of-range label guard ===")
+    Q, C, hw = 6, 19, (8, 8)
+    outputs = {"pred_logits": torch.randn(1, Q, C),
+               "pred_masks": torch.randn(1, Q, *hw),
+               "pred_boxes": torch.rand(1, Q, 4)}
+    bad = [{"labels": torch.tensor([2, C]),          # C == num_classes: one past the last logit
+            "masks": torch.zeros(2, *hw),
+            "boxes": torch.tensor([[0.5, 0.5, 0.2, 0.2], [0.5, 0.5, 0.2, 0.2]])}]
+
+    matcher = HungarianMatcher(num_points=32)
+    crit = SetCriterion(C, matcher, {}, losses=["labels"], num_points=0)
+    for name, fn in (("HungarianMatcher", lambda: matcher(outputs, bad)),
+                     ("SetCriterion", lambda: crit(outputs, bad))):
+        try:
+            fn()
+            raise SystemExit(f"{name} accepted an out-of-range label")
+        except AssertionError as e:
+            assert "out of range" in str(e) and "19-class head" in str(e), str(e)
+
+    # negative labels are caught too, and valid labels still pass
+    neg = [{**bad[0], "labels": torch.tensor([-1, 3])}]
+    try:
+        matcher(outputs, neg)
+        raise SystemExit("matcher accepted a negative label")
+    except AssertionError:
+        pass
+    good = [{**bad[0], "labels": torch.tensor([0, C - 1])}]
+    matcher(outputs, good)  # must not raise
+    print("✅ out-of-range labels raise a named AssertionError in matcher + criterion\n")
+
+
 def test_perframe_metrics():
     """The per-frame protocol used to score BOTH this trial and (via scripts/eval_perframe.py)
     the existing D4RT checkpoints — the only apples-to-apples comparison (trial doc §6)."""
@@ -385,6 +455,8 @@ if __name__ == "__main__":
     test_matcher_recovers_planted_assignment()
     test_criterion_keys_and_perfect_predictions()
     test_frame_targets_builder()
+    test_frame_targets_out_of_range_class()
+    test_out_of_range_label_guard()
     test_perframe_metrics()
     test_head_config_round_trip()
     test_overfit_single_frame()

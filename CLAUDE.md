@@ -36,7 +36,7 @@ python tests/test_grid_ablation.py    # eval-only grid-density sweep (eval_grid_
 python tests/test_build_official_masks.py  # official-GT converter (synthetic zips/tsv → SAM3 layout + loader round-trip)
 python tests/test_eval_checkpoint.py       # cross-GT eval plumbing (arg inheritance/overrides, scene resolution)
 python tests/test_render_topdown.py        # top-down point-cloud renderer (projection, up-axis estimation, colors)
-python tests/test_maskdino.py              # MaskDINO trial: deformable attn vs naive ref, pixel decoder, decoder configs, matcher/criterion, per-frame GT + metrics, head_config round-trip, synthetic overfit
+python tests/test_maskdino.py              # MaskDINO trial: deformable attn vs naive ref, pixel decoder, decoder configs, matcher/criterion, per-frame GT (incl. out-of-range-class drop) + metrics, head_config round-trip, synthetic overfit
 
 # Single-scene overfit (sanity check for gradient flow / new components). No unpacked tree
 # lives on work anymore — point --scene_dir at the official-GT build tree on scratch (below),
@@ -103,6 +103,9 @@ python scripts/eval_grid_ablation.py --checkpoint <run_dir>/checkpoint_best_ap50
 # --- MaskDINO trial (parallel track, docs/MASKDINO_TRIAL.md) — SINGLE FRAME ---------------
 # Own package (models/maskdino/), own script, own job; the D4RT arms are untouched. The batch
 # dimension is FRAMES, GT is per frame (labels+masks+boxes), losses/metrics follow MaskDINO.
+# The class head has NUM_SCANNET_CLASSES=19 sigmoid logits (no background column), so
+# build_frame_targets DROPS instances of the 20th SCANNET_CLASSES name (otherfurniture) with a
+# warning — same rule as the official-GT builder. No GT tree on disk has that class today.
 sbatch slurm/train_maskdino.sh                                   # 50 scenes, ~20k steps
 sbatch --export=ALL,N_SCENES=200 slurm/train_maskdino.sh         # epochs auto-scale to hold the step budget
 sbatch --export=ALL,EXTRA_ARGS='--mask_upsample 2' slurm/train_maskdino.sh   # 74x74 masks
