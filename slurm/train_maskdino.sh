@@ -8,6 +8,8 @@
 #   EXTRA_ARGS   appended verbatim to the python call (e.g. '--mask_upsample 2')
 #   EXP_TAG      appended to the run directory name
 #   DATA_TAR     which dataset tar to stage (default: 500-scene official GT)
+#   VAL_SPLIT    'convention' (default, val = scenes 0080-0089) or 'official' (val = the official
+#                ScanNet v2 val scenes inside our range; needs its own run, see below)
 #
 #SBATCH --job-name=maskdino_sf
 #SBATCH --output=/cluster/scratch/niacobone/vggt/slurm/logs/maskdino_%j.log
@@ -36,19 +38,37 @@ export DATA_TAR="${DATA_TAR:-/cluster/work/igp_psr/niacobone/distillation/datase
 source slurm/stage_dataset.sh
 
 N_SCENES="${N_SCENES:-50}"
-# Scene 0080–0089 are the held-out val scenes of every D4RT scaling run; skip them if the
-# train range would otherwise swallow them.
-TRAIN=$(seq -f "scene%04g_00" 0 $((N_SCENES - 1)) | grep -v -E "scene008[0-9]_00" | paste -sd, -)
-VAL=$(seq -f "scene%04g_00" 80 89 | paste -sd, -)
+if [ "${VAL_SPLIT:-convention}" = "official" ]; then
+    # Comparability read-out (docs/RESULTS.md §1): val = the official ScanNet v2 val scenes that
+    # exist in our 500-scene tar (*_00 only, id < N_SCENES), train = everything else in range.
+    # This needs its OWN run — 77 of those 80 scenes sit inside the usual 0000–0489 train range,
+    # so scoring an existing checkpoint on them would be scoring on training data.
+    VAL=$(awk -F'_' -v n="$N_SCENES" '$2=="00" && substr($1,6)+0 < n' \
+          slurm/../data/splits/scannetv2_val.txt | sort | paste -sd, -)
+    TRAIN=$(seq -f "scene%04g_00" 0 $((N_SCENES - 1)) \
+            | grep -v -F -x -f <(tr ',' '\n' <<< "$VAL") | paste -sd, -)
+    echo "[cfg] OFFICIAL split: $(tr ',' '\n' <<< "$VAL" | wc -l) val scenes, \
+$(tr ',' '\n' <<< "$TRAIN" | wc -l) train scenes"
+else
+    # Scene 0080–0089 are the held-out val scenes of every D4RT scaling run; skip them if the
+    # train range would otherwise swallow them.
+    TRAIN=$(seq -f "scene%04g_00" 0 $((N_SCENES - 1)) | grep -v -E "scene008[0-9]_00" | paste -sd, -)
+    VAL=$(seq -f "scene%04g_00" 80 89 | paste -sd, -)
+fi
 OUT=/cluster/work/igp_psr/niacobone/distillation/output
 RUN=$OUT/maskdino_sf_n${N_SCENES}${EXP_TAG:-}_$(date +%Y%m%d_%H%M%S)
 
 # One step = one batch of 8 frames, one epoch = every training frame once → steps/epoch ≈
 # N_SCENES. Hold the TOTAL gradient-step budget roughly constant (~20k) across scene counts,
 # so the comparison across N is about data, not about training length.
-EPOCHS="${EPOCHS:-$(( 20000 / N_SCENES ))}"
-[ "$EPOCHS" -lt 60 ] && EPOCHS=60
-[ "$EPOCHS" -gt 400 ] && EPOCHS=400
+# An explicitly exported EPOCHS is honoured as-is — the clamps below exist only to keep the
+# AUTO-derived schedule sane, and used to silently override e.g. EPOCHS=30 (needed to hold the
+# step budget when --bundles_per_scene multiplies the steps per epoch) back up to 60.
+if [ -z "${EPOCHS:-}" ]; then
+    EPOCHS=$(( 20000 / N_SCENES ))
+    [ "$EPOCHS" -lt 60 ] && EPOCHS=60
+    [ "$EPOCHS" -gt 400 ] && EPOCHS=400
+fi
 WARMUP=$(( EPOCHS / 20 )); [ "$WARMUP" -lt 5 ] && WARMUP=5
 EVAL_EVERY=$(( EPOCHS / 40 )); [ "$EVAL_EVERY" -lt 1 ] && EVAL_EVERY=1
 echo "[cfg] scenes=$N_SCENES epochs=$EPOCHS warmup=$WARMUP eval_every=$EVAL_EVERY"

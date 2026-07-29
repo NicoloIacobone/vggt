@@ -10,6 +10,7 @@ Layout:
     pixel_decoder.py   VGGT tokens → feature pyramid → MSDeformAttn encoder
     decoder.py         MaskDINODecoder — two-stage selection, denoising, deep supervision
     decoder_layers.py  the generic DAB/DINO decoder stack it drives
+    multiframe.py      shared-across-frames queries: cross-frame attention, bundle GT, bundle matcher
     matcher.py         HungarianMatcher (class + box + point-sampled mask cost)
     criterion.py       SetCriterion (focal + BCE/Dice + L1/GIoU, incl. DN and aux losses)
     ms_deform_attn.py  pure-PyTorch multi-scale deformable attention (no CUDA extension)
@@ -23,6 +24,8 @@ must be able to import the head without it.
 from .criterion import SetCriterion, build_weight_dict
 from .head import NUM_SCANNET_CLASSES, MaskDINOVGGTHead, build_head_from_config, to_scannet_class_logits
 from .matcher import HungarianMatcher, check_target_labels
+from .multiframe import (CrossFrameAttention, MultiFrameHungarianMatcher, build_bundle_target,
+                         bundle_targets_to_device, expand_bundle_indices)
 
 __all__ = [
     "MaskDINOVGGTHead",
@@ -33,4 +36,9 @@ __all__ = [
     "check_target_labels",
     "SetCriterion",
     "build_weight_dict",
+    "CrossFrameAttention",
+    "MultiFrameHungarianMatcher",
+    "build_bundle_target",
+    "bundle_targets_to_device",
+    "expand_bundle_indices",
 ]

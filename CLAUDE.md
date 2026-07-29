@@ -46,11 +46,17 @@ python tests/test_maskdino_loss.py    # matcher, criterion keys + perfect-predic
                                       # out-of-range GT-label guard
 python tests/test_maskdino_train.py   # per-frame GT builder (incl. class drop), per-frame metric
                                       # slicing, 60-step synthetic overfit
+python tests/test_maskdino_multiframe.py  # shared-query multi-frame path: cross-frame block,
+                                      # bundle GT + index expansion, bundle matcher, S=1
+                                      # equivalence, multi-frame overfit, bundle batching/scoring
 
 # --- Training (the entry point) ---------------------------------------------------------------
 sbatch slurm/train_maskdino.sh                                 # 50 scenes, ~20k steps
 sbatch --export=ALL,N_SCENES=490 slurm/train_maskdino.sh       # epochs auto-scale to hold the budget
 sbatch --export=ALL,EXTRA_ARGS='--mask_upsample 2' slurm/train_maskdino.sh
+# multi-frame: one query set per bundle of 8 frames (docs/MASKDINO.md §8.2); reports the
+# per-bundle (multi-view) metrics as well as the per-frame ones
+sbatch --export=ALL,N_SCENES=490,EXTRA_ARGS='--multi_frame --feature_mode bundle' slurm/train_maskdino.sh
 python scripts/train_maskdino.py --train_scenes scene0000_00 --val_scenes scene0080_00 \
     --num_epochs 50 --num_queries 300 --scans_root <scans_root>       # local smoke test
 
@@ -96,6 +102,7 @@ models/maskdino/          the model — see docs/MASKDINO.md §5 for the per-fil
   pixel_decoder.py        VGGT tokens → 3-level ViTDet pyramid → MSDeformAttn encoder
   decoder.py              MaskDINODecoder: two-stage selection, DAB anchors, DN, deep supervision
   decoder_layers.py       the generic DAB/DINO decoder stack it drives
+  multiframe.py           --multi_frame: cross-frame attention, bundle GT, bundle matcher
   matcher.py criterion.py ms_deform_attn.py box_ops.py utils.py
 
 scripts/train_maskdino.py entry point: CLI, construction, epoch loop, checkpointing
@@ -108,7 +115,10 @@ train/eval_metrics.py     mIoU / AP50 / AP75 / mAP / class_acc (shared with lega
 data/scannet_overfit.py   the dataset loader (shared with legacy)
 ```
 
-The batch dimension is **FRAMES**, not scenes. GT is per frame (labels + masks + boxes).
+The batch dimension is **FRAMES**, not scenes. GT is per frame (labels + masks + boxes). With
+`--multi_frame` the batch is B bundles of S frames that **stay contiguous** in that dimension
+(everything downstream assumes it) and share one query set; the GT is still per frame, re-linked
+across views by global instance id at batch time.
 
 ### Invariants that silently break things if violated
 

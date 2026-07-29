@@ -64,6 +64,7 @@ class MaskDINODecoder(nn.Module):
         activation: str = "relu",
         dec_n_points: int = 4,
         query_dim: int = 4,
+        cross_frame_attn: bool = False,
     ):
         super().__init__()
         self.num_feature_levels = total_num_feature_levels
@@ -114,6 +115,7 @@ class MaskDINODecoder(nn.Module):
         self.decoder = TransformerDecoder(
             decoder_layer, self.num_layers, self.decoder_norm, d_model=hidden_dim,
             query_dim=query_dim, num_feature_levels=self.num_feature_levels,
+            nheads=nheads, dropout=dropout, cross_frame_attn=cross_frame_attn,
         )
 
         self._bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
@@ -270,7 +272,8 @@ class MaskDINODecoder(nn.Module):
 
     # ---- forward -------------------------------------------------------------------------
 
-    def forward(self, x: List[Tensor], mask_features: Tensor, targets: Optional[List[dict]] = None):
+    def forward(self, x: List[Tensor], mask_features: Tensor, targets: Optional[List[dict]] = None,
+                frames_per_sample: int = 1):
         """
         Args:
             x: multi-scale memory maps [B, C, H_l, W_l], HIGH→LOW resolution (as produced by
@@ -278,6 +281,11 @@ class MaskDINODecoder(nn.Module):
                order is fixed by the pixel decoder and used as given.
             mask_features: [B, mask_dim, h, w] — the map every mask is decoded against.
             targets: per-sample dicts with "labels"/"boxes" (training only, for DN).
+            frames_per_sample: S > 1 switches on the multi-frame mode (docs/MASKDINO.md §8):
+               the batch is B bundles of S frames, contiguous in the batch dimension, and the
+               query set is SHARED across the S frames of a bundle — selected once per bundle,
+               broadcast to every frame, then refined per frame (each view keeps its own anchor
+               box) and tied together by the decoder's cross-frame blocks.
         Returns:
             (out, mask_dict) — `out` has pred_logits / pred_masks / pred_boxes (+ aux_outputs,
             interm_outputs); `mask_dict` carries the DN predictions for the criterion.
@@ -285,6 +293,8 @@ class MaskDINODecoder(nn.Module):
         assert len(x) == self.num_feature_levels
         device = x[0].device
         bs = x[0].shape[0]
+        s = int(frames_per_sample)
+        assert s >= 1 and bs % s == 0, f"batch {bs} is not a multiple of frames_per_sample {s}"
 
         src_flatten, spatial_shapes = [], []
         for lvl, src in enumerate(x):
@@ -307,13 +317,31 @@ class MaskDINODecoder(nn.Module):
             enc_outputs_class_unselected = self.class_embed(output_memory)
             enc_outputs_coord_unselected = self._bbox_embed(output_memory) + output_proposals
 
-            topk_proposals = torch.topk(
-                enc_outputs_class_unselected.max(-1)[0], self.num_queries, dim=1)[1]
-            refpoint_embed_undetach = torch.gather(
-                enc_outputs_coord_unselected, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
+            if s > 1:
+                # Multi-frame: select ONE query set per bundle from the union of the S frames'
+                # encoder proposals, then broadcast it to every frame. Query q is therefore the
+                # same object hypothesis in all views; the anchor it starts from comes from the
+                # frame that proposed it and is immediately re-derived per frame by the
+                # mask-enhanced box init below (and refined per frame afterwards).
+                hw = output_memory.shape[1]
+                scores = enc_outputs_class_unselected.max(-1)[0].reshape(bs // s, s * hw)
+                topk_proposals = torch.topk(scores, self.num_queries, dim=1)[1]     # [B, Q]
+                mem_b = output_memory.reshape(bs // s, s * hw, self.hidden_dim)
+                coord_b = enc_outputs_coord_unselected.reshape(bs // s, s * hw, 4)
+                refpoint_embed_undetach = torch.gather(
+                    coord_b, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4)
+                ).repeat_interleave(s, dim=0)
+                tgt_undetach = torch.gather(
+                    mem_b, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, self.hidden_dim)
+                ).repeat_interleave(s, dim=0)
+            else:
+                topk_proposals = torch.topk(
+                    enc_outputs_class_unselected.max(-1)[0], self.num_queries, dim=1)[1]
+                refpoint_embed_undetach = torch.gather(
+                    enc_outputs_coord_unselected, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
+                tgt_undetach = torch.gather(
+                    output_memory, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, self.hidden_dim))
             refpoint_embed = refpoint_embed_undetach.detach()
-            tgt_undetach = torch.gather(
-                output_memory, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, self.hidden_dim))
 
             outputs_class, outputs_mask = self.forward_prediction_heads(
                 tgt_undetach.transpose(0, 1), mask_features)
@@ -366,6 +394,8 @@ class MaskDINODecoder(nn.Module):
             spatial_shapes=spatial_shapes,
             valid_ratios=valid_ratios,
             tgt_mask=tgt_mask,
+            frames_per_sample=s,
+            num_shared_queries=self.num_queries,
         )
         for i, output in enumerate(hs):
             outputs_class, outputs_mask = self.forward_prediction_heads(

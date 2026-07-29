@@ -40,11 +40,12 @@ from torch.optim import AdamW
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from models.maskdino import (NUM_SCANNET_CLASSES, HungarianMatcher, SetCriterion,
-                             build_weight_dict)
+from models.maskdino import (NUM_SCANNET_CLASSES, HungarianMatcher, MultiFrameHungarianMatcher,
+                             SetCriterion, build_weight_dict)
 from models.maskdino.model import MaskDINOVGGTModel
 from train.common import (DEFAULT_SCANS_ROOT, append_jsonl, build_scheduler, resolve_scene_dirs)
-from train.maskdino_data import frame_index, gather_batch, prepare_scenes
+from train.maskdino_data import (bundle_index, frame_index, gather_batch, gather_bundle_batch,
+                                 prepare_scenes)
 from train.maskdino_eval import eval_scenes, fmt, mean_metric, visualize
 
 # ------------------------------------------------------------------------------------------
@@ -119,6 +120,20 @@ def build_argparser():
                    choices=["no", "bitmask"],
                    help="Seed the decoder's anchor boxes from the initial predicted masks. "
                         "Upstream's third option 'mask2box' is not ported.")
+    # multi-frame (docs/MASKDINO.md §8) — off by default, so every single-frame result stands
+    p.add_argument("--multi_frame", action="store_true",
+                   help="Share ONE query set across the frames of a bundle: the sample becomes a "
+                        "bundle of --num_frames frames, queries are selected once per bundle and "
+                        "matched once per bundle over the multi-view mask volume. Adds the "
+                        "per-bundle (multi-view) metrics the D4RT arms were scored on.")
+    p.add_argument("--cross_frame_attn", action=argparse.BooleanOptionalAction, default=None,
+                   help="Cross-frame self-attention block after every decoder layer (defaults to "
+                        "on with --multi_frame, off otherwise). --no-cross_frame_attn isolates "
+                        "how much of the multi-frame gain comes from the block rather than from "
+                        "shared query init + bundle matching.")
+    p.add_argument("--batch_bundles", type=int, default=1,
+                   help="Bundles per step in --multi_frame mode (batch = this x --num_frames "
+                        "frames). Ignored in single-frame mode, which uses --batch_frames.")
     p.add_argument("--mask_upsample", type=int, default=1, choices=[1, 2, 4],
                    help="1 (default) = masks on the 37x37 patch grid, the same grid every D4RT "
                         "arm was scored on; 2/4 predict (and supervise) at 74/148 px.")
@@ -169,6 +184,11 @@ def main():
         args.schedule_epochs = args.num_epochs
     if args.cache_device is None:
         args.cache_device = args.device
+    if args.cross_frame_attn is None:
+        args.cross_frame_attn = args.multi_frame
+    if args.cross_frame_attn and not args.multi_frame:
+        raise SystemExit("--cross_frame_attn needs --multi_frame: with one frame per sample the "
+                         "block has nothing to attend across.")
     args.feature_layers = [int(x) for x in args.feature_layers.split(",") if x.strip()]
 
     random.seed(args.seed)
@@ -192,7 +212,7 @@ def main():
         two_stage=args.two_stage, learn_tgt=not args.two_stage, initial_pred=True,
         initialize_box_type=args.initialize_box_type if args.two_stage else "no",
         dn=args.dn, dn_num=args.dn_num, noise_scale=args.noise_scale,
-        mask_upsample=args.mask_upsample,
+        mask_upsample=args.mask_upsample, cross_frame_attn=args.cross_frame_attn,
     )
     print("\n=== Initializing model ===")
     model = MaskDINOVGGTModel(head_kwargs).to(device)
@@ -202,8 +222,16 @@ def main():
     print("\n=== Caching frozen-backbone features ===")
     train_scenes = prepare_scenes(model, train_dirs, args, device, "train")
     val_scenes = prepare_scenes(model, val_dirs, args, device, "val")
-    train_samples = frame_index(train_scenes)
-    print(f"Training samples (frames with >=1 instance): {len(train_samples)}")
+    if args.multi_frame:
+        # One sample = one bundle of --num_frames frames, sharing a query set.
+        train_samples = bundle_index(train_scenes)
+        step_size = args.batch_bundles
+        print(f"Training samples (bundles with >=1 instance): {len(train_samples)} "
+              f"x {args.num_frames} frames")
+    else:
+        train_samples = frame_index(train_scenes)
+        step_size = args.batch_frames
+        print(f"Training samples (frames with >=1 instance): {len(train_samples)}")
     # Evenly-spaced subset of train scenes for the diagnostic train metric (see
     # --eval_train_scenes): eval must not scale with the training-set size.
     if 0 < args.eval_train_scenes < len(train_scenes):
@@ -221,10 +249,17 @@ def main():
     weight_dict = build_weight_dict(args.class_weight, args.mask_weight, args.dice_weight,
                                     args.box_weight, args.giou_weight, dec_layers=args.dec_layers,
                                     two_stage=args.two_stage, dn=args.dn)
+    # In multi-frame mode the assignment is made once per bundle over the multi-view mask volume
+    # and then projected onto the frames; every loss stays the per-frame loss it already was.
+    bundle_matcher = MultiFrameHungarianMatcher(
+        cost_class=args.class_weight, cost_mask=args.mask_weight, cost_dice=args.dice_weight,
+        cost_box=args.box_weight, cost_giou=args.giou_weight,
+        num_points=args.matcher_num_points) if args.multi_frame else None
     criterion = SetCriterion(model.head.num_classes, matcher, weight_dict,
                              losses=["labels", "masks", "boxes"],
                              num_points=args.train_num_points, dn=args.dn,
-                             dn_losses=["labels", "masks", "boxes"]).to(device)
+                             dn_losses=["labels", "masks", "boxes"],
+                             bundle_matcher=bundle_matcher).to(device)
 
     optimizer = AdamW([p for p in model.head.parameters() if p.requires_grad],
                       lr=args.learning_rate, weight_decay=args.weight_decay)
@@ -257,21 +292,27 @@ def main():
     best = {"val_mIoU": -1.0, "epoch": -1}
     best_ap = {"val_AP50": -1.0, "epoch": -1}
     t_start = time.time()
-    steps_per_epoch = max(1, (len(train_samples) + args.batch_frames - 1) // args.batch_frames)
+    steps_per_epoch = max(1, (len(train_samples) + step_size - 1) // step_size)
 
     for epoch in range(start_epoch, args.num_epochs):
         model.train()
         random.shuffle(train_samples)
         epoch_loss = epoch_ce = epoch_mask = epoch_box = 0.0
         for step in range(steps_per_epoch):
-            chunk = train_samples[step * args.batch_frames:(step + 1) * args.batch_frames]
+            chunk = train_samples[step * step_size:(step + 1) * step_size]
             if not chunk:
                 continue
-            feats, targets, psi = gather_batch(train_scenes, chunk, device)
 
             optimizer.zero_grad(set_to_none=True)
-            out, mask_dict = model.head(feats, psi, targets)
-            losses = criterion(out, targets, mask_dict)
+            if args.multi_frame:
+                feats, targets, bundles, psi, s = gather_bundle_batch(train_scenes, chunk, device)
+                out, mask_dict = model.head(feats, psi, targets, frames_per_sample=s)
+                losses = criterion(out, targets, mask_dict, bundle_targets=bundles,
+                                   frames_per_sample=s)
+            else:
+                feats, targets, psi = gather_batch(train_scenes, chunk, device)
+                out, mask_dict = model.head(feats, psi, targets)
+                losses = criterion(out, targets, mask_dict)
             total = sum(losses[k] * weight_dict[k] for k in losses if k in weight_dict)
             total.backward()
             if args.grad_clip > 0:
@@ -301,12 +342,22 @@ def main():
                   f" | val all-query mIoU={mean_metric(va, 'mIoU_all'):.3f} "
                   f"AP50={mean_metric(va, 'AP50_all'):.3f} "
                   f"(kept {mean_metric(va, 'num_pred'):.1f}/frame)")
+            if args.multi_frame:
+                # the multi-view protocol of the retired arms — meaningful again now that a
+                # query owns one instance across all views (docs/MASKDINO.md §8)
+                print(f"    val per-bundle mIoU={mean_metric(va, 'bundle_mIoU'):.3f} "
+                      f"AP50={mean_metric(va, 'bundle_AP50'):.3f} "
+                      f"AP75={mean_metric(va, 'bundle_AP75'):.3f} "
+                      f"mAP={mean_metric(va, 'bundle_mAP'):.3f}")
             record = {"epoch": epoch + 1, "lr": float(scheduler.get_last_lr()[0]),
                       "loss": mean_loss, "class_loss": epoch_ce / n,
                       "mask_loss": epoch_mask / n, "box_loss": epoch_box / n}
+            keys = ["mIoU", "AP50", "AP75", "mAP", "class_acc", "num_pred",
+                    "mIoU_all", "AP50_all", "AP75_all", "mAP_all"]
+            if args.multi_frame:
+                keys += [f"bundle_{k}" for k in keys]
             for split, d in (("train", tr), ("val", va)):
-                for key in ("mIoU", "AP50", "AP75", "mAP", "class_acc", "num_pred",
-                            "mIoU_all", "AP50_all", "AP75_all", "mAP_all"):
+                for key in keys:
                     record[f"{split}_{key}"] = mean_metric(d, key)
             if metrics_path:
                 append_jsonl(metrics_path, record)
@@ -338,6 +389,11 @@ def main():
           f"AP50={mean_metric(train_metrics, 'AP50'):.3f}")
     print(f"Mean val   mIoU={mean_metric(val_metrics, 'mIoU'):.3f} "
           f"AP50={mean_metric(val_metrics, 'AP50'):.3f}")
+    if args.multi_frame:
+        print(f"Mean val per-bundle mIoU={mean_metric(val_metrics, 'bundle_mIoU'):.3f} "
+              f"AP50={mean_metric(val_metrics, 'bundle_AP50'):.3f} "
+              f"(multi-view protocol — comparable to the D4RT arms' per-bundle numbers, "
+              f"NOT to the per-frame ones; docs/RESULTS.md §1)")
     if best["epoch"] > 0:
         print(f"Best val mIoU {best['val_mIoU']:.3f} @ epoch {best['epoch']}; "
               f"best val AP50 {best_ap['val_AP50']:.3f} @ epoch {best_ap['epoch']}")

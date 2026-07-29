@@ -2,7 +2,11 @@
 
 **Status:** single-frame question answered and won (2026-07-27). At 490 scenes this head scores
 **val mIoU 0.669 / AP50 0.699** against the best D4RT arm's **0.451 / 0.294** on the identical
-per-frame protocol — +48 % mIoU, +138 % AP50. The multi-frame extension (§8) is the open work.
+per-frame protocol — +48 % mIoU, +138 % AP50; **0.694 / 0.729 with `--bundles_per_scene 2`**
+(§7.4). The multi-frame extension (§8) is implemented through step 2 (shared queries across the
+frames of a bundle, `--multi_frame`, 2026-07-28): per-frame it is neutral against its control,
+and on the arms' own multi-view ruler it scores **0.535 mIoU / 0.494 AP50 vs arm C's
+0.367 / 0.199**. 3D anchors (§8.3) are designed but not implemented.
 
 **Origin:** supervisor request (2026-07-27) — replicate the MaskDINO decoder on top of the frozen
 VGGT backbone and see whether a state-of-the-art detection-style decoder breaks the ceiling the
@@ -149,6 +153,7 @@ is the last layer only — identical cache footprint to every other arm.
 | `pixel_decoder.py` | `VGGTPixelDecoder` (§3) + the MSDeformAttn encoder |
 | `decoder.py` | `MaskDINODecoder` — two-stage selection, DAB anchors, iterative box refinement, DN, deep supervision |
 | `decoder_layers.py` | the generic DAB/DINO decoder stack `MaskDINODecoder` drives |
+| `multiframe.py` | the shared-query multi-frame path (§8.2): `CrossFrameAttention`, `build_bundle_target`, `expand_bundle_indices`, `MultiFrameHungarianMatcher` |
 | `matcher.py` | `HungarianMatcher` (class/mask/dice/box/giou, point-sampled mask cost) + `check_target_labels` (out-of-range GT-label guard, §4) |
 | `criterion.py` | `SetCriterion` (focal / point-sampled BCE+Dice / L1+GIoU, aux + interm + DN losses) |
 | `ms_deform_attn.py` | pure-PyTorch `MSDeformAttn` + `ms_deform_attn_core_pytorch` |
@@ -169,6 +174,7 @@ is the last layer only — identical cache footprint to every other arm.
 | `tests/test_maskdino_model.py` | MSDeformAttn vs naive reference, pixel decoder, decoder configs, box ops, `head_config` round-trip, `initialize_box_type` guard |
 | `tests/test_maskdino_loss.py` | matcher, criterion key set + perfect-prediction zero-loss, out-of-range-label guard |
 | `tests/test_maskdino_train.py` | per-frame GT builder (incl. class drop), per-frame metric slicing, 60-step synthetic overfit |
+| `tests/test_maskdino_multiframe.py` | cross-frame block, bundle GT + index expansion, bundle matcher, shared-query forward, S=1 equivalence, multi-frame overfit, bundle batching + scoring |
 | `tests/maskdino_fixtures.py` | `_tiny_head`, `_synthetic_targets` shared by the three test modules |
 
 The only shared file this track modified is `train/eval_metrics.py`:
@@ -314,22 +320,156 @@ empty prediction in a frame where the object is absent is dropped rather than pe
 **This is exactly why the MaskDINO numbers must be read against 0.451 / 0.294 and never against
 0.367 / 0.199.**
 
-## 8. The multi-frame extension (open work)
+### 7.4 Multi-view features, mask resolution, view draws, multi-frame (2026-07-28)
 
-Ordered by cost, each step reusing everything above:
+Five runs, all at N=490 against the **0.669 / 0.699** single-frame bar, identical recipe
+otherwise, official 500-scene GT, peak (`checkpoint_best*`) numbers:
 
-1. `--feature_mode bundle` (already implemented): VGGT's global attention makes the per-frame
-   tokens multi-view aware; the decoder stays single-frame. Free multi-view signal, no
-   architectural change, no cross-frame identity.
-2. **Shared queries across frames**: run the same query set against every frame's memory in a
-   bundle and add a cross-frame self-attention block between decoder layers → one instance id per
-   query across all views (this is what the D4RT arms did natively, and where the multi-view
-   metric becomes meaningful again).
-3. **3D anchors instead of 2D boxes**: replace the DAB 4-d box with a 3D box / anchor from VGGT's
-   point head (arm E showed 3D anchors alone don't beat 2D queries, but arm E had no box
-   refinement, no DN and no deep supervision — the ingredients that make anchors work in DINO).
-   `legacy/d4rt/models/anchor_queries.py` has the FPS + kNN anchor construction to reuse.
+| Job | Change | val mIoU | val AP50 | ΔAP50 | train mIoU @peak |
+|---|---|---|---|---|---|
+| 8774050 | — (the bar) | 0.669 | 0.699 | — | 0.947 |
+| 8895540 | `--feature_mode bundle` | 0.622 | 0.651 | **−0.048** | 0.872 |
+| 8895551 | `--mask_upsample 2` | 0.662 | 0.677 | −0.022 | 0.812 |
+| **8895565** | **`--bundles_per_scene 2 --color_jitter 0.2`** | **0.694** | **0.729** | **+0.030** | 0.816 |
+| 8900100 | `--multi_frame --feature_mode bundle` | 0.621 | 0.630 | −0.069 | 0.867 |
+
+1. **Multi-view-aware tokens are not free — they cost 0.048 AP50** (§8.1). Running the aggregator
+   over the bundle mixes the views inside the frozen features, and per-frame segmentation gets
+   *worse*, not better. So §8.1 is a **negative result**, and it is the correct control for the
+   multi-frame decoder (below), not the bar.
+2. **`--mask_upsample 2` is neutral** (−0.022, inside the ±0.04 eval-to-eval noise) — the same
+   verdict the D4RT arms reached on a different head. Masks stay on the 37×37 patch grid.
+3. **More view draws per scene is the best lever left**: +0.030 AP50 and a *new best* 0.729, with
+   train mIoU dropping 0.947 → 0.816 (less memorisation). The model is still data-limited, and
+   since the tar holds no more scenes, views-per-scene is the cheapest remaining data. **Honest
+   caveat:** the `EPOCHS=30` this job was submitted with was silently clamped back to 60 by
+   `slurm/train_maskdino.sh` (fixed 2026-07-28), so it had a 2× larger step budget available;
+   it nevertheless *peaked* at epoch 19 = 18.6 k steps, against the bar's peak at 15.2 k, so the
+   gain is not simply "trained longer". `--bundles_per_scene 4` (job 8950610, `EPOCHS=15`) tests
+   the next point on that curve.
+4. **Multi-frame** (§8.2) costs 0.069 AP50 against the bar — but 0.048 of that is the bundle
+   features it is built on. Against its proper control (8895540, 0.651) the shared-query decoder
+   is **−0.021 AP50 per frame, i.e. neutral inside the noise band**, and in exchange it produces
+   a genuine multi-view result (below). Job 8950613 re-runs it with per-frame features to
+   decouple the two; job 8950617 is the `--no-cross_frame_attn` ablation.
+
+**The per-bundle number is back.** Job 8900100 scores, on the multi-view protocol of arms A–E:
+
+| | mIoU | AP50 | AP75 | mAP |
+|---|---|---|---|---|
+| arm C (best D4RT head), per-bundle | 0.367 | 0.199 | — | — |
+| **MaskDINO `--multi_frame`, per-bundle** | **0.535** | **0.494** | 0.279 | 0.272 |
+
+**+46 % mIoU and 2.5× AP50 over the best D4RT arm on the arms' own ruler** — one query is one
+instance across all 8 views, no post-hoc matching. Read it *only* against 0.367 / 0.199, never
+against the per-frame 0.699 (docs/RESULTS.md §1).
+
+### 7.5 Official-split read-out (job 8900194)
+
+Same recipe, but val = the 77 official ScanNet v2 val scenes inside our tar and train = the other
+413 (docs/RESULTS.md §1.1). Peak **val mIoU 0.589 / AP50 0.604** (epoch 27; the job hit its 12 h
+wall clock at epoch 39/60, past its peak, so the number stands).
+
+**Our convention split is ~0.10 AP50 "easier" than the official val scenes** — with 67 fewer
+training scenes as a partial explanation. Quote 0.699 as *our* split's number and mention 0.604
+whenever comparability to the ScanNet literature comes up (it is still a per-view 2D-mask number,
+so it is not a leaderboard-comparable figure either — docs/RELATED_WORK.md).
+
+## 8. The multi-frame extension
+
+Ordered by cost, each step reusing everything above.
+
+### 8.1 `--feature_mode bundle` — multi-view *features*, single-frame decoder
+
+Runs the frozen aggregator once over all S frames of a bundle instead of once per frame, so
+VGGT's global attention makes each frame's tokens multi-view aware while the decoder still sees
+one frame at a time. No architectural change, no cross-frame identity, no extra parameters — only
+the feature cache is built differently. Implemented in `train/maskdino_data.py::extract_features`;
+first run at N=490 submitted 2026-07-28 (§7.4).
+
+### 8.2 Shared queries across frames (`--multi_frame`) — implemented 2026-07-28
+
+**One query set per bundle**: query *q* is the same object hypothesis in all S views, so it owns a
+mask *volume* rather than S unrelated 2D masks. Three changes, all off by default:
+
+1. **Shared query initialisation** (`models/maskdino/decoder.py`, `frames_per_sample=S`).
+   The batch is B bundles of S frames, frames contiguous. Two-stage selection now takes the top-k
+   proposals from the **union** of the S frames' encoder outputs (one `topk` over `S·HW`) and
+   broadcasts the selected content embedding to every frame. Each frame then keeps its **own**
+   anchor box: with `--initialize_box_type bitmask` the anchor is re-derived per frame from that
+   frame's initial mask, and refined per frame by the usual DAB refinement. Content shared,
+   geometry per view. Without two-stage the learned queries were already shared, so nothing
+   changes there.
+2. **`CrossFrameAttention`** (`models/maskdino/multiframe.py`), one block per decoder layer, run
+   after the layer and before its box refinement. Attention over a sequence of length S — the S
+   copies of one query — with batch = queries × bundles. Deliberately **no frame positional
+   encoding**: the views are an unordered set, so the block is permutation-equivariant in S.
+   Denoising queries are excluded (slot *i* means a different GT instance in each frame, so mixing
+   them would leak and confuse); DN therefore stays exactly the per-frame recipe of §1.
+3. **Bundle-level matching** (`MultiFrameHungarianMatcher` + `expand_bundle_indices`). The
+   Hungarian assignment is made **once per bundle** — class cost on the mean sigmoid score over
+   views, mask BCE+Dice over the concatenated `[S·h·w]` volume (the D4RT arms' multi-view mask
+   cost), box L1+GIoU averaged over the views where the instance is visible. The assignment is
+   then projected back onto the frames where the matched instance is actually visible, and
+   **every loss stays the per-frame loss it already was**. In a view where its instance is not
+   visible the query is simply unmatched, i.e. supervised as "no object" — exactly the behaviour
+   the evaluation protocol rewards (§6.3).
+
+Bundle GT costs nothing to build: `build_frame_targets` already stores the dataset's global
+instance id per frame target, which is the cross-view link the single-frame protocol threw away;
+`build_bundle_target` re-links the frames by it (`masks [n,S,h,w]`, `valid [n,S]`, `frame_row`).
+
+**Both metrics are reported** (`train/maskdino_eval.py::eval_scenes_multiframe`): the per-frame
+numbers, directly comparable to the 0.669 / 0.699 single-frame bar, **and** `bundle_*` — the
+multi-view protocol of arms A–E (one IoU over the concatenated volume, one class score per query
+= max over views), which was meaningless while queries were per-frame and is comparable to arm
+C's 0.367 / 0.199. Never mix the two (docs/RESULTS.md §1).
+
+Flags: `--multi_frame` (sample = a bundle of `--num_frames` frames), `--batch_bundles`
+(default 1 → 8 frames/step, the same GPU footprint and the same steps/epoch as the single-frame
+runs), `--no-cross_frame_attn` (ablate the block, keeping shared init + bundle matching).
+
+### 8.3 3D anchors instead of 2D boxes (designed, not implemented)
+
+Replace the DAB 4-d box with a 3D anchor from VGGT's point head. Arm E showed 3D anchors alone
+don't beat 2D queries, but arm E had no box refinement, no DN and no deep supervision — the
+ingredients that make anchors work in DINO.
+
+**Framing (settled 2026-07-28, docs/RELATED_WORK.md).** FAST3DIS (arXiv 2603.25993) already
+publishes exactly this mechanism — a learned 3D anchor generator plus project-and-sample
+cross-attention — on a LoRA-adapted Depth-Anything-V3. So this step is an **ablation inside our
+own controlled study** ("3D anchors vs 2D DAB boxes, same frozen backbone, same data, same
+protocol", which nobody has run and which re-tests the arm-E negative result), **not** a new
+mechanism. Budget it accordingly.
+
+**Dependency: do this on top of §8.2, not before it.** A 3D anchor is only meaningful when a
+query is one instance across views — with per-frame queries it is just a 2D box plus a depth.
+
+**Design sketch.**
+
+1. *Geometry cache.* At caching time the frozen point head already runs on the aggregator output
+   we have; store only the **per-patch-token 3D position** (confidence-weighted mean of the
+   token's 14×14 pixels, as in `legacy/d4rt/models/anchor_queries.py::patch_token_positions`) —
+   `[S, 37·37, 3]` + confidence, ~65 kB per scene in fp16, versus ~26 MB for the full pointmap,
+   which is never stored. Reimplement the 15-line pooling next to the cache rather than importing
+   from frozen `legacy/`.
+2. *Anchor = a 3D point (+ scale) per query, shared across the bundle's views.* Two-stage
+   selection already picks top-k memory tokens; each selected token's cached 3D position is its
+   anchor, so 3D two-stage costs a gather.
+3. *Per-view reference points without camera math.* Every patch of view *f* has a cached 3D
+   position, so the query's 2D reference in that view is a **soft nearest patch**:
+   `w = softmax(-‖p_patch − anchor‖² / τ)` over the 37×37 grid, reference `(u,v) = Σ w · (u,v)_patch`.
+   Differentiable in the anchor, needs no intrinsics/extrinsics (unlike FAST3DIS, which projects
+   with its predicted camera), and degrades gracefully where the pointmap is unreliable.
+   Iterative refinement then predicts Δxyz on the anchor instead of Δbox.
+4. *Losses unchanged.* The 2D box stays the prediction target of `_bbox_embed` per view, so the
+   matcher, the box/GIoU losses and DN all keep working exactly as they do today; only the query
+   *positional prior* and the sampling locations change.
 
 Cheap follow-ups that need one flag each: `--mask_upsample 2` (74×74 masks — currently supervised
 on the 37×37 patch grid) and `--bundles_per_scene 2 --color_jitter 0.2` (more frame draws without
-new scenes; costs cache memory).
+new scenes; costs cache memory). Both submitted at N=490 on 2026-07-28 (§7.4).
+
+Cheap follow-ups that need one flag each: `--mask_upsample 2` (74×74 masks — currently supervised
+on the 37×37 patch grid) and `--bundles_per_scene 2 --color_jitter 0.2` (more frame draws without
+new scenes; costs cache memory). Both submitted at N=490 on 2026-07-28 (§7.4).

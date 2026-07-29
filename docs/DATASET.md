@@ -98,6 +98,19 @@ and scene0080_00 still have frames, which is enough for smoke tests). The old SA
 trees (`scannet_build*`) are fully hollow. Re-pack from the tar if a tree is ever needed — never
 unpack-to-retar on scratch (inode quota).
 
+### 4.1 Scene splits
+
+Training/val scenes are chosen by *scene id*, not by a split file: the tar holds
+`scene0000_00 … scene0499_00`, train = the first `N_SCENES` minus the val ones, val = scenes
+**0080–0089** (project convention; docs/RESULTS.md §1.1 for why it stays that way).
+
+`data/splits/scannetv2_val.txt` is the **official ScanNet v2 val list** (312 scenes), fetched
+2026-07-28 from `ScanNet/ScanNet@master:Tasks/Benchmark/scannetv2_val.txt`. It is used only by
+`VAL_SPLIT=official sbatch slurm/train_maskdino.sh`, which intersects it with our range
+(`*_00`, id < `N_SCENES` → **77** scenes at N=490) and trains on the remaining 413. That is a
+separate run on purpose: 74 of those 77 scenes are inside the normal training range, so an
+existing checkpoint cannot be re-scored on them honestly.
+
 ## 5. Rebuilding the GT (only if a tar is lost or conventions change)
 
 The builders are retired to `legacy/dataset_build/` because the tars are canonical and already

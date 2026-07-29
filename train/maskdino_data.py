@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from data.scannet_overfit import IDX_TO_CLASS, ScanNetMultiSceneDataset
-from models.maskdino import NUM_SCANNET_CLASSES
+from models.maskdino import NUM_SCANNET_CLASSES, build_bundle_target
 from models.maskdino.box_ops import masks_to_boxes_normalized
 from train.common import photometric_jitter
 
@@ -235,3 +235,40 @@ def gather_batch(scenes, samples, device):
         [scenes[si]["bundles"][bi]["targets"][fi] for si, bi, fi in samples], device)
     patch_start_idx = scenes[samples[0][0]]["bundles"][samples[0][1]]["patch_start_idx"]
     return feats, targets, patch_start_idx
+
+
+# ------------------------------------------------------------------------------------------
+# Multi-frame batching: the sample is a BUNDLE of S frames (docs/MASKDINO.md §8)
+# ------------------------------------------------------------------------------------------
+
+def bundle_index(scenes: List[Dict], require_gt: bool = True) -> List[Tuple[int, int]]:
+    """Flat list of (scene, bundle) samples — the unit of a multi-frame training step."""
+    return [(si, bi) for si, s in enumerate(scenes) for bi, b in enumerate(s["bundles"])
+            if (not require_gt) or any(int(t["labels"].numel()) > 0 for t in b["targets"])]
+
+
+def gather_bundle_batch(scenes, samples, device):
+    """
+    Stack whole bundles: the S frames of a bundle stay CONTIGUOUS in the batch dimension, which
+    is the layout `frames_per_sample=S` assumes everywhere downstream.
+
+    Unlike `gather_batch` this keeps frames with no GT instance: a shared query has to learn to
+    predict "not here" in the views where its object is invisible, and dropping those frames
+    would remove exactly that supervision.
+
+    Returns (features [B*S, P, C], per-frame targets [B*S], bundle targets [B], patch_start_idx,
+             frames_per_sample).
+    """
+    bundles = [scenes[si]["bundles"][bi] for si, bi in samples]
+    frames_per_sample = bundles[0]["features"].shape[0]
+    assert all(b["features"].shape[0] == frames_per_sample for b in bundles), \
+        "multi-frame batching needs the same frame count in every bundle"
+
+    feats = torch.cat([b["features"] for b in bundles]).to(device, dtype=torch.float32,
+                                                           non_blocking=True)
+    frame_targets, bundle_targets = [], []
+    for b in bundles:
+        per_frame = targets_to_device(b["targets"], device)
+        frame_targets.extend(per_frame)
+        bundle_targets.append(build_bundle_target(per_frame))
+    return feats, frame_targets, bundle_targets, bundles[0]["patch_start_idx"], frames_per_sample

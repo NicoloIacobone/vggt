@@ -46,6 +46,7 @@ class MaskDINOVGGTHead(nn.Module):
         dn_num: int = 100,
         noise_scale: float = 0.4,
         mask_upsample: int = 1,
+        cross_frame_attn: bool = False,
     ):
         super().__init__()
         # The checkpoint round-trip contract: `head_config` must describe every constructor
@@ -66,7 +67,7 @@ class MaskDINOVGGTHead(nn.Module):
             noise_scale=noise_scale, dn_num=dn_num, initialize_box_type=initialize_box_type,
             initial_pred=initial_pred, learn_tgt=learn_tgt,
             total_num_feature_levels=num_feature_levels, dropout=dropout,
-            dec_n_points=dec_n_points,
+            dec_n_points=dec_n_points, cross_frame_attn=cross_frame_attn,
         )
 
     @property
@@ -79,18 +80,22 @@ class MaskDINOVGGTHead(nn.Module):
         return self.predictor.num_classes
 
     def forward(self, tokens: Tensor, patch_start_idx: int = 5,
-                targets: Optional[List[Dict[str, Tensor]]] = None) -> Tuple[Dict, Optional[Dict]]:
+                targets: Optional[List[Dict[str, Tensor]]] = None,
+                frames_per_sample: int = 1) -> Tuple[Dict, Optional[Dict]]:
         """
         Args:
             tokens: [B, P, memory_dim] VGGT aggregator tokens for B independent FRAMES
                 (single-frame protocol: the batch dimension is frames, not scenes).
             patch_start_idx: index where patch tokens start (5 for VGGT-1B).
             targets: per-frame GT dicts (labels/boxes/masks); needed only for denoising.
+            frames_per_sample: 1 (default) = single-frame. S > 1 = the batch is B bundles of S
+                frames sharing one query set (docs/MASKDINO.md §8); the pixel decoder still runs
+                per frame, only the query set is shared.
         Returns:
             (out, mask_dict) exactly as MaskDINO's decoder returns them.
         """
         mask_features, multi_scale = self.pixel_decoder(tokens, patch_start_idx)
-        return self.predictor(multi_scale, mask_features, targets)
+        return self.predictor(multi_scale, mask_features, targets, frames_per_sample)
 
 
 def build_head_from_config(config: Dict) -> MaskDINOVGGTHead:

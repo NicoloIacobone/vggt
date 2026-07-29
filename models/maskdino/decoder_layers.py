@@ -11,6 +11,7 @@ import torch
 from torch import nn
 
 from .ms_deform_attn import MSDeformAttn
+from .multiframe import CrossFrameAttention
 from .utils import (MLP, _get_activation_fn, _get_clones, gen_sineembed_for_position,
                     inverse_sigmoid)
 
@@ -68,11 +69,16 @@ class TransformerDecoder(nn.Module):
     """DINO decoder: sine-embedded anchor boxes as query positions + per-layer box refinement."""
 
     def __init__(self, decoder_layer, num_layers, norm=None, d_model=256, query_dim=4,
-                 num_feature_levels=3):
+                 num_feature_levels=3, nheads=8, dropout=0.0, cross_frame_attn=False):
         super().__init__()
         self.layers = (_get_clones(decoder_layer, num_layers) if num_layers > 0
                        else nn.ModuleList())
         self.num_layers = num_layers
+        # Multi-frame only (docs/MASKDINO.md §8): one block per layer, tying the S copies of a
+        # shared query together. Built only when asked for, so single-frame checkpoints keep
+        # exactly the parameter set they had.
+        self.cross_frame = (_get_clones(CrossFrameAttention(d_model, nheads, dropout), num_layers)
+                            if cross_frame_attn and num_layers > 0 else None)
         self.norm = norm
         self.query_dim = query_dim
         assert query_dim in (2, 4)
@@ -91,9 +97,13 @@ class TransformerDecoder(nn.Module):
                 m._reset_parameters()
 
     def forward(self, tgt, memory, memory_key_padding_mask=None, refpoints_unsigmoid=None,
-                level_start_index=None, spatial_shapes=None, valid_ratios=None, tgt_mask=None):
+                level_start_index=None, spatial_shapes=None, valid_ratios=None, tgt_mask=None,
+                frames_per_sample=1, num_shared_queries=None):
         """
         tgt: [nq, bs, d_model]; memory: [hw, bs, d_model]; refpoints_unsigmoid: [nq, bs, 4].
+        `frames_per_sample > 1` means the batch is B bundles of S frames (frames contiguous) that
+        share their queries; the per-layer `cross_frame` block then mixes the S copies of each of
+        the trailing `num_shared_queries` queries (docs/MASKDINO.md §8).
         Returns (list of per-layer outputs [bs, nq, d], list of reference boxes [bs, nq, 4]).
         """
         output = tgt
@@ -118,6 +128,11 @@ class TransformerDecoder(nn.Module):
                 memory_spatial_shapes=spatial_shapes,
                 self_attn_mask=tgt_mask,
             )
+
+            # multi-frame: give the S copies of each shared query a look at each other before
+            # this layer's box refinement, so the anchors they refine stay one instance
+            if self.cross_frame is not None and frames_per_sample > 1:
+                output = self.cross_frame[layer_id](output, frames_per_sample, num_shared_queries)
 
             # iterative box refinement (detached, DINO-style "look forward once" off)
             if self.bbox_embed is not None:

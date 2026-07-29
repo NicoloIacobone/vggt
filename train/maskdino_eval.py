@@ -13,7 +13,7 @@ import numpy as np
 import torch
 
 from data.scannet_overfit import IDX_TO_CLASS
-from models.maskdino import to_scannet_class_logits
+from models.maskdino import build_bundle_target, to_scannet_class_logits
 from train.eval_metrics import compute_instance_segmentation_metrics
 from train.maskdino_data import gather_batch
 from train.perframe import METRIC_KEYS, drop_empty_masks, topk_predictions
@@ -32,7 +32,13 @@ def eval_scenes(model, scenes: List[Dict], args, device: str) -> Dict[str, Dict[
       - threshold-free, suffix `_all`: every query kept and ranked by score — the standard
         COCO detection protocol. It is informative from epoch 1, whereas the thresholded
         numbers stay at 0 for a long while (focal-trained sigmoid scores start near zero).
+
+    With `--multi_frame` the whole bundle has to go through the model at once (the queries are
+    shared), so scoring is delegated to `eval_scenes_multiframe`, which reports these same
+    per-frame keys plus the `bundle_*` multi-view ones.
     """
+    if getattr(args, "multi_frame", False):
+        return eval_scenes_multiframe(model, scenes, args, device)
     was_training = model.training
     model.eval()
     per_scene = {}
@@ -77,6 +83,72 @@ def eval_scenes(model, scenes: List[Dict], args, device: str) -> Dict[str, Dict[
     return per_scene
 
 
+@torch.no_grad()
+def eval_scenes_multiframe(model, scenes: List[Dict], args, device: str
+                           ) -> Dict[str, Dict[str, float]]:
+    """
+    Scoring for the shared-query multi-frame model (docs/MASKDINO.md §8) — TWO protocols at once.
+
+      - the same per-frame numbers as `eval_scenes` (`mIoU`, `AP50`, …, `*_all`), so a
+        multi-frame run is directly comparable to the single-frame bar;
+      - `bundle_*`: the multi-view protocol of the retired D4RT arms. A query now owns a mask
+        VOLUME [S, h, w], scored against the bundle's GT volume, with one class score per query
+        (the max over the views: an instance exists if some view detects it confidently). This
+        is the metric that was meaningless while queries were per-frame.
+
+    Both use the shared rules of `train/perframe.py`: a prediction that claims no pixels is
+    dropped (per frame for the per-frame numbers, per volume for the bundle numbers), and at
+    most `--eval_topk` predictions are kept.
+    """
+    was_training = model.training
+    model.eval()
+    per_scene = {}
+    for si, scene in enumerate(scenes):
+        bundle_targets_all = scene["bundles"][0]["targets"]
+        samples = [(si, 0, fi) for fi in range(len(bundle_targets_all))]
+        feats, targets, psi = gather_batch(scenes, samples, device)
+        s = len(samples)
+        out, _ = model.head(feats, psi, None, frames_per_sample=s)
+
+        rows, bundle_rows = [], []
+        for b in range(s):
+            if int(targets[b]["labels"].numel()) == 0:
+                continue                        # no GT in this view → undefined metrics
+            pm, cl = drop_empty_masks(out["pred_masks"][b],
+                                      to_scannet_class_logits(out["pred_logits"][b]))
+            pm, cl = topk_predictions(pm, cl, args.eval_topk)
+            rows.append(_score_pair(pm, cl, targets[b]["masks"], targets[b]["labels"] + 1, args))
+
+        bt = build_bundle_target(targets)
+        if int(bt["labels"].numel()) > 0:
+            # [Q, S, h, w] volumes; one class score per query = max over the views
+            vol = out["pred_masks"].permute(1, 0, 2, 3)
+            cls = to_scannet_class_logits(out["pred_logits"].max(dim=0).values)
+            vol, cls = drop_empty_masks(vol, cls)
+            vol, cls = topk_predictions(vol, cls, args.eval_topk)
+            bundle_rows.append(_score_pair(vol, cls, bt["masks"], bt["labels"] + 1, args))
+
+        keys = METRIC_KEYS + [f"{k}_all" for k in METRIC_KEYS]
+        m = ({k: float(np.mean([r[k] for r in rows])) for k in keys} if rows
+             else {k: 0.0 for k in keys})
+        m.update({f"bundle_{k}": (float(bundle_rows[0][k]) if bundle_rows else 0.0)
+                  for k in keys})
+        per_scene[scene["name"]] = m
+    if was_training:
+        model.train()
+    return per_scene
+
+
+def _score_pair(pred_masks, class_logits, gt_masks, gt_classes, args) -> Dict[str, float]:
+    """One scored unit (a frame or a bundle) at both operating points (docs/MASKDINO.md §6.2)."""
+    common = dict(pred_masks=pred_masks, class_logits=class_logits, gt_masks=gt_masks,
+                  gt_classes=gt_classes, background_class=0, score_mode="sigmoid")
+    row = compute_instance_segmentation_metrics(score_threshold=args.score_threshold, **common)
+    row.update({f"{k}_all": v for k, v in
+                compute_instance_segmentation_metrics(score_threshold=0.0, **common).items()})
+    return row
+
+
 def mean_metric(per_scene: Dict[str, Dict[str, float]], key: str) -> float:
     """Mean of one metric across scenes."""
     vals = [m[key] for m in per_scene.values()]
@@ -106,13 +178,21 @@ def visualize(model, scenes: List[Dict], args, device: str, out_dir: Path,
         bundle = scene["bundles"][0]
         if bundle.get("images") is None:
             continue
-        samples = [(si, 0, fi) for fi, t in enumerate(bundle["targets"])
-                   if int(t["labels"].numel()) > 0][:max_frames]
-        if not samples:
+        with_gt = [fi for fi, t in enumerate(bundle["targets"]) if int(t["labels"].numel()) > 0]
+        if not with_gt:
             continue
+        # A shared-query model must see the whole bundle at once; the single-frame model does
+        # not care, so it only pays for the frames actually drawn.
+        multi = bool(getattr(args, "multi_frame", False))
+        frames = list(range(len(bundle["targets"]))) if multi else with_gt[:max_frames]
+        samples = [(si, 0, fi) for fi in frames]
         feats, targets, psi = gather_batch(scenes, samples, device)
-        out, _ = model.head(feats, psi, None)
+        out, _ = model.head(feats, psi, None, frames_per_sample=len(frames) if multi else 1)
+        drawn = 0
         for b, (_, _, fi) in enumerate(samples):
+            if fi not in with_gt or drawn >= max_frames:
+                continue
+            drawn += 1
             rgb = bundle["images"][fi].permute(1, 2, 0).numpy() / 255.0
             gt = targets[b]["masks"]
             gt_lbl = targets[b]["labels"]

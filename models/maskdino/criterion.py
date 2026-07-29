@@ -22,6 +22,7 @@ from torch import nn
 
 from . import box_ops
 from .matcher import check_target_labels
+from .multiframe import expand_bundle_indices
 from .utils import (calculate_uncertainty, cat_matched,
                     get_uncertain_point_coords_with_randomness, point_sample)
 
@@ -60,13 +61,18 @@ class SetCriterion(nn.Module):
             `num_points <= 0` uses every pixel of the mask grid instead (cheap at 37x37 and
             removes the sampling noise; MaskDINO needs sampling only because COCO masks are big).
         dn: "no" | "seg"; dn_losses: which losses to apply to the denoising queries.
+        bundle_matcher: a `MultiFrameHungarianMatcher`. When `forward` is given `bundle_targets`,
+            the assignment is made ONCE per bundle over the S-view mask volume and then expanded
+            to per-frame indices, so every loss below stays exactly the per-frame loss it was
+            (docs/MASKDINO.md §8). Without it the multi-frame path is unavailable.
     """
 
     def __init__(self, num_classes: int, matcher, weight_dict: Dict[str, float],
                  losses: List[str], num_points: int = 12544, oversample_ratio: float = 3.0,
                  importance_sample_ratio: float = 0.75, dn: str = "no",
-                 dn_losses: List[str] = (), focal_alpha: float = 0.25):
+                 dn_losses: List[str] = (), focal_alpha: float = 0.25, bundle_matcher=None):
         super().__init__()
+        self.bundle_matcher = bundle_matcher
         self.num_classes = num_classes
         self.matcher = matcher
         self.weight_dict = weight_dict
@@ -161,8 +167,25 @@ class SetCriterion(nn.Module):
         num_tgt = mask_dict["known_indice"].numel()
         return output_known_lbs_bboxes, num_tgt, single_pad, scalar
 
-    def forward(self, outputs, targets, mask_dict=None):
-        """Returns the (unweighted) loss dict; multiply by `weight_dict` to get the total."""
+    def _match(self, outputs, targets, bundle_targets, frames_per_sample):
+        """Per-frame Hungarian matching, or one bundle-level assignment expanded to the frames."""
+        if bundle_targets is None:
+            return self.matcher(outputs, targets)
+        assert self.bundle_matcher is not None, \
+            "SetCriterion got bundle_targets but was built without a bundle_matcher"
+        indices = self.bundle_matcher(outputs, bundle_targets, frames_per_sample)
+        return expand_bundle_indices(indices, bundle_targets, frames_per_sample)
+
+    def forward(self, outputs, targets, mask_dict=None, bundle_targets=None,
+                frames_per_sample: int = 1):
+        """
+        Returns the (unweighted) loss dict; multiply by `weight_dict` to get the total.
+
+        `targets` is always the PER-FRAME target list (length = batch of frames). Passing
+        `bundle_targets` (length = batch of bundles, from `multiframe.build_bundle_target`)
+        switches the assignment to the multi-frame protocol: one match per bundle over the
+        S-view mask volume, expanded back to per-frame indices. Denoising stays per frame.
+        """
         device = outputs["pred_logits"].device
         # Guard before anything indexes with a label: `loss_labels` would silently fold a label
         # == num_classes into the no-object column and crash on anything larger, and the DN path
@@ -186,7 +209,7 @@ class SetCriterion(nn.Module):
                     output_idx = tgt_idx = torch.tensor([], device=device).long()
                 exc_idx.append((output_idx, tgt_idx))
 
-        indices = self.matcher(outputs_without_aux, targets)
+        indices = self._match(outputs_without_aux, targets, bundle_targets, frames_per_sample)
         num_masks = max(1.0, float(sum(len(t["labels"]) for t in targets)))
 
         losses = {}
@@ -204,7 +227,7 @@ class SetCriterion(nn.Module):
 
         if "aux_outputs" in outputs:
             for i, aux_outputs in enumerate(outputs["aux_outputs"]):
-                aux_indices = self.matcher(aux_outputs, targets)
+                aux_indices = self._match(aux_outputs, targets, bundle_targets, frames_per_sample)
                 for loss in self.losses:
                     l_dict = self.get_loss(loss, aux_outputs, targets, aux_indices, num_masks)
                     losses.update({f"{k}_{i}": v for k, v in l_dict.items()})
@@ -221,7 +244,8 @@ class SetCriterion(nn.Module):
                         losses.update(self._zero_dn_losses(device, suffix=f"_{i}"))
 
         if "interm_outputs" in outputs:
-            interm_indices = self.matcher(outputs["interm_outputs"], targets)
+            interm_indices = self._match(outputs["interm_outputs"], targets, bundle_targets,
+                                         frames_per_sample)
             for loss in self.losses:
                 l_dict = self.get_loss(loss, outputs["interm_outputs"], targets, interm_indices,
                                        num_masks)
