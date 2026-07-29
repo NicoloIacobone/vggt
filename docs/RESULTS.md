@@ -47,6 +47,17 @@ head-only training take minutes instead of hours. The risk (the head memorising 
 combinations rather than learning view-set robustness) is accepted and stated, and measured once
 by the `--bundles_per_scene 2 --color_jitter 0.2` run at N=490 (job 8895565, §2).
 
+### 1.4 The COCO numbers are implementation verification, not a project result
+
+`docs/MASKDINO.md` §7.6 reports **46.133 mask AP / 51.549 box AP on COCO val2017**. That is not a
+result of this project and belongs in no table here. It is a *correctness proof for the port*:
+our ported decoder + deformable encoder driven by upstream MaskDINO's own released COCO weights,
+reproducing that checkpoint's published number (46.1 / 51.5, the README model-zoo row
+"MaskDINO (hid 1024)" — *not* a paper table value) to +0.004 AP, and matching an unmodified
+upstream run in the same environment to the same tolerance. It says our implementation of MaskDINO is
+faithful. It says nothing about VGGT, ScanNet, or 3D consistency — the backbone, the dataset and
+the task are all upstream's there. Never quote it next to a ScanNet number.
+
 ## 2. Single-frame protocol — the comparison that matters
 
 | Model | Scenes | val mIoU | val AP50 | val AP75 | val mAP |

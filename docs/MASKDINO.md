@@ -8,6 +8,11 @@ frames of a bundle, `--multi_frame`, 2026-07-28): per-frame it is neutral agains
 and on the arms' own multi-view ruler it scores **0.535 mIoU / 0.494 AP50 vs arm C's
 0.367 / 0.199**. 3D anchors (§8.3) are designed but not implemented.
 
+**The port is verified against upstream (§7.6, 2026-07-29).** Driven with MaskDINO's own released
+COCO weights, our ported decoder + deformable encoder reproduce upstream's published COCO val2017
+result to **+0.004 mask AP / +0.009 box AP** (46.133 vs 46.129 vs paper 46.1). Read §7.6's scope
+table before assuming this covers the training path — it does not.
+
 **Origin:** supervisor request (2026-07-27) — replicate the MaskDINO decoder on top of the frozen
 VGGT backbone and see whether a state-of-the-art detection-style decoder breaks the ceiling the
 hand-rolled D4RT head hit (arm C: val mIoU 0.367 / honest val[grid] AP50 0.199). Constraint:
@@ -374,6 +379,75 @@ wall clock at epoch 39/60, past its peak, so the number stands).
 training scenes as a partial explanation. Quote 0.699 as *our* split's number and mention 0.604
 whenever comparability to the ScanNet literature comes up (it is still a per-view 2D-mask number,
 so it is not a leaderboard-comparable figure either — docs/RELATED_WORK.md).
+
+### 7.6 Upstream-equivalence check on COCO (job 8967932, 2026-07-29)
+
+Everything above measures the port against *our own* baselines, which cannot detect a bug that
+is faithfully wrong in both. This check closes that loop: it drives **our** ported modules with
+**upstream's released COCO weights** and asks whether they reproduce upstream's published COCO
+val2017 numbers.
+
+`scripts/coco_transplant_eval.py` loads
+`maskdino_r50_50ep_300q_hid1024_3sd1_instance_maskenhanced_mask46.1ap_box51.5ap.pth`
+(config `maskdino_R50_bs16_50ep_3s.yaml` — the one our defaults mirror) into upstream's
+detectron2 harness, then swaps in our `MaskDINODecoder` and our `MSDeformAttnEncoder`.
+`--mode baseline` leaves upstream untouched and is the control.
+
+**The decoder accepts upstream's weights at `strict=True`: 333/333 parameters, names and shapes.**
+
+| COCO val2017, 5000 images | segm AP | segm AP50 | box AP | box AP50 |
+|---|---|---|---|---|
+| upstream model zoo, row "MaskDINO (hid 1024)" — *this checkpoint* | 46.1 | — | 51.5 | — |
+| `--mode baseline` (upstream code, this env) | 46.129 | 69.021 | 51.540 | 70.509 |
+| **`--mode ours` (ported modules)** | **46.133** | 69.036 | **51.549** | 70.514 |
+
+**The 46.1 / 51.5 target is the README model-zoo figure for the exact checkpoint used, not a
+paper table value** — get this right, the paper's numbers are different. Table 3's 50-epoch /
+300-query ResNet-50 rows are **46.0 / 50.5** (plain) and **46.3 / 51.7** (‡, mask-enhanced box
+init). The ‡ row corresponds to the *other* released checkpoint, `hid2048` (52 M params,
+286 GFLOPs); ours is the narrower `hid1024` variant (47 M, 226 GFLOPs — encoder FFN 1024 instead
+of 2048, which is also why `maskdino_R50_bs16_50ep_3s.yaml` is the matching config). Comparing
+our run against 46.3 would be comparing against a wider model we never ran.
+
+The comparison that actually carries the verdict is **ours vs `--mode baseline`** — same code
+path, same env, same weights, same data — and there the gap is 0.004 AP.
+
+**Δ = +0.004 segm AP / +0.009 box AP.** On CPU the two modes are *bit-identical* to every
+printed digit; the ~0.005 AP drift appears only on GPU, because upstream calls the fused CUDA
+MSDeformAttn kernel there while our port always uses the `grid_sample` core (§2.1). That is the
+one intended difference, and it is worth 0.01 AP.
+
+**Verified as a live path, not a no-op.** `transplant()` asserts the modules are ours
+(`models.maskdino.decoder` / `models.maskdino.pixel_decoder`, 6 + 9 ported `MSDeformAttn`
+instances), and `--perturb 1.05` scales one weight inside *our* decoder: segm AP moves
+55.702 → 55.608 on the 10-image subset. Identical numbers therefore mean equivalence, not a
+silent fallback to upstream code.
+
+**One trap this surfaced, worth knowing before touching level plumbing.** Upstream's pixel
+decoder returns `multi_scale_features` LOW→HIGH resolution and its decoder walks that list
+*backwards* (`idx = num_feature_levels-1-i`); our port takes it HIGH→LOW and walks forwards.
+Both flatten the same tensors in the same order only because the adapter reverses the list.
+The decoder's own `input_proj` is an empty `nn.Sequential` under this config, so its index
+convention carries no weights and the difference is invisible in a state-dict diff.
+
+**Scope — what this does and does not certify.**
+
+| Certified by this check | Not exercised |
+|---|---|
+| `ms_deform_attn.py` (encoder *and* decoder) | `matcher.py`, `criterion.py` — training only |
+| `pixel_decoder.py`: encoder layer/stack, reference points | DN query generation in `decoder.py` |
+| `decoder.py`: two-stage selection, DAB anchors, iterative box refinement, mask-enhanced box init, prediction heads | `multiframe.py` — no upstream counterpart |
+| `decoder_layers.py`, `utils.py`, `box_ops.masks_to_boxes` | the VGGT ViTDet pyramid (§3) — no COCO counterpart |
+
+The right-hand column is not a known problem, just untested by *this* route; the loss path still
+rests on `tests/test_maskdino_loss.py` (perfect-prediction zero loss) and the overfit tests.
+Since the multi-frame work edits the matcher and the criterion, that is the column to extend
+next if more assurance is wanted.
+
+Reproduce: `sbatch slurm/coco_transplant.sh` (~32 min on one RTX 3090, both modes; results land in
+`/cluster/work/igp_psr/niacobone/distillation/output/coco_transplant/`).
+COCO val2017 lives at `/cluster/scratch/niacobone/coco` — **global scratch is purged after
+15 days**, so re-download (§ the script header) if it has vanished.
 
 ## 8. The multi-frame extension
 

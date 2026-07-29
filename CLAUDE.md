@@ -60,6 +60,15 @@ sbatch --export=ALL,N_SCENES=490,EXTRA_ARGS='--multi_frame --feature_mode bundle
 python scripts/train_maskdino.py --train_scenes scene0000_00 --val_scenes scene0080_00 \
     --num_epochs 50 --num_queries 300 --scans_root <scans_root>       # local smoke test
 
+# --- Upstream-equivalence check (docs/MASKDINO.md §7.6) ---------------------------------------
+# Drives OUR ported decoder/encoder with upstream MaskDINO's released COCO weights and checks we
+# reproduce their published val2017 numbers. Needs the REFERENCE env, not myenv/, and a GPU of
+# sm<=86 (3090/A100) because that torch build predates Ada.
+sbatch slurm/coco_transplant.sh                                # both modes, 5000 imgs, ~32 min
+LD_LIBRARY_PATH=/cluster/scratch/niacobone/MaskDINO/myenv/lib/python3.9/site-packages/torch/lib \
+  /cluster/scratch/niacobone/MaskDINO/myenv/bin/python scripts/coco_transplant_eval.py \
+  --mode ours --limit 10          # CPU-runnable smoke test; --mode baseline is the control
+
 # --- The apples-to-apples baseline ------------------------------------------------------------
 # Per-frame metrics are NOT comparable to the retired arms' multi-view numbers. To score a D4RT
 # checkpoint under the identical per-frame protocol:
