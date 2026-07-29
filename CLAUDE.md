@@ -24,6 +24,9 @@ measured against, and `scripts/eval_perframe.py` imports it to produce that base
   the single-frame protocol, the evaluation protocol, all results, and the multi-frame plan.
 - `docs/RESULTS.md` — every number in one place, split by protocol. Read §1 before quoting
   anything: per-frame and per-bundle numbers are **not** interchangeable.
+- `docs/SUPERVISOR_COMPARISON.md` — the send-outward summary: MaskDINO vs arm C, the COCO
+  port-equivalence check, and how the metrics are computed. Derived from the two files above —
+  if a number changes there, change it here too.
 - `docs/DATASET.md` — GT provenance, the tars, mask conventions, how a job gets the data.
 - `docs/todo.md` — open work only.
 - `docs/ARMS_SUMMARY.md` — the retired arms A–E in one page (what differed, results, verdicts).
@@ -49,6 +52,7 @@ python tests/test_maskdino_train.py   # per-frame GT builder (incl. class drop),
 python tests/test_maskdino_multiframe.py  # shared-query multi-frame path: cross-frame block,
                                       # bundle GT + index expansion, bundle matcher, S=1
                                       # equivalence, multi-frame overfit, bundle batching/scoring
+python tests/test_maskdino_viz.py     # figure colouring keyed to identity, not per-frame rank
 
 # --- Training (the entry point) ---------------------------------------------------------------
 sbatch slurm/train_maskdino.sh                                 # 50 scenes, ~20k steps
@@ -59,6 +63,12 @@ sbatch --export=ALL,EXTRA_ARGS='--mask_upsample 2' slurm/train_maskdino.sh
 sbatch --export=ALL,N_SCENES=490,EXTRA_ARGS='--multi_frame --feature_mode bundle' slurm/train_maskdino.sh
 python scripts/train_maskdino.py --train_scenes scene0000_00 --val_scenes scene0080_00 \
     --num_epochs 50 --num_queries 300 --scans_root <scans_root>       # local smoke test
+
+# --- Re-render a finished run's figures (docs/MASKDINO.md §6.4) -------------------------------
+# Colours are keyed to instance identity, so an object keeps its colour across the frames of a
+# bundle. Changing the drawing code does NOT touch existing runs — re-render them explicitly:
+sbatch --export=ALL,RUNS='<run_dir_1> <run_dir_2>' slurm/visualize_maskdino.sh
+python scripts/visualize_maskdino.py --checkpoint <run_dir>/checkpoint_best.pth   # needs GPU+data
 
 # --- Upstream-equivalence check (docs/MASKDINO.md §7.6) ---------------------------------------
 # Drives OUR ported decoder/encoder with upstream MaskDINO's released COCO weights and checks we

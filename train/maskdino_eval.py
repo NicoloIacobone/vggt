@@ -163,10 +163,63 @@ def fmt(m: Dict[str, float]) -> str:
             f"| all-query: mIoU={m['mIoU_all']:.3f} AP50={m['AP50_all']:.3f}")
 
 
+NUM_VIZ_COLORS = 20  # matplotlib's "tab20"
+
+
+def color_index(identity: int) -> int:
+    """
+    Palette slot for a stable identity. 0 is reserved for background, so slots are 1..20.
+
+    The identity is the *query index* for predictions and the *global instance id* for GT —
+    both constant across the frames of a bundle, which is the whole point (see
+    `paint_identity_map`). Identities beyond 20 wrap around and share a colour.
+    """
+    return int(identity) % NUM_VIZ_COLORS + 1
+
+
+def paint_identity_map(masks: torch.Tensor, identities, mask_threshold: float = 0.5
+                       ) -> torch.Tensor:
+    """
+    [N, h, w] masks + one identity per mask → [h, w] map of palette slots (0 = background).
+
+    Winner-takes-all: the mask with the highest value claims the pixel, and its colour depends
+    ONLY on its identity — never on its rank, its score, or how many instances happen to be
+    visible in this frame. That is what makes an instance keep its colour across the frames of a
+    bundle, and it is exactly what the previous rank-based colouring destroyed: `keep` is
+    re-filtered and re-sorted per frame, so the same query drew a different colour in every view.
+    """
+    h, w = masks.shape[-2:]
+    out = torch.zeros(h, w, dtype=torch.long)
+    if masks.shape[0] == 0:
+        return out
+    masks = masks.float()
+    best = torch.full((h, w), float(mask_threshold), dtype=masks.dtype, device=masks.device)
+    for m, ident in zip(masks, identities):
+        better = m > best
+        best = torch.where(better, m, best)
+        out[better.cpu()] = color_index(ident)
+    return out
+
+
+def identity_cmap():
+    """tab20 with an explicit background colour at slot 0; use with `vmin=0, vmax=20`."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap
+
+    return ListedColormap(((0.08, 0.08, 0.08),) + tuple(plt.get_cmap("tab20").colors))
+
+
 @torch.no_grad()
 def visualize(model, scenes: List[Dict], args, device: str, out_dir: Path,
               max_scenes: int = 2, max_frames: int = 4) -> int:
-    """Write RGB | GT | prediction panels per frame; returns how many figures were written."""
+    """
+    Write RGB | GT | prediction panels per frame; returns how many figures were written.
+
+    Colours are keyed to identity, not to per-frame rank (`paint_identity_map`), so the same
+    instance keeps its colour across the frames of a bundle. The GT and prediction panels use
+    *different* identity spaces (global instance id vs query index), so their colours are not
+    meant to agree with each other — only with themselves across frames.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -202,26 +255,31 @@ def visualize(model, scenes: List[Dict], args, device: str, out_dir: Path,
             keep = keep[torch.argsort(best[keep], descending=True)]
             probs = torch.sigmoid(out["pred_masks"][b])
 
-            h, w = gt.shape[-2:]
-            gt_map = torch.zeros(h, w, dtype=torch.long)
-            for i in range(gt.shape[0]):
-                gt_map[gt[i].cpu() > 0.5] = i + 1
-            # Winner-takes-all over the kept queries, highest score first.
-            pred_map = torch.zeros(h, w, dtype=torch.long)
-            best_prob = torch.full((h, w), 0.5, device=probs.device)
-            for c, qi in enumerate(keep.tolist()):
-                better = probs[qi] > best_prob
-                best_prob[better] = probs[qi][better]
-                pred_map[better.cpu()] = c + 1
+            # Colour by identity, not by rank: the GT instance's global id, the prediction's
+            # query index. Both are frame-independent, so an instance keeps its colour across
+            # the bundle. `keep` stays sorted by score — that only decides who wins an
+            # overlapping pixel, not what colour it gets.
+            gt_ids = targets[b].get("global_ids")
+            gt_ids = gt_ids.tolist() if gt_ids is not None else list(range(gt.shape[0]))
+            gt_map = paint_identity_map(gt, gt_ids)
+            pred_map = paint_identity_map(probs[keep], keep.tolist())
 
-            fig, axes = plt.subplots(1, 3, figsize=(13, 4.6))
-            axes[0].imshow(rgb); axes[0].set_title(f"{scene['name']} frame {fi}")
-            axes[1].imshow(gt_map, cmap="tab20", interpolation="nearest")
-            axes[1].set_title(f"GT ({gt.shape[0]} inst: "
-                              + ",".join(IDX_TO_CLASS[int(l) + 1] for l in gt_lbl[:4]) + ")")
-            axes[2].imshow(pred_map, cmap="tab20", interpolation="nearest")
-            axes[2].set_title(f"Pred ({len(keep)} inst @ score>={args.score_threshold}: "
-                              + ",".join(IDX_TO_CLASS[int(labels[q]) + 1] for q in keep[:4]) + ")")
+            # Two-line titles at a reduced size: naming the colour key is what makes the panels
+            # readable, but on one line it overflows into the neighbouring axes.
+            gt_names = ",".join(IDX_TO_CLASS[int(l) + 1] for l in gt_lbl[:4])
+            pred_names = ",".join(IDX_TO_CLASS[int(labels[q]) + 1] for q in keep[:4])
+            cmap = identity_cmap()
+            fig, axes = plt.subplots(1, 3, figsize=(13, 4.8))
+            axes[0].imshow(rgb)
+            axes[0].set_title(f"{scene['name']} frame {fi}", fontsize=10)
+            axes[1].imshow(gt_map, cmap=cmap, vmin=0, vmax=NUM_VIZ_COLORS,
+                           interpolation="nearest")
+            axes[1].set_title(f"GT · {gt.shape[0]} inst · colour = instance id\n{gt_names}",
+                              fontsize=10)
+            axes[2].imshow(pred_map, cmap=cmap, vmin=0, vmax=NUM_VIZ_COLORS,
+                           interpolation="nearest")
+            axes[2].set_title(f"Pred · {len(keep)} inst @ score≥{args.score_threshold} · "
+                              f"colour = query id\n{pred_names}", fontsize=10)
             for ax in axes:
                 ax.axis("off")
             fig.tight_layout()

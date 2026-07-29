@@ -175,11 +175,14 @@ is the last layer only — identical cache footprint to every other arm.
 | `train/perframe.py` | the protocol itself — `drop_empty_masks`, `topk_predictions`, `perframe_metrics`. Shared with `eval_perframe.py`, which is what makes the two families comparable |
 | `train/common.py` | scene-path resolution, photometric jitter, LR schedule, `metrics.jsonl` append |
 | `scripts/eval_perframe.py` | scores an existing **D4RT** checkpoint under this protocol (the apples-to-apples baseline) |
+| `scripts/visualize_maskdino.py` | re-renders a finished run's figures from its checkpoint, without retraining (§6.4) |
 | `slurm/train_maskdino.sh` | cluster job (stages the 500-scene official-GT tar; logs → `slurm/logs/`) |
+| `slurm/visualize_maskdino.sh` | the same, for the re-rendering script over one or more run dirs |
 | `tests/test_maskdino_model.py` | MSDeformAttn vs naive reference, pixel decoder, decoder configs, box ops, `head_config` round-trip, `initialize_box_type` guard |
 | `tests/test_maskdino_loss.py` | matcher, criterion key set + perfect-prediction zero-loss, out-of-range-label guard |
 | `tests/test_maskdino_train.py` | per-frame GT builder (incl. class drop), per-frame metric slicing, 60-step synthetic overfit |
 | `tests/test_maskdino_multiframe.py` | cross-frame block, bundle GT + index expansion, bundle matcher, shared-query forward, S=1 equivalence, multi-frame overfit, bundle batching + scoring |
+| `tests/test_maskdino_viz.py` | identity-keyed figure colouring: stable slots, winner-takes-all painting, colour survives per-frame reordering/filtering (§6.4) |
 | `tests/maskdino_fixtures.py` | `_tiny_head`, `_synthetic_targets` shared by the three test modules |
 
 The only shared file this track modified is `train/eval_metrics.py`:
@@ -219,6 +222,25 @@ mask's mean foreground probability into the score. In the tests, the rule turns 
 of 0.5 into the correct 1.0 on a planted-perfect example.
 
 Everything is logged per eval into `<run_dir>/metrics.jsonl`.
+
+**6.4 Figures are coloured by identity, not by rank (fixed 2026-07-29).** The RGB|GT|pred panels
+in `<run_dir>/visualizations/` used to colour the *n*-th kept prediction with the *n*-th palette
+slot. `keep` is re-filtered by `--score_threshold` and re-sorted by score in every frame, so the
+same query drew a different colour in every view and the multi-view consistency the model
+actually has was invisible — the single most common thing to misread in these figures. Two
+independent causes, both fixed:
+
+- colour is now `paint_identity_map(...)` keyed to a **frame-independent identity**: the query
+  index for predictions (with `--multi_frame` that *is* the instance identity across views, §8.2)
+  and the GT instance's `global_ids` for the GT panel. Score order still decides who wins an
+  overlapping pixel — it no longer decides the colour;
+- `imshow` is pinned to `vmin=0, vmax=20` with an explicit background slot, so matplotlib stops
+  renormalising the colormap to each panel's own instance count.
+
+The GT and prediction panels use **different identity spaces**, so their colours are not meant to
+agree with each other — only with themselves across frames. Nothing about the metrics changed:
+colours never entered the scoring path. Existing runs can be re-rendered without retraining via
+`scripts/visualize_maskdino.py` / `slurm/visualize_maskdino.sh`.
 
 ## 7. Results
 
