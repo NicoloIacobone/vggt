@@ -3,6 +3,12 @@
 Two model families, two protocols. **The single most common mistake in this project is comparing
 across the horizontal line below.** Read §1 before quoting any number.
 
+**A third ruler exists and is not in this file.** The COCO backbone-swap study
+(`docs/MASKDINO_COCO.md`) scores standard COCO mask/box AP with `pycocotools` on a different
+dataset, a different task and a different metric implementation. Nothing there is comparable to
+anything here — it answers "how much does the backbone swap cost against upstream MaskDINO's own
+numbers", not "how good is the ScanNet head".
+
 ## 1. The two protocols
 
 | | multi-view (per-bundle) | single-frame (per-frame) |

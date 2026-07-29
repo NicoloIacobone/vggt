@@ -22,6 +22,9 @@ measured against, and `scripts/eval_perframe.py` imports it to produce that base
 
 - `docs/MASKDINO.md` — **the primary document.** Architecture, deviations from upstream MaskDINO,
   the single-frame protocol, the evaluation protocol, all results, and the multi-frame plan.
+- `docs/MASKDINO_COCO.md` — the COCO backbone-swap study: does MaskDINO's published recipe survive
+  a frozen VGGT backbone? Contains the **mask-resolution ceiling measurement** (§1) — read it
+  before proposing anything that depends on mask or token resolution, on COCO *or* on ScanNet.
 - `docs/RESULTS.md` — every number in one place, split by protocol. Read §1 before quoting
   anything: per-frame and per-bundle numbers are **not** interchangeable.
 - `docs/SUPERVISOR_COMPARISON.md` — the send-outward summary: MaskDINO vs arm C, the COCO
@@ -53,6 +56,8 @@ python tests/test_maskdino_multiframe.py  # shared-query multi-frame path: cross
                                       # bundle GT + index expansion, bundle matcher, S=1
                                       # equivalence, multi-frame overfit, bundle batching/scoring
 python tests/test_maskdino_viz.py     # figure colouring keyed to identity, not per-frame rank
+python tests/test_coco_maskdino.py    # COCO track: both pixel-decoder pyramid modes, head
+                                      # round-trip, GT helpers, instance inference + RLE, overfit
 
 # --- Training (the entry point) ---------------------------------------------------------------
 sbatch slurm/train_maskdino.sh                                 # 50 scenes, ~20k steps
@@ -78,6 +83,16 @@ sbatch slurm/coco_transplant.sh                                # both modes, 500
 LD_LIBRARY_PATH=/cluster/scratch/niacobone/MaskDINO/myenv/lib/python3.9/site-packages/torch/lib \
   /cluster/scratch/niacobone/MaskDINO/myenv/bin/python scripts/coco_transplant_eval.py \
   --mode ours --limit 10          # CPU-runnable smoke test; --mode baseline is the control
+
+# --- COCO backbone-swap study (docs/MASKDINO_COCO.md) -----------------------------------------
+# Trains the SAME decoder on COCO with a frozen, swappable backbone. Parallel scripts throughout
+# (COCO cannot use the ScanNet feature cache: 618 GB), nothing in the ScanNet path is shared.
+# Each job self-resubmits until <run_dir>/summary.json exists.
+sbatch --export=ALL,BACKBONE=resnet50 slurm/train_maskdino_coco.sh   # the control
+sbatch --export=ALL,BACKBONE=vggt     slurm/train_maskdino_coco.sh   # the question
+sbatch --export=ALL,BACKBONE=dinov2   slurm/train_maskdino_coco.sh   # same token geometry as VGGT
+# The GT-only resolution ceiling — run/quote this BEFORE arguing about mask resolution:
+myenv/bin/python scripts/coco_mask_resolution_oracle.py   # 37x37 caps a PERFECT model at 44.7 AP
 
 # --- The apples-to-apples baseline ------------------------------------------------------------
 # Per-frame metrics are NOT comparable to the retired arms' multi-view numbers. To score a D4RT

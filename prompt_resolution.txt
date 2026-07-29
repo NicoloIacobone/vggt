@@ -1,0 +1,26 @@
+I'm going to give you a prompt that I need you to perfect so that it will be easier for the agent to execute it.
+Swap in the actual file/module names so the agent will use one exploration pass less.
+
+I need a plan (not an implementation yet) for fixing a resolution bottleneck in my 3D segmentation pipeline.
+
+CONTEXT
+- My model: a MaskDINO-style decoder on top of a VGGT backbone, for 3D semantic/instance segmentation on ScanNet scenes.
+- VGGT's DINOv2 backbone uses a stride-14 patch embedding, so every transformer layer outputs the same 37x37 token grid (for ~518px input) — there is no native multi-scale hierarchy like a CNN backbone (e.g. ResNet-50's stride 8/16/32 stages) would provide.
+- MaskDINO's pixel decoder expects a multi-scale feature pyramid (analogous to ResNet C3/C4/C5) and produces a high-resolution "mask feature" map used for the per-query mask logits. Right now I only have one resolution (37x37), so my output masks are capped at that resolution.
+
+GOAL
+Get from VGGT's single-scale 37x37 tokens to a multi-scale pyramid + a high-resolution mask feature map suitable for MaskDINO, without abandoning VGGT's pretrained geometry-aware features.
+
+APPROACHES TO EVALUATE (from prior research on VGGT-based segmentation papers — PanSt3R, EPS3D, UNITE, VGGT-Ω, VGGT-Segmentor):
+
+1. DPT-style "reassemble" pyramid: pull 3-4 intermediate transformer layers (not just the last) from VGGT's aggregator, reshape each back to the 37x37 grid, and apply a different resize op per layer (e.g. ConvTranspose2d k4/s4 for the shallowest, k2/s2 for the next, 1x1 for mid, stride-2 conv downsample for the deepest) to fake a ResNet-like multi-scale hierarchy, then fuse top-down (RefineNet-style) — this is literally what VGGT's own DPT head does for depth/ point maps, so it may be reusable/adaptable rather than written from scratch.
+2. A learned image-guided feature upsampler (LoftUp / FeatUp / ViT-Up style) inserted after VGGT's output to recover per-pixel-sharp features beyond the 37x37 token grid, guided by the raw RGB. PanSt3R itself moved from a default upsampler to a LoftUp-based one in its v2 release, specifically for this reason.
+3. A lightweight pixel-shuffle head (VGGT-Ω's approach): a single MLP producing 2u^2 channels + pixel-shuffle rearrangement, cheaper than deep conv stacks at high resolution, still bounded by token content.
+4. A sparse-point-prompt alternative (VGGT-Segmentor's approach): skip dense upsampling, track sparse points via VGGT's own track head, and predict masks from point prompts SAM-style — a fundamentally different mask-decoding paradigm, worth ruling in/out early since it would change the MaskDINO integration significantly.
+
+WHAT I NEED FROM YOU
+1. First, inspect my repo: find where I currently call into VGGT (which intermediate layers/tokens I'm already extracting, if any), where the MaskDINO decoder is instantiated, and what shape/resolution its pixel decoder currently expects as input.
+2. Tell me which of the 4 approaches above (or a combination) fits best given what VGGT already exposes in my current dependency version (check if intermediate_layer_idx / equivalent hooks are available, and whether VGGT's own DPT head module can be partially reused rather than reimplemented).
+3. Produce a phased implementation plan: what changes first (with the smallest risk of breaking the existing training loop), what's a stretch goal, and what the expected output resolution is at each phase (be concrete: e.g. "phase 1 gets us to ~148x148 mask features via reassemble, phase 2 adds a LoftUp upsampler to get closer to full input resolution").
+4. Flag any places this interacts with my existing evaluation protocol (mIoU/AP/PQ at what resolution — mask upsampling to GT resolution for scoring vs. training at native resolution) so I don't quietly change what my metrics mean mid-project.
+5. Do NOT write the full implementation yet — I want to review and approve the plan and resolution/compute tradeoffs first.
