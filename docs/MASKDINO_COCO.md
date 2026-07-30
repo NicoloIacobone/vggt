@@ -1,7 +1,7 @@
 # MaskDINO on COCO with a swapped backbone — does the published recipe survive VGGT?
 
 **Status (2026-07-29):** infrastructure built and tested, the feasibility question answered
-quantitatively, three training arms launched. Results in §5.
+quantitatively, three training arms launched. Results in §6.
 
 **The question (supervisor-facing).** Every number in `docs/MASKDINO.md` compares our port against
 *our own* ScanNet baselines. `docs/MASKDINO.md` §7.6 proved the port reproduces upstream's COCO
@@ -152,7 +152,52 @@ once per scene up front (that is what makes it take minutes), which is impossibl
 images — 618 GB at the VGGT token size — and pointless under augmentation. So COCO runs the
 backbone **inline**, and the data/eval modules share nothing but the model.
 
-## 4. Reproducing
+## 4. How the runs are driven (and what was verified before spending the GPU hours)
+
+**Effective batch 16, micro-batch 4-8.** Upstream reaches `IMS_PER_BATCH 16` with **16 GPUs at one
+image each**. On one 24 GB card a batch of 16 OOMs immediately: the mask tensors are
+`B × Q × grid² × (dec_layers + 2)`, doubled by the denoising queries — 16 × 300 × 148² × 11 in fp32
+is far past the card. `--micro_batch` splits the step and accumulates gradients, so the optimiser
+still sees exactly batch 16. Measured steady state on one RTX 4090 (optimiser steps/s, 16 img each):
+
+| arm | micro-batch | it/s | 12 ep = 87 948 steps |
+|---|---|---|---|
+| `resnet50` | 8 | ~1.0 | ~24 h |
+| `dinov2` | 8 | ~1.1 | ~22 h |
+| `vggt` | 4 | ~0.6 | ~41 h |
+
+**The self-resubmit needs python to stop itself.** A 24 h wall clock cannot hold any of these, and
+the naive "resubmit at the end of the batch script" does **not** work: at the wall clock SLURM
+tears down the whole script, so the trailing `sbatch` never runs and the study silently stops
+half-finished. `--time_budget_hours` (22.5 by default) makes python exit cleanly first, saving
+`checkpoint_last.pth` and **not** writing `summary.json` — and that absence is what the shell script
+tests. Verified end to end: a run stopped at step 16/40, resumed at exactly step 16 with the cosine
+LR back on its curve, and finished. Run settings are frozen into `<run_dir>/job_env.sh` on the
+first submission and sourced by every resubmit, so they cannot drift between segments.
+
+**An OOM skips a micro-batch instead of killing the job.** Peak memory tracks the number of GT
+instances, and COCO has images with 90+; over a 40 h run one unlucky draw must not cost every step
+since the last checkpoint. Skips are counted and reported.
+
+### 4.1 The overfit gate — run this before trusting any AP
+
+A silent bug anywhere downstream of the loss (category mapping inverted, mask transposed, RLE at
+the wrong resolution) shows up as AP ≈ 0 forever, which is indistinguishable from "the model has
+not learned yet" until 90 GPU-hours have been spent. So the chain is proven first: train on 64
+images and score **those same 64**, via a COCO root whose `train2017` is a symlink to `val2017`.
+
+| gate | step 200 | step 400 | step 600 |
+|---|---|---|---|
+| `resnet50` segm AP | 0.002 | 23.4 | **54.3** |
+| `vggt` segm AP | 0.001 | 14.1 | — |
+
+Both climb, so targets, matcher, criterion, `instance_inference`, the contiguous↔dataset category
+mapping, RLE encoding, the upsample-to-original-size step and `COCOeval` are all wired correctly —
+and the `vggt` row exercises the `mask_upsample 4` (148×148) path that the `resnet50` row does not.
+These are **memorisation numbers on 64 images**; they are not results and must never be quoted as
+such.
+
+## 5. Reproducing
 
 ```bash
 # the ceiling measurement (CPU, ~15 min for all 5000 images)
@@ -171,7 +216,7 @@ COCO lives at `/cluster/scratch/niacobone/coco` (train2017 + val2017 + instances
 `/cluster/work/igp_psr/yuxchen/coco.zip`). **Global scratch is purged after 15 days** — re-extract
 from that zip if it has vanished.
 
-## 5. Results
+## 6. Results
 
 *Pending — the three arms are running. Nothing goes here until they finish; the ceilings in §1 are
 GT-only measurements and are **not** model results.*

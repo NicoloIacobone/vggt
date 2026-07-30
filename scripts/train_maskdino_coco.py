@@ -176,6 +176,12 @@ def build_argparser():
     p.add_argument("--resume", type=str, default=None,
                    help="checkpoint to resume from; 'auto' picks <run_dir>/checkpoint_last.pth "
                         "when it exists, which is what the SLURM requeue uses")
+    p.add_argument("--time_budget_hours", type=float, default=0.0,
+                   help="Stop cleanly after this many hours, save checkpoint_last and exit "
+                        "WITHOUT writing summary.json, so the SLURM job's self-resubmit fires. "
+                        "0 = unlimited. Must be set BELOW the job's wall clock: at the wall clock "
+                        "SLURM kills the whole batch script, including the resubmit line, so a "
+                        "run that relies on being killed never continues.")
     return p
 
 
@@ -299,10 +305,12 @@ def main():
 
     micro = 0
     oom_skips = 0
+    out_of_time = False
+    budget_s = args.time_budget_hours * 3600
     optimizer.zero_grad(set_to_none=True)
-    while step < total_steps:
+    while step < total_steps and not out_of_time:
         for batch in train_loader:
-            if step >= total_steps:
+            if step >= total_steps or out_of_time:
                 break
             images = batch["images"].to(device, non_blocking=True)
             targets = targets_to_device(batch["targets"], device)
@@ -370,11 +378,28 @@ def main():
             if last_path and step % args.ckpt_interval == 0:
                 save_checkpoint(last_path, model, args, step, {}, best, optimizer, scheduler)
 
+            if budget_s and (time.time() - t_start) > budget_s:
+                out_of_time = True
+                print(f"\n=== time budget ({args.time_budget_hours} h) reached at step {step}"
+                      f"/{total_steps} — checkpointing and exiting for the resubmit ===",
+                      flush=True)
+                if last_path:
+                    save_checkpoint(last_path, model, args, step, {}, best, optimizer, scheduler)
+                break
+
             if step % args.eval_interval == 0 and step < total_steps:
                 m = run_eval(step, args.eval_images, f"periodic@{args.eval_images or 'all'}")
                 if best_path and m.get("segm_AP", -1) > best["segm_AP"]:
                     best = {"segm_AP": m["segm_AP"], "step": step}
                     save_checkpoint(best_path, model, args, step, m, best)
+
+    if out_of_time:
+        # Deliberately no final eval and NO summary.json: its absence is the signal the SLURM
+        # script tests to decide whether to resubmit (slurm/train_maskdino_coco.sh).
+        print(f"\nSegment ran {(time.time() - t_start) / 3600:.2f} h and stopped at step {step}"
+              f"/{total_steps} ({oom_skips} micro-batches skipped on OOM). "
+              f"Resume with --resume auto.", flush=True)
+        return 0
 
     # ---- final: the full 5000-image val2017 ------------------------------------------------
     print("\n" + "=" * 70 + "\nFINAL EVAL (full val2017)\n" + "=" * 70, flush=True)

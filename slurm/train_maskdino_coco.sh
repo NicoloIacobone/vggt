@@ -23,6 +23,11 @@
 # checkpoint_last.pth, and the tail re-queues until the python process writes summary.json.
 # Nothing is lost beyond the last --ckpt_interval steps.
 #
+# `--time_budget_hours` (default 22.5, below the 24 h wall clock) is what makes that work.
+# **The resubmit CANNOT rely on being killed**: at the wall clock SLURM tears down the whole
+# batch script, the `sbatch` at the bottom never executes, and the run silently stops halfway.
+# So python stops itself early, checkpoints, and exits 0 without writing summary.json.
+#
 #SBATCH --job-name=maskdino_coco
 #SBATCH --output=/cluster/scratch/niacobone/vggt/slurm/logs/maskdino_coco_%j.log
 #SBATCH --error=/cluster/scratch/niacobone/vggt/slurm/logs/maskdino_coco_%j.err
@@ -87,6 +92,7 @@ $PYTHON scripts/train_maskdino_coco.py \
     --run_dir "$RUN_DIR" \
     --resume auto \
     --num_workers 10 \
+    --time_budget_hours "${TIME_BUDGET_HOURS:-22.5}" \
     ${EXTRA_ARGS:-}
 
 if [ ! -f "$RUN_DIR/summary.json" ]; then
