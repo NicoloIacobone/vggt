@@ -75,6 +75,14 @@ be scored on exactly this ruler.
 No post-hoc matching, tracking or mask fusion is involved: cross-view consistency comes from the
 shared query set.
 
+Two ablations (2026-07-29) localise where the consistency comes from: removing the decoder's
+**cross-frame attention** costs **−0.18** multi-view AP50 (0.494 → 0.311), and computing the
+frozen features per frame instead of once per bundle costs **−0.15** (0.494 → 0.347) — VGGT's
+global attention writes cross-view correspondence into the frozen tokens, and the decoder's
+cross-frame attention consumes it. The same bundle-level features cost −0.05 *per-frame* AP50 as
+a standalone change, so multi-view consistency has a measured price in per-frame accuracy
+(0.729 single-frame best vs 0.630 per-frame for the best multi-view model).
+
 ### 2.3 The one caveat when reading §2.1 against §2.2
 
 The two tables are **two rulers, not two results** — never mix them. The same arm-C checkpoint

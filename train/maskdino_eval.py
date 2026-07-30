@@ -16,7 +16,8 @@ from data.scannet_overfit import IDX_TO_CLASS
 from models.maskdino import build_bundle_target, to_scannet_class_logits
 from train.eval_metrics import compute_instance_segmentation_metrics
 from train.maskdino_data import gather_batch
-from train.perframe import METRIC_KEYS, drop_empty_masks, topk_predictions
+from train.perframe import (METRIC_KEYS, drop_empty_masks, gt_masks_from_id_map,
+                            topk_predictions, upsample_mask_logits)
 
 
 @torch.no_grad()
@@ -36,6 +37,10 @@ def eval_scenes(model, scenes: List[Dict], args, device: str) -> Dict[str, Dict[
     With `--multi_frame` the whole bundle has to go through the model at once (the queries are
     shared), so scoring is delegated to `eval_scenes_multiframe`, which reports these same
     per-frame keys plus the `bundle_*` multi-view ones.
+
+    With `--eval_full_res` every frame is ADDITIONALLY scored at the dataset's full 518x518 GT
+    resolution (keys `full_*` / `full_*_all`, docs/MASKDINO.md §6.5) — same kept predictions,
+    bilinearly upsampled, against the cached full-res id map.
     """
     if getattr(args, "multi_frame", False):
         return eval_scenes_multiframe(model, scenes, args, device)
@@ -43,6 +48,7 @@ def eval_scenes(model, scenes: List[Dict], args, device: str) -> Dict[str, Dict[
     model.eval()
     per_scene = {}
     for si, scene in enumerate(scenes):
+        id_maps = _scene_id_maps(scene, args)
         samples = [(si, 0, fi) for fi, t in enumerate(scene["bundles"][0]["targets"])
                    if int(t["labels"].numel()) > 0]
         rows = []
@@ -61,21 +67,12 @@ def eval_scenes(model, scenes: List[Dict], args, device: str) -> Dict[str, Dict[
                 # over every kept prediction at 10 IoU thresholds, so an unbounded 300-query set
                 # costs ~3x more per frame and dominates eval on large scene counts.
                 pm, cl = topk_predictions(pm, cl, args.eval_topk)
-                common = dict(
-                    pred_masks=pm,
-                    class_logits=cl,
-                    gt_masks=targets[b]["masks"],
-                    gt_classes=targets[b]["labels"] + 1,
-                    background_class=0,
-                    score_mode="sigmoid",
-                )
-                row = compute_instance_segmentation_metrics(
-                    score_threshold=args.score_threshold, **common)
-                row.update({f"{k}_all": v for k, v in
-                            compute_instance_segmentation_metrics(score_threshold=0.0,
-                                                                  **common).items()})
+                row = _score_pair(pm, cl, targets[b]["masks"], targets[b]["labels"] + 1, args)
+                if id_maps is not None:
+                    row.update(_full_res_pair(pm, cl, id_maps, chunk[b][2], targets[b],
+                                              args, device))
                 rows.append(row)
-        all_keys = METRIC_KEYS + [f"{k}_all" for k in METRIC_KEYS]
+        all_keys = _frame_keys(id_maps is not None)
         per_scene[scene["name"]] = ({k: float(np.mean([r[k] for r in rows])) for k in all_keys}
                                     if rows else {k: 0.0 for k in all_keys})
     if was_training:
@@ -104,6 +101,7 @@ def eval_scenes_multiframe(model, scenes: List[Dict], args, device: str
     model.eval()
     per_scene = {}
     for si, scene in enumerate(scenes):
+        id_maps = _scene_id_maps(scene, args)
         bundle_targets_all = scene["bundles"][0]["targets"]
         samples = [(si, 0, fi) for fi in range(len(bundle_targets_all))]
         feats, targets, psi = gather_batch(scenes, samples, device)
@@ -117,7 +115,11 @@ def eval_scenes_multiframe(model, scenes: List[Dict], args, device: str
             pm, cl = drop_empty_masks(out["pred_masks"][b],
                                       to_scannet_class_logits(out["pred_logits"][b]))
             pm, cl = topk_predictions(pm, cl, args.eval_topk)
-            rows.append(_score_pair(pm, cl, targets[b]["masks"], targets[b]["labels"] + 1, args))
+            row = _score_pair(pm, cl, targets[b]["masks"], targets[b]["labels"] + 1, args)
+            if id_maps is not None:
+                row.update(_full_res_pair(pm, cl, id_maps, samples[b][2], targets[b],
+                                          args, device))
+            rows.append(row)
 
         bt = build_bundle_target(targets)
         if int(bt["labels"].numel()) > 0:
@@ -128,25 +130,61 @@ def eval_scenes_multiframe(model, scenes: List[Dict], args, device: str
             vol, cls = topk_predictions(vol, cls, args.eval_topk)
             bundle_rows.append(_score_pair(vol, cls, bt["masks"], bt["labels"] + 1, args))
 
-        keys = METRIC_KEYS + [f"{k}_all" for k in METRIC_KEYS]
-        m = ({k: float(np.mean([r[k] for r in rows])) for k in keys} if rows
-             else {k: 0.0 for k in keys})
+        base_keys = METRIC_KEYS + [f"{k}_all" for k in METRIC_KEYS]
+        frame_keys = _frame_keys(id_maps is not None)
+        m = ({k: float(np.mean([r[k] for r in rows])) for k in frame_keys} if rows
+             else {k: 0.0 for k in frame_keys})
+        # bundle_* stays on the mask grid: the full-resolution ruler isolates boundary quality,
+        # which the per-frame full_* keys already measure; a [Q, S, H, W] full-res volume would
+        # cost ~200x the IoU memory for no extra signal about cross-view consistency.
         m.update({f"bundle_{k}": (float(bundle_rows[0][k]) if bundle_rows else 0.0)
-                  for k in keys})
+                  for k in base_keys})
         per_scene[scene["name"]] = m
     if was_training:
         model.train()
     return per_scene
 
 
-def _score_pair(pred_masks, class_logits, gt_masks, gt_classes, args) -> Dict[str, float]:
+def _score_pair(pred_masks, class_logits, gt_masks, gt_classes, args,
+                prefix: str = "") -> Dict[str, float]:
     """One scored unit (a frame or a bundle) at both operating points (docs/MASKDINO.md §6.2)."""
     common = dict(pred_masks=pred_masks, class_logits=class_logits, gt_masks=gt_masks,
                   gt_classes=gt_classes, background_class=0, score_mode="sigmoid")
-    row = compute_instance_segmentation_metrics(score_threshold=args.score_threshold, **common)
-    row.update({f"{k}_all": v for k, v in
+    row = {f"{prefix}{k}": v for k, v in compute_instance_segmentation_metrics(
+        score_threshold=args.score_threshold, **common).items()}
+    row.update({f"{prefix}{k}_all": v for k, v in
                 compute_instance_segmentation_metrics(score_threshold=0.0, **common).items()})
     return row
+
+
+def _scene_id_maps(scene, args):
+    """The scene's cached full-res GT id maps, or None (--eval_full_res off / not cached)."""
+    if not getattr(args, "eval_full_res", False):
+        return None
+    return scene["bundles"][0].get("gt_id_maps")
+
+
+def _frame_keys(full_res: bool):
+    """The per-frame metric keys a scene dict carries (+ the full_* ruler when enabled)."""
+    keys = METRIC_KEYS + [f"{k}_all" for k in METRIC_KEYS]
+    if full_res:
+        keys += [f"full_{k}" for k in METRIC_KEYS] + [f"full_{k}_all" for k in METRIC_KEYS]
+    return keys
+
+
+def _full_res_pair(pm, cl, id_maps, fi, target, args, device) -> Dict[str, float]:
+    """
+    The full-resolution variants (`full_*`, docs/MASKDINO.md §6.5) for one frame.
+
+    The kept prediction set is exactly the one the grid-resolution protocol decided on
+    (drop_empty + topk run upstream of this call) — only the *scoring* resolution changes, so
+    full_* isolates mask-boundary quality from detection. Predictions are bilinearly upsampled
+    in logit space; GT comes from the dataset's full-resolution id map, never from upsampling
+    the grid GT back.
+    """
+    gt_full = gt_masks_from_id_map(id_maps[fi].to(device), target["global_ids"])
+    pm_full = upsample_mask_logits(pm, id_maps.shape[-2:])
+    return _score_pair(pm_full, cl, gt_full, target["labels"] + 1, args, prefix="full_")
 
 
 def mean_metric(per_scene: Dict[str, Dict[str, float]], key: str) -> float:

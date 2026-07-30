@@ -56,6 +56,8 @@ python tests/test_maskdino_multiframe.py  # shared-query multi-frame path: cross
                                       # bundle GT + index expansion, bundle matcher, S=1
                                       # equivalence, multi-frame overfit, bundle batching/scoring
 python tests/test_maskdino_viz.py     # figure colouring keyed to identity, not per-frame rank
+python tests/test_maskdino_fullres.py # --eval_full_res ruler (MASKDINO.md §6.5): helpers,
+                                      # grid-vs-full ruler difference, both eval paths
 python tests/test_coco_maskdino.py    # COCO track: both pixel-decoder pyramid modes, head
                                       # round-trip, GT helpers, instance inference + RLE, overfit
 
@@ -68,6 +70,11 @@ sbatch --export=ALL,EXTRA_ARGS='--mask_upsample 2' slurm/train_maskdino.sh
 sbatch --export=ALL,N_SCENES=490,EXTRA_ARGS='--multi_frame --feature_mode bundle' slurm/train_maskdino.sh
 python scripts/train_maskdino.py --train_scenes scene0000_00 --val_scenes scene0080_00 \
     --num_epochs 50 --num_queries 300 --scans_root <scans_root>       # local smoke test
+
+# --- Full-resolution ruler (docs/MASKDINO.md §6.5) --------------------------------------------
+# Adds full_* metrics scored at the 518x518 GT resolution next to the unchanged grid metrics.
+sbatch --export=ALL,N_SCENES=490,EXTRA_ARGS='--eval_full_res' slurm/train_maskdino.sh
+sbatch slurm/scannet_oracle.sh   # GT-only ceiling of the 37/74/148 grids on ScanNet (CPU-only)
 
 # --- Re-render a finished run's figures (docs/MASKDINO.md §6.4) -------------------------------
 # Colours are keyed to instance identity, so an object keeps its colour across the frames of a

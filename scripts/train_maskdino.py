@@ -162,6 +162,12 @@ def build_argparser():
     p.add_argument("--eval_topk", type=int, default=100,
                    help="Max detections kept per frame when scoring (COCO/MaskDINO's "
                         "test_topk_per_image). 0 = keep every query. Also bounds eval cost.")
+    p.add_argument("--eval_full_res", action="store_true",
+                   help="Additionally score every frame at the dataset's full 518x518 GT "
+                        "resolution (keys full_*, docs/MASKDINO.md §6.5): predictions are "
+                        "bilinearly upsampled, GT comes from the cached full-res id map. The "
+                        "kept prediction set is still decided on the mask grid, so full_* "
+                        "isolates boundary quality. Costs ~2 GB cache at 500 scenes.")
     p.add_argument("--eval_train_scenes", type=int, default=10,
                    help="How many train scenes to score for the train-side diagnostic metric "
                         "(evenly spaced; 0 = all). The train number is only a "
@@ -349,6 +355,12 @@ def main():
                       f"AP50={mean_metric(va, 'bundle_AP50'):.3f} "
                       f"AP75={mean_metric(va, 'bundle_AP75'):.3f} "
                       f"mAP={mean_metric(va, 'bundle_mAP'):.3f}")
+            if args.eval_full_res:
+                # the full-resolution ruler (docs/MASKDINO.md §6.5) — same detections, 518x518
+                print(f"    val full-res  mIoU={mean_metric(va, 'full_mIoU'):.3f} "
+                      f"AP50={mean_metric(va, 'full_AP50'):.3f} "
+                      f"AP75={mean_metric(va, 'full_AP75'):.3f} "
+                      f"mAP={mean_metric(va, 'full_mAP'):.3f}")
             record = {"epoch": epoch + 1, "lr": float(scheduler.get_last_lr()[0]),
                       "loss": mean_loss, "class_loss": epoch_ce / n,
                       "mask_loss": epoch_mask / n, "box_loss": epoch_box / n}
@@ -356,6 +368,11 @@ def main():
                     "mIoU_all", "AP50_all", "AP75_all", "mAP_all"]
             if args.multi_frame:
                 keys += [f"bundle_{k}" for k in keys]
+            if args.eval_full_res:
+                # after the bundle expansion: bundle_* stays on the mask grid (§6.5)
+                keys += [f"full_{k}" for k in ("mIoU", "AP50", "AP75", "mAP", "class_acc",
+                                               "num_pred", "mIoU_all", "AP50_all", "AP75_all",
+                                               "mAP_all")]
             for split, d in (("train", tr), ("val", va)):
                 for key in keys:
                     record[f"{split}_{key}"] = mean_metric(d, key)

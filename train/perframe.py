@@ -10,11 +10,41 @@ from typing import Dict, List
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from train.eval_metrics import compute_instance_segmentation_metrics
 
 # The metric keys every per-frame scorer reports.
 METRIC_KEYS = ["mIoU", "AP50", "AP75", "mAP", "class_acc", "num_pred", "num_gt"]
+
+
+def upsample_mask_logits(pred_masks: torch.Tensor, size) -> torch.Tensor:
+    """
+    Bilinearly upsample [N, h, w] mask LOGITS to `size` — the full-resolution eval protocol
+    (docs/MASKDINO.md §6.5). Logits, not probabilities: sigmoid is monotone, so thresholding the
+    upsampled logits at 0 equals thresholding the upsampled-in-logit-space probabilities at 0.5,
+    and it is exactly how upstream MaskDINO/COCO evaluation upsamples before binarising.
+    """
+    size = tuple(size)
+    if tuple(pred_masks.shape[-2:]) == size:
+        return pred_masks
+    if pred_masks.shape[0] == 0:
+        return pred_masks.new_zeros((0, *size))
+    return F.interpolate(pred_masks[None], size=size, mode="bilinear", align_corners=False)[0]
+
+
+def gt_masks_from_id_map(id_map: torch.Tensor, global_ids: torch.Tensor) -> torch.Tensor:
+    """
+    [H, W] global-instance-id map + [n] instance ids → [n, H, W] binary float masks.
+
+    The id map is the dataset's full-resolution GT for one frame (the same tensor
+    `build_frame_targets` area-downsamples to the mask grid); pulling the frame's instances out
+    of it by the *target's* `global_ids` reuses the class-drop decision made there instead of
+    duplicating it.
+    """
+    if global_ids.numel() == 0:
+        return id_map.new_zeros((0, *id_map.shape), dtype=torch.float32)
+    return torch.stack([(id_map == int(g)).float() for g in global_ids.tolist()])
 
 
 def drop_empty_masks(pred_masks: torch.Tensor, class_logits: torch.Tensor,

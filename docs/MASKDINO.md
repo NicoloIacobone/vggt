@@ -3,10 +3,14 @@
 **Status:** single-frame question answered and won (2026-07-27). At 490 scenes this head scores
 **val mIoU 0.669 / AP50 0.699** against the best D4RT arm's **0.451 / 0.294** on the identical
 per-frame protocol — +48 % mIoU, +138 % AP50; **0.694 / 0.729 with `--bundles_per_scene 2`**
-(§7.4). The multi-frame extension (§8) is implemented through step 2 (shared queries across the
-frames of a bundle, `--multi_frame`, 2026-07-28): per-frame it is neutral against its control,
-and on the arms' own multi-view ruler it scores **0.535 mIoU / 0.494 AP50 vs arm C's
-0.367 / 0.199**. 3D anchors (§8.3) are designed but not implemented.
+(§7.4; 4 draws/scene saturates, §7.4.1). The multi-frame extension (§8) is implemented through
+step 2 (shared queries across the frames of a bundle, `--multi_frame`, 2026-07-28): per-frame it
+is neutral against its control, and on the arms' own multi-view ruler it scores **0.535 mIoU /
+0.494 AP50 vs arm C's 0.367 / 0.199**. The 2026-07-29 ablations (§7.4.1) show that result rests
+on two ingredients: removing cross-frame attention costs **−0.18 bundle AP50** and swapping the
+bundle features for per-frame ones costs **−0.15**, so multi-view-aware frozen tokens — a
+*negative* for per-frame accuracy (§8.1) — are *required* for the multi-view result. 3D anchors
+(§8.3) are designed but not implemented.
 
 **The port is verified against upstream (§7.6, 2026-07-29).** Driven with MaskDINO's own released
 COCO weights, our ported decoder + deformable encoder reproduce upstream's published COCO val2017
@@ -183,6 +187,7 @@ is the last layer only — identical cache footprint to every other arm.
 | `tests/test_maskdino_train.py` | per-frame GT builder (incl. class drop), per-frame metric slicing, 60-step synthetic overfit |
 | `tests/test_maskdino_multiframe.py` | cross-frame block, bundle GT + index expansion, bundle matcher, shared-query forward, S=1 equivalence, multi-frame overfit, bundle batching + scoring |
 | `tests/test_maskdino_viz.py` | identity-keyed figure colouring: stable slots, winner-takes-all painting, colour survives per-frame reordering/filtering (§6.4) |
+| `tests/test_maskdino_fullres.py` | the `--eval_full_res` ruler (§6.5): helpers, the grid-vs-full ruler difference, full_* keys in both eval paths |
 | `tests/maskdino_fixtures.py` | `_tiny_head`, `_synthetic_targets` shared by the three test modules |
 
 The only shared file this track modified is `train/eval_metrics.py`:
@@ -241,6 +246,29 @@ The GT and prediction panels use **different identity spaces**, so their colours
 agree with each other — only with themselves across frames. Nothing about the metrics changed:
 colours never entered the scoring path. Existing runs can be re-rendered without retraining via
 `scripts/visualize_maskdino.py` / `slurm/visualize_maskdino.sh`.
+
+**6.5 The full-resolution ruler (`--eval_full_res`, added 2026-07-30 — no completed run uses it
+yet).** Every number above is computed *on the prediction grid*: GT is area-downsampled to
+37×37 (74×74 with `--mask_upsample 2`) and the masks are compared there. On that ruler boundary
+detail finer than a grid cell cannot be rewarded **even in principle**, so the "`--mask_upsample`
+is neutral" verdict of §7.4 is partly a property of the ruler, not only of the model. Every
+published protocol (and our own COCO track) scores at image resolution instead. `--eval_full_res`
+adds that ruler *alongside* the grid one: predictions are bilinearly upsampled **in logit space**
+to the dataset's 518×518 GT id map (cached per frame, int16, ~2 GB at 500 scenes) and scored as
+`full_*` / `full_*_all` keys next to the unchanged grid keys. The kept prediction set is still
+decided on the grid (same `drop_empty_masks` + top-k), so `full_*` isolates *mask-boundary
+quality* from detection. `bundle_*` stays on the grid (the full-res volume would cost ~200× the
+IoU memory and says nothing extra about cross-view consistency). Off by default; every completed
+run and every number in §7 is grid-resolution. Tests: `tests/test_maskdino_fullres.py`, including
+the ruler-difference demonstration (a grid-perfect prediction scores 0.5 mIoU on full-res striped
+GT). The GT-only ceiling of each grid on this ruler comes from
+`scripts/scannet_mask_resolution_oracle.py` (`sbatch slurm/scannet_oracle.sh`) — the ScanNet
+analogue of the COCO oracle (docs/MASKDINO_COCO.md §1); run/quote it before arguing about mask
+resolution on ScanNet. When quoting: `full_*` numbers are still *our* metric implementation on
+*our* split — they make mask-resolution claims honest, they do not make numbers
+leaderboard-comparable (docs/RELATED_WORK.md). Note the 518×518 id map is itself a square resize
+of the native 968×1296 annotation; scoring at native resolution (inverting the squash, as the
+COCO track does) is a possible refinement, not the current implementation.
 
 ## 7. Results
 
@@ -372,13 +400,12 @@ otherwise, official 500-scene GT, peak (`checkpoint_best*`) numbers:
    caveat:** the `EPOCHS=30` this job was submitted with was silently clamped back to 60 by
    `slurm/train_maskdino.sh` (fixed 2026-07-28), so it had a 2× larger step budget available;
    it nevertheless *peaked* at epoch 19 = 18.6 k steps, against the bar's peak at 15.2 k, so the
-   gain is not simply "trained longer". `--bundles_per_scene 4` (job 8950610, `EPOCHS=15`) tests
-   the next point on that curve.
+   gain is not simply "trained longer". `--bundles_per_scene 4` **saturates** (§7.4.1).
 4. **Multi-frame** (§8.2) costs 0.069 AP50 against the bar — but 0.048 of that is the bundle
    features it is built on. Against its proper control (8895540, 0.651) the shared-query decoder
    is **−0.021 AP50 per frame, i.e. neutral inside the noise band**, and in exchange it produces
-   a genuine multi-view result (below). Job 8950613 re-runs it with per-frame features to
-   decouple the two; job 8950617 is the `--no-cross_frame_attn` ablation.
+   a genuine multi-view result (below). The 2026-07-29 ablations decouple the ingredients
+   (§7.4.1).
 
 **The per-bundle number is back.** Job 8900100 scores, on the multi-view protocol of arms A–E:
 
@@ -390,6 +417,38 @@ otherwise, official 500-scene GT, peak (`checkpoint_best*`) numbers:
 **+46 % mIoU and 2.5× AP50 over the best D4RT arm on the arms' own ruler** — one query is one
 instance across all 8 views, no post-hoc matching. Read it *only* against 0.367 / 0.199, never
 against the per-frame 0.699 (docs/RESULTS.md §1).
+
+### 7.4.1 Multi-frame ablations + bundle saturation (jobs 8950610 / 8950613 / 8950617, 2026-07-29)
+
+All at N=490, otherwise the full recipe. Peak numbers per metric family (the per-frame and
+per-bundle peaks can fall on different epochs; `checkpoint_best*` selects on the *per-frame*
+metrics only — a bundle-selected checkpoint does not exist yet):
+
+| Job | Config | per-frame mIoU / AP50 | bundle mIoU / AP50 | Δbundle AP50 |
+|---|---|---|---|---|
+| 8900100 | `--multi_frame --feature_mode bundle` (full) | 0.621 / 0.630 | **0.535 / 0.494** | — |
+| 8950617 | … `--no-cross_frame_attn` | 0.530 / 0.524 | 0.393 / 0.311 | **−0.183** |
+| 8950613 | … `--feature_mode single` (per-frame features) | 0.631 / 0.627 | 0.429 / 0.347 | **−0.147** |
+
+Two findings, both load-bearing for the multi-frame story:
+
+1. **Cross-frame attention is the main carrier of the multi-view result** — the single decisive
+   component this track has found (the single-frame ablations in §7.2.1 found none). Removing it
+   costs −0.183 bundle AP50 *and* −0.106 per-frame AP50: with shared queries but no cross-frame
+   communication, the per-frame task gets harder too (one content vector must serve S views it
+   can no longer reconcile).
+2. **Bundle features are required for multi-view consistency.** §8.1 measured them as a *negative*
+   for per-frame accuracy (−0.048 AP50), but swapping them out of the multi-frame model costs
+   −0.147 bundle AP50 while leaving per-frame intact (0.627 ≈ the bundle-features control 0.651
+   region). Read together: VGGT's global attention writes cross-view correspondence into the
+   frozen tokens, the decoder's cross-frame attention consumes it, and the price is per-frame
+   accuracy — **consistency is not free, and it is now quantified** (0.729 single-frame best vs
+   0.630 per-frame for the best multi-view model).
+
+**Bundle saturation** (job 8950610, `--bundles_per_scene 4 --color_jitter 0.2`, `EPOCHS=15`):
+**0.699 mIoU / 0.722 AP50** — mIoU a hair above the b2 run (0.694), AP50 a hair below (0.729),
+i.e. inside the noise band. The views-per-scene lever saturates at 2 draws; the remaining data
+lever is **more scenes** (the tar holds 500; ScanNet v2 has 1201 official train scenes).
 
 ### 7.5 Official-split read-out (job 8900194)
 
@@ -481,7 +540,10 @@ Runs the frozen aggregator once over all S frames of a bundle instead of once pe
 VGGT's global attention makes each frame's tokens multi-view aware while the decoder still sees
 one frame at a time. No architectural change, no cross-frame identity, no extra parameters — only
 the feature cache is built differently. Implemented in `train/maskdino_data.py::extract_features`;
-first run at N=490 submitted 2026-07-28 (§7.4).
+first run at N=490 submitted 2026-07-28 (§7.4). **Verdict: −0.048 AP50 per frame as a standalone
+change (§7.4), but required by the multi-frame decoder — swapping it out costs −0.147 bundle AP50
+(§7.4.1). The multi-view information in the frozen tokens is what the cross-frame attention
+consumes.**
 
 ### 8.2 Shared queries across frames (`--multi_frame`) — implemented 2026-07-28
 
@@ -525,6 +587,12 @@ Flags: `--multi_frame` (sample = a bundle of `--num_frames` frames), `--batch_bu
 (default 1 → 8 frames/step, the same GPU footprint and the same steps/epoch as the single-frame
 runs), `--no-cross_frame_attn` (ablate the block, keeping shared init + bundle matching).
 
+**Results (2026-07-28/29).** Per frame the full multi-frame model is neutral against its
+bundle-features control (−0.021 AP50, §7.4); on the arms' multi-view ruler it scores
+**0.535 mIoU / 0.494 bundle AP50** vs arm C's 0.367 / 0.199. The two ablations (§7.4.1) localise
+the result: cross-frame attention is worth 0.183 bundle AP50 and bundle features 0.147 — the
+former is the only individually-decisive component found anywhere in this track.
+
 ### 8.3 3D anchors instead of 2D boxes (designed, not implemented)
 
 Replace the DAB 4-d box with a 3D anchor from VGGT's point head. Arm E showed 3D anchors alone
@@ -564,8 +632,5 @@ query is one instance across views — with per-frame queries it is just a 2D bo
 
 Cheap follow-ups that need one flag each: `--mask_upsample 2` (74×74 masks — currently supervised
 on the 37×37 patch grid) and `--bundles_per_scene 2 --color_jitter 0.2` (more frame draws without
-new scenes; costs cache memory). Both submitted at N=490 on 2026-07-28 (§7.4).
-
-Cheap follow-ups that need one flag each: `--mask_upsample 2` (74×74 masks — currently supervised
-on the 37×37 patch grid) and `--bundles_per_scene 2 --color_jitter 0.2` (more frame draws without
-new scenes; costs cache memory). Both submitted at N=490 on 2026-07-28 (§7.4).
+new scenes; costs cache memory). Both answered at N=490 (§7.4: upsample neutral, extra draws
++0.030 AP50 and saturating at 2 per §7.4.1).

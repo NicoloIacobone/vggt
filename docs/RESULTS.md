@@ -79,8 +79,9 @@ the task are all upstream's there. Never quote it next to a ScanNet number.
 | Change | val mIoU | val AP50 | ΔAP50 | verdict |
 |---|---|---|---|---|
 | `--bundles_per_scene 2 --color_jitter 0.2` | 0.694 | 0.729 | **+0.030** | best result so far; still data-limited |
+| `--bundles_per_scene 4 --color_jitter 0.2` | 0.699 | 0.722 | +0.023 | **saturates**: within noise of 2 draws — the views-per-scene lever is exhausted, more *scenes* is the remaining data lever |
 | `--mask_upsample 2` (74×74 masks) | 0.662 | 0.677 | −0.022 | neutral (inside ±0.04 noise) — masks stay on the 37×37 grid |
-| `--feature_mode bundle` (multi-view-aware tokens) | 0.622 | 0.651 | −0.048 | **negative result**: mixing views inside the frozen features *hurts* per-frame segmentation |
+| `--feature_mode bundle` (multi-view-aware tokens) | 0.622 | 0.651 | −0.048 | **negative result** per frame — but *required* for multi-view consistency (§3) |
 | `--multi_frame --feature_mode bundle` | 0.621 | 0.630 | −0.069 | −0.021 against its own control (`bundle`, 0.651) → per-frame neutral, and it buys the multi-view metric below |
 
 Job ids, caveats (the `--bundles_per_scene 2` job got a 2× step budget through an epoch-clamp
@@ -114,8 +115,16 @@ mask volume can be scored exactly like an arm's.
 |---|---|---|---|---|
 | arm C — best D4RT head (N=190) | 0.367 | 0.199 | — | — |
 | **MaskDINO `--multi_frame`** (job 8900100) | **0.535** | **0.494** | 0.279 | 0.272 |
+| … `--no-cross_frame_attn` (job 8950617) | 0.393 | 0.311 | 0.089 | 0.132 |
+| … `--feature_mode single` (per-frame features, job 8950613) | 0.429 | 0.347 | 0.154 | 0.181 |
 
 **+46 % mIoU, 2.5× AP50 on the arms' own protocol**, with no post-hoc matching or fusion.
+
+The two ablation rows (2026-07-29, docs/MASKDINO.md §7.4.1) localise the result: **cross-frame
+attention is worth 0.183 bundle AP50** — the only individually-decisive component found anywhere
+in this track — and **bundle features are worth 0.147**. The same bundle features are a *negative*
+for per-frame accuracy (§2), so multi-view consistency has a measured price: 0.729 single-frame
+best vs 0.630 per-frame for the best multi-view model.
 
 ### 3.1 The retired D4RT arms
 

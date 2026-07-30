@@ -188,6 +188,11 @@ def prepare_scenes(model, scene_dirs: List[str], args, device: str, split: str) 
             "targets": [{k: v.to(args.cache_device) for k, v in t.items()} for t in targets],
             "images": (images[0].clamp(0, 1) * 255).round().to(torch.uint8).cpu(),
             "frame_names": batch.get("frame_names", None),
+            # Full-resolution GT id map [S, H, W] for --eval_full_res (docs/MASKDINO.md §6.5).
+            # int16 keeps 500 scenes ≈ 2 GB; only bundle 0 is ever evaluated, so extra bundles
+            # null it below, like `images`.
+            "gt_id_maps": (_squeeze_batch(batch["masks"]).to(torch.int16).cpu()
+                           if getattr(args, "eval_full_res", False) else None),
         }
 
     scenes = []
@@ -206,7 +211,8 @@ def prepare_scenes(model, scene_dirs: List[str], args, device: str, split: str) 
         loader = DataLoader(rand_dataset, batch_size=1, shuffle=False, num_workers=0)
         for idx, batch in enumerate(loader):
             b = build(batch, jitter=args.color_jitter > 0)
-            b["images"] = None  # only bundle 0 is ever visualised
+            b["images"] = None      # only bundle 0 is ever visualised
+            b["gt_id_maps"] = None  # ... and only bundle 0 is ever evaluated
             scenes[idx]["bundles"].append(b)
         print(f"  [{split}] extra bundle {k} cached for {len(scenes)} scenes")
     return scenes
