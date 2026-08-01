@@ -19,22 +19,14 @@ quantified) is the core table of that study.
 Nothing we report is currently comparable to any published number (docs/RESULTS.md §1.2).
 In effort order — each step also de-risks the next:
 
-- [~] **1a. Full-resolution 2D eval — IMPLEMENTED 2026-07-30** (`--eval_full_res`,
-      docs/MASKDINO.md §6.5, `tests/test_maskdino_fullres.py`): predictions bilinearly upsampled
-      in logit space to the 518×518 GT id map, scored as `full_*` keys next to the unchanged
-      grid keys; kept-prediction set still decided on the grid, so `full_*` isolates boundary
-      quality. Default off, no existing number changes. **Remaining: re-run the headline recipe
-      and `--mask_upsample 2/4` with the flag on** — expect upsample to stop being neutral on
-      this ruler.
-- [~] **1b. ScanNet mask-resolution oracle — IMPLEMENTED + SUBMITTED 2026-07-30**
-      (`scripts/scannet_mask_resolution_oracle.py`, `slurm/scannet_oracle.sh`, job 9073136):
-      the GT-only ceiling of the 37/74/148/259/518 grids under the full-resolution ruler, val
-      scenes, our protocol. Quote it whenever mask resolution comes up. **Remaining: record the
-      numbers in docs/MASKDINO.md §6.5 when the job lands.**
-      Follow-up runs also submitted: jobs 9072738 (`--eval_full_res`), 9072749 (`… 
-      --mask_upsample 2`), 9072761 (`… --mask_upsample 4 --train_num_points 12544` — upsample 4
-      has never been trained on ScanNet; point-sampled mask loss because 148² full-pixel
-      supervision is the COCO-recipe regime).
+- [x] **1a + 1b. Full-resolution eval + ScanNet oracle — DONE, question CLOSED 2026-07-30**
+      (docs/MASKDINO.md §6.5 implementation, **§7.7 the verdict**). The 37×37 grid's GT-only
+      ceiling on ScanNet is **0.956 AP50** on the full-res ruler (COCO: 44.7 — different regime
+      entirely); the model sits at ~0.69; the bar re-run reproduces (0.690 grid / 0.673 full)
+      and `--mask_upsample 2` stays neutral on the honest ruler (0.680 vs 0.673 full AP50).
+      **Recognition binds, not resolution — quote §7.7, stop spending here.** The
+      `--mask_upsample 4` run OOM'd (no grad accumulation in the ScanNet trainer); per §7.7 not
+      worth fixing (~0.004 AP50 of ceiling over ×2).
 - [~] **1c. Extend the dataset to the full official ScanNet v2 train split (1201 scenes) —
       TAR BUILT 2026-07-30; nothing trains on it yet.** Simultaneously the protocol fix
       (train/eval on the official 1201/312 split like every competitor) and the **biggest
@@ -79,10 +71,10 @@ In effort order — each step also de-risks the next:
 
 ## 2. Complete the multi-frame study (the contribution)
 
-- [~] **2a. Best data recipe × multi-frame** — `--multi_frame --feature_mode bundle
-      --bundles_per_scene 2 --color_jitter 0.2`, N=490, EPOCHS=30: the current multi-view
-      headline (0.535 / 0.494) does not yet benefit from the best-known lever (+0.030 per-frame
-      AP50). **Submitted 2026-07-30, job 9071415.**
+- [x] **2a. Best data recipe × multi-frame — DONE 2026-07-30** (job 9071415): **new multi-view
+      best 0.539 mIoU / 0.515 bundle AP50** (+0.021 over 0.494), per-frame 0.643 / 0.667 (up
+      from 0.621 / 0.630). Peak per-frame and per-bundle coincide (epoch 19), so
+      `checkpoint_best_ap50.pth` carries the headline. This is the recipe 2d builds on.
 - [ ] **2b. Bundle-selected checkpoint.** `checkpoint_best*` selects on the *per-frame* metrics
       only; the per-bundle peak falls on a different epoch (§7.4.1). Add
       `checkpoint_best_bundle.pth` selected on bundle AP50 for `--multi_frame` runs, so the
@@ -96,31 +88,25 @@ In effort order — each step also de-risks the next:
       the right base. Framed and budgeted as an **ablation** (FAST3DIS owns the mechanism as a
       contribution), which also closes the arm-E loop.
 
-## 3. Resolution stream (gated on 1a/1b — do not start before)
+## 3. Resolution stream — CLOSED 2026-07-30 (docs/MASKDINO.md §7.7)
 
-The mask grid is already decoupled from the token grid (`--mask_upsample`, ViTDet-style
-transposed convs; docs/MASKDINO_COCO.md §1.2 — "VGGT is not an FPN" is answered). The open
-question is the **token grid** (detection/separation of small objects, §1.3). Spend here only
-if the oracle (1b) or the COCO APs column says it binds on ScanNet:
-
-- [ ] `--mask_upsample 2` and `4` re-measured under full-resolution eval (rides on 1a).
-- [ ] Optional: one arm at 700 px (50×50 tokens) or 1036 px (74×74). VGGT is 2D-RoPE-only and
-      accepts any grid (verified, docs/MASKDINO_COCO.md §1.3); on ScanNet the ~5× backbone cost
-      is amortised by once-per-scene caching — the real costs are ~4× feature cache and ~4×
-      encoder tokens in training.
+The mask grid is decoupled from the token grid ("VGGT is not an FPN" is answered,
+docs/MASKDINO_COCO.md §1.2), the 37×37 GT-only ceiling on ScanNet is 0.956 AP50 vs the model's
+~0.69, and `--mask_upsample 2` is neutral on the full-resolution ruler too. **Recognition
+binds, not resolution — nothing left to do here on ScanNet.** The only surviving idea (a
+700/1036 px token-grid arm) is bounded by the 0.956→0.99 ceiling gap and stays parked in
+"Longer-term".
 
 ## 4. Watching
 
-- [~] **COCO backbone-swap arms** (jobs 9010539 / 9010540 / 9010546, ~half-way on 2026-07-30).
-      Intermediate reads (NOT results): dinov2 39.8 segm AP @55k steps already **above** the
-      frozen-R50 control's 35.0 @50k despite 2.7× fewer encoder cells → a 37×37-token ViT with
-      `--mask_upsample 4` is not resolution-crippled on COCO; vggt 31.3 @25k (the slow arm,
-      far behind on steps — no conclusion yet). Fill docs/MASKDINO_COCO.md §6 when
-      `summary.json` exists, then read vggt-vs-dinov2 as "what 3D pretraining did to 2D
-      semantics" at identical token geometry.
-- [~] Job 9071415 (2a above).
+- [~] **COCO `vggt` arm, final segment** (job 9262006; `resnet50` and `dinov2` are DONE —
+      docs/MASKDINO_COCO.md §6: dinov2 38.8 final AP beats frozen-R50 34.3 at 2.7× fewer
+      encoder cells; vggt interval 39.5 @85k ≈ dinov2's 39.8, after trailing early). When
+      `summary.json` lands: fill the vggt row in §6 and write the final vggt-vs-dinov2 verdict
+      ("what 3D pretraining did to 2D semantics" at identical token geometry — the early-gap +
+      endgame-convergence shape is part of the story).
 
-## Recently closed (2026-07-29) — details in docs/MASKDINO.md §7.4.1
+## Recently closed (2026-07-29/30) — details in docs/MASKDINO.md §7.4.1, §7.7, §8.2
 
 - [x] `--bundles_per_scene 4` (job 8950610) — **saturates** (0.699 / 0.722 vs b2's
       0.694 / 0.729, inside noise). Views-per-scene lever exhausted at 2; do NOT fold 4 into
@@ -131,10 +117,16 @@ if the oracle (1b) or the COCO APs column says it binds on ScanNet:
 - [x] `--multi_frame` on per-frame features (job 8950613) — bundle AP50 0.494 → 0.347.
       **Bundle features are required for multi-view consistency**, despite costing −0.048
       per-frame as a standalone change (§8.1). Consistency has a measured price.
+- [x] 2026-07-30: resolution question closed (§7.7, oracle + two full-res runs); multi-view
+      best moved to **0.539 / 0.515** (job 9071415, §8.2); COCO r50/dinov2 arms final
+      (MASKDINO_COCO.md §6).
 
 ## Longer-term / low priority
 
 - [ ] `color_jitter` on/off alone has never been isolated from the extra bundles.
+- [ ] Token-grid arm at 700/1036 px input (RoPE accepts any grid) — parked by §7.7: bounded by
+      the 0.956→0.99 ceiling gap on ScanNet; only worth revisiting for a different dataset or
+      if a reviewer demands it.
 - [ ] Which-layer ablation (`--feature_layers 4,11,17,23`) — nearly free with the feature
       cache; VGGT-Det shows the appetite for "which VGGT layers carry object identity".
 - [ ] Partial backbone unfreezing, once the train−val gap vs N says data supports it. Note it

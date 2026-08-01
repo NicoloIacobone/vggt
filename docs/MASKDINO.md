@@ -5,12 +5,16 @@
 per-frame protocol — +48 % mIoU, +138 % AP50; **0.694 / 0.729 with `--bundles_per_scene 2`**
 (§7.4; 4 draws/scene saturates, §7.4.1). The multi-frame extension (§8) is implemented through
 step 2 (shared queries across the frames of a bundle, `--multi_frame`, 2026-07-28): per-frame it
-is neutral against its control, and on the arms' own multi-view ruler it scores **0.535 mIoU /
-0.494 AP50 vs arm C's 0.367 / 0.199**. The 2026-07-29 ablations (§7.4.1) show that result rests
-on two ingredients: removing cross-frame attention costs **−0.18 bundle AP50** and swapping the
-bundle features for per-frame ones costs **−0.15**, so multi-view-aware frozen tokens — a
-*negative* for per-frame accuracy (§8.1) — are *required* for the multi-view result. 3D anchors
-(§8.3) are designed but not implemented.
+is neutral against its control, and on the arms' own multi-view ruler the best run scores
+**0.539 mIoU / 0.515 AP50 vs arm C's 0.367 / 0.199** (`--bundles_per_scene 2 --color_jitter
+0.2`, job 9071415, §8.2; 0.535 / 0.494 without the data recipe). The 2026-07-29 ablations
+(§7.4.1) show that result rests on two ingredients: removing cross-frame attention costs
+**−0.18 bundle AP50** and swapping the bundle features for per-frame ones costs **−0.15**, so
+multi-view-aware frozen tokens — a *negative* for per-frame accuracy (§8.1) — are *required*
+for the multi-view result. **The resolution question is closed (§7.7):** the 37×37 grid's
+GT-only ceiling on ScanNet is 0.956 AP50 on the full-resolution ruler, the model sits at ~0.69,
+and `--mask_upsample 2` stays neutral even on that ruler — recognition binds, not resolution.
+3D anchors (§8.3) are designed but not implemented.
 
 **The port is verified against upstream (§7.6, 2026-07-29).** Driven with MaskDINO's own released
 COCO weights, our ported decoder + deformable encoder reproduce upstream's published COCO val2017
@@ -247,8 +251,8 @@ agree with each other — only with themselves across frames. Nothing about the 
 colours never entered the scoring path. Existing runs can be re-rendered without retraining via
 `scripts/visualize_maskdino.py` / `slurm/visualize_maskdino.sh`.
 
-**6.5 The full-resolution ruler (`--eval_full_res`, added 2026-07-30 — no completed run uses it
-yet).** Every number above is computed *on the prediction grid*: GT is area-downsampled to
+**6.5 The full-resolution ruler (`--eval_full_res`, added 2026-07-30; measurements in §7.7).**
+Every number above is computed *on the prediction grid*: GT is area-downsampled to
 37×37 (74×74 with `--mask_upsample 2`) and the masks are compared there. On that ruler boundary
 detail finer than a grid cell cannot be rewarded **even in principle**, so the "`--mask_upsample`
 is neutral" verdict of §7.4 is partly a property of the ruler, not only of the model. Every
@@ -258,8 +262,9 @@ to the dataset's 518×518 GT id map (cached per frame, int16, ~2 GB at 500 scene
 `full_*` / `full_*_all` keys next to the unchanged grid keys. The kept prediction set is still
 decided on the grid (same `drop_empty_masks` + top-k), so `full_*` isolates *mask-boundary
 quality* from detection. `bundle_*` stays on the grid (the full-res volume would cost ~200× the
-IoU memory and says nothing extra about cross-view consistency). Off by default; every completed
-run and every number in §7 is grid-resolution. Tests: `tests/test_maskdino_fullres.py`, including
+IoU memory and says nothing extra about cross-view consistency). Off by default; every number in
+§7.1–7.6 is grid-resolution, §7.7 carries the full-res measurements. Tests:
+`tests/test_maskdino_fullres.py`, including
 the ruler-difference demonstration (a grid-perfect prediction scores 0.5 mIoU on full-res striped
 GT). The GT-only ceiling of each grid on this ruler comes from
 `scripts/scannet_mask_resolution_oracle.py` (`sbatch slurm/scannet_oracle.sh`) — the ScanNet
@@ -530,6 +535,51 @@ Reproduce: `sbatch slurm/coco_transplant.sh` (~32 min on one RTX 3090, both mode
 COCO val2017 lives at `/cluster/scratch/niacobone/coco` — **global scratch is purged after
 15 days**, so re-download (§ the script header) if it has vanished.
 
+### 7.7 The resolution verdict (2026-07-30, jobs 9073136 / 9072738 / 9072749 / 9072761)
+
+Three mutually consistent measurements close the "is the 37×37 grid the bottleneck?" question
+on ScanNet. All on the full-resolution ruler of §6.5.
+
+**The GT-only ceiling** (`scripts/scannet_mask_resolution_oracle.py`, job 9073136, val scenes
+0080–0089, full JSON in the output dir):
+
+| prediction grid | mIoU | AP50 | AP75 | mAP |
+|---|---|---|---|---|
+| **37×37** (native patch grid) | 0.910 | **0.956** | 0.919 | 0.863 |
+| 74×74 (`--mask_upsample 2`) | 0.963 | 0.992 | 0.982 | 0.953 |
+| 148×148 (`--mask_upsample 4`) | 0.983 | 0.997 | 0.995 | 0.988 |
+| 259×259 | 0.994 | 1.000 | 1.000 | 0.999 |
+| 518×518 (sanity) | 1.000 | 1.000 | 1.000 | 1.000 |
+
+Contrast with COCO, where the same grid caps a perfect model at 44.7 AP
+(docs/MASKDINO_COCO.md §1): ScanNet's furniture-scale objects lose only ~0.04 AP50 of ceiling
+to the 37×37 quantisation. The model sits at ~0.69 AP50 against a 0.956 ceiling —
+**recognition binds, not resolution.**
+
+**The model on both rulers** (N=490, full recipe, `--eval_full_res`, peak epoch):
+
+| Run | grid mIoU / AP50 | full-res mIoU / AP50 | full AP75 / mAP |
+|---|---|---|---|
+| 9072738 — the bar, re-run | 0.670 / 0.690 | 0.654 / 0.673 | 0.526 / 0.465 |
+| 9072749 — `--mask_upsample 2` | 0.650 / 0.685 | 0.648 / 0.680 | 0.505 / 0.460 |
+
+Three readings:
+
+1. **The bar reproduces** (0.670/0.690 vs the original 0.669/0.699) — a free seed-level
+   reproducibility check, and the grid→full-res drop is only ~0.017 AP50.
+2. **`--mask_upsample 2` stays neutral on the honest ruler too** (full AP50 0.680 vs 0.673,
+   inside noise). The §7.4 "neutral" verdict was *not* an artefact of the grid-resolution
+   scoring; the oracle explains why (the 37×37 ceiling is far above the model).
+3. Job 9072761 (`--mask_upsample 4 --train_num_points 12544`) **OOM'd in backward at 19 min**
+   (148² mask tensors, batch 8, 24 GB card; the ScanNet trainer has no gradient accumulation,
+   unlike the COCO one). Given 1–2, running it is not worth the engineering — the oracle already
+   bounds what it could buy (~0.004 AP50 ceiling over ×2).
+
+**Consequence for the plan:** mask resolution work on ScanNet is de-prioritised; the honest
+lever for boundary quality would be the token grid (docs/MASKDINO_COCO.md §1.3, VGGT at higher
+input resolution), and even that is bounded by the 0.956→0.99 ceiling gap. Quote §7.7 whenever
+resolution comes up.
+
 ## 8. The multi-frame extension
 
 Ordered by cost, each step reusing everything above.
@@ -587,11 +637,18 @@ Flags: `--multi_frame` (sample = a bundle of `--num_frames` frames), `--batch_bu
 (default 1 → 8 frames/step, the same GPU footprint and the same steps/epoch as the single-frame
 runs), `--no-cross_frame_attn` (ablate the block, keeping shared init + bundle matching).
 
-**Results (2026-07-28/29).** Per frame the full multi-frame model is neutral against its
+**Results (2026-07-28/30).** Per frame the full multi-frame model is neutral against its
 bundle-features control (−0.021 AP50, §7.4); on the arms' multi-view ruler it scores
 **0.535 mIoU / 0.494 bundle AP50** vs arm C's 0.367 / 0.199. The two ablations (§7.4.1) localise
 the result: cross-frame attention is worth 0.183 bundle AP50 and bundle features 0.147 — the
 former is the only individually-decisive component found anywhere in this track.
+
+**Adding the best data recipe helps here too** (job 9071415, 2026-07-30: `--multi_frame
+--feature_mode bundle --bundles_per_scene 2 --color_jitter 0.2`, EPOCHS=30, peak at 19):
+per-frame **0.643 / 0.667** (vs 0.621 / 0.630) and a **new multi-view best 0.539 mIoU /
+0.515 bundle AP50** (+0.021 over 0.494). Both peaks fall on the same epoch in this run, so
+`checkpoint_best_ap50.pth` captures the multi-view headline as well — the bundle-selected
+checkpoint (docs/todo.md 2b) is still worth adding for runs where they diverge.
 
 ### 8.3 3D anchors instead of 2D boxes (designed, not implemented)
 

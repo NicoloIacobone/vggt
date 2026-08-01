@@ -1,7 +1,9 @@
 # MaskDINO on COCO with a swapped backbone — does the published recipe survive VGGT?
 
-**Status (2026-07-29):** infrastructure built and tested, the feasibility question answered
-quantitatively, three training arms launched. Results in §6.
+**Status (2026-07-31):** `resnet50` and `dinov2` arms COMPLETE, `vggt` in its final
+self-resubmitted segment. Headline so far: **frozen DINOv2 at 37×37 tokens beats the frozen
+R50 control by +4.4 AP** (38.8 vs 34.3), and `vggt` is level with `dinov2` at the same step —
+see §6.
 
 **The question (supervisor-facing).** Every number in `docs/MASKDINO.md` compares our port against
 *our own* ScanNet baselines. `docs/MASKDINO.md` §7.6 proved the port reproduces upstream's COCO
@@ -216,19 +218,32 @@ COCO lives at `/cluster/scratch/niacobone/coco` (train2017 + val2017 + instances
 `/cluster/work/igp_psr/yuxchen/coco.zip`). **Global scratch is purged after 15 days** — re-extract
 from that zip if it has vanished.
 
-## 6. Results
+## 6. Results (2026-07-31 — `resnet50` and `dinov2` final; `vggt` in its last segment)
 
-*Pending — the three arms are running. Nothing goes here until they finish; the ceilings in §1 are
-GT-only measurements and are **not** model results.*
+Final full-val2017 numbers at step 87 948 (12 epochs), from each run's `summary.json`
+(`final` block; the `best` interval checkpoint is noted separately):
 
-When they land, the table to fill is:
+| arm | segm AP | AP50 | AP75 | APs | APm | APl | box AP | ceiling | best interval AP |
+|---|---|---|---|---|---|---|---|---|---|
+| upstream R50, finetuned, 50 ep (published) | 46.1 | — | — | — | — | — | 51.5 | 92.0 | — |
+| `resnet50` frozen, 12 ep | 34.3 | 54.1 | 36.2 | 14.3 | 36.1 | 53.6 | 38.2 | ~92 | 36.7 @80k |
+| `vggt` frozen, 12 ep | *pending (job 9262006, last segment)* | 61.0* | 42.3* | 15.8* | 44.6* | 61.3* | — | 84.2 | 39.7 @75k* |
+| `dinov2` frozen, 12 ep | **38.8** | 64.8 | 39.6 | 14.8 | 43.0 | 65.1 | 45.9 | 84.2 | **41.3 @85k** |
 
-| arm | segm AP | AP50 | AP75 | APs | APm | APl | box AP | ceiling |
-|---|---|---|---|---|---|---|---|---|
-| upstream R50, finetuned, 50 ep (published) | 46.1 | — | — | — | — | — | 51.5 | 92.0 |
-| `resnet50` frozen, 12 ep | | | | | | | | ~92 |
-| `vggt` frozen, 12 ep | | | | | | | | 84.2 |
-| `dinov2` frozen, 12 ep | | | | | | | | 84.2 |
+\* `vggt` values are the step-85k *interval* eval (39.53 segm AP), not the final block —
+replace when `summary.json` lands.
 
-Read every row against its own ceiling, and read `APs` separately — §1 predicts that is where the
-37×37 token grid, not the mask grid, does its damage.
+Three readings, the first two already firm:
+
+1. **The 37×37 token grid + `mask_upsample 4` is not crippling — it wins.** Frozen DINOv2 with
+   1830 encoder cells beats the frozen ResNet-50 control with 4907 cells by **+4.4 final AP**
+   (38.8 vs 34.3), and even its `APs` (14.8) matches the R50's (14.3). The §1.3 concern
+   ("small objects need the token grid") shows up only as the *shared* gap of both ViT arms to
+   their 84.2 ceiling, not as a deficit against the R50 control.
+2. **Freezing + 12 ep costs the R50 recipe ~12 AP** against upstream's finetuned 50-ep 46.1 —
+   the honest distance to the published number, measured as designed.
+3. **Preliminary: VGGT's 3D pretraining costs almost nothing on 2D semantics at equal
+   geometry.** At the same step (85k), `vggt` reads 39.53 vs `dinov2`'s 39.83 interval segm AP —
+   essentially level, after trailing badly early in training (14.1 vs 23.4 at the overfit-gate
+   stage, 31.3 vs ~38 at 25k). Do not write the final verdict until the `vggt` summary exists:
+   the early-training gap and the endgame convergence are both part of the story.

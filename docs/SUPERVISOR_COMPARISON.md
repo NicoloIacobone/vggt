@@ -19,8 +19,8 @@ annotations (19 classes). Nothing in VGGT is modified or finetuned.
 |---|---|---|---|
 | single-frame mIoU | 0.451 | **0.694** | +54 % |
 | single-frame AP50 | 0.294 | **0.729** | +148 % |
-| multi-view mIoU | 0.367 | **0.535** | +46 % |
-| multi-view AP50 | 0.199 | **0.494** | 2.5× |
+| multi-view mIoU | 0.367 | **0.539** | +47 % |
+| multi-view AP50 | 0.199 | **0.515** | 2.6× |
 
 Our MaskDINO port reproduces upstream MaskDINO on COCO val2017 to **0.004 AP**.
 
@@ -70,7 +70,8 @@ be scored on exactly this ruler.
 | Model | Train scenes | mIoU | AP50 | AP75 | mAP |
 |---|---|---|---|---|---|
 | arm C — best previous head | 190 | 0.367 | 0.199 | — | — |
-| **MaskDINO `--multi_frame`** | 490 | **0.535** | **0.494** | 0.279 | 0.272 |
+| MaskDINO `--multi_frame` | 490 | 0.535 | 0.494 | 0.279 | 0.272 |
+| **… + 2 view-draws/scene + colour jitter** | 490 | **0.539** | **0.515** | — | — |
 
 No post-hoc matching, tracking or mask fusion is involved: cross-view consistency comes from the
 shared query set.

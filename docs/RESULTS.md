@@ -80,7 +80,7 @@ the task are all upstream's there. Never quote it next to a ScanNet number.
 |---|---|---|---|---|
 | `--bundles_per_scene 2 --color_jitter 0.2` | 0.694 | 0.729 | **+0.030** | best result so far; still data-limited |
 | `--bundles_per_scene 4 --color_jitter 0.2` | 0.699 | 0.722 | +0.023 | **saturates**: within noise of 2 draws — the views-per-scene lever is exhausted, more *scenes* is the remaining data lever |
-| `--mask_upsample 2` (74×74 masks) | 0.662 | 0.677 | −0.022 | neutral (inside ±0.04 noise) — masks stay on the 37×37 grid |
+| `--mask_upsample 2` (74×74 masks) | 0.662 | 0.677 | −0.022 | neutral (inside ±0.04 noise) — masks stay on the 37×37 grid. **Confirmed on the full-resolution ruler too** (docs/MASKDINO.md §7.7): 37×37's GT-only ceiling is 0.956 AP50 vs the model's ~0.69 — recognition binds, not resolution |
 | `--feature_mode bundle` (multi-view-aware tokens) | 0.622 | 0.651 | −0.048 | **negative result** per frame — but *required* for multi-view consistency (§3) |
 | `--multi_frame --feature_mode bundle` | 0.621 | 0.630 | −0.069 | −0.021 against its own control (`bundle`, 0.651) → per-frame neutral, and it buys the multi-view metric below |
 
@@ -114,11 +114,13 @@ mask volume can be scored exactly like an arm's.
 | Model (N=490) | mIoU | AP50 | AP75 | mAP |
 |---|---|---|---|---|
 | arm C — best D4RT head (N=190) | 0.367 | 0.199 | — | — |
-| **MaskDINO `--multi_frame`** (job 8900100) | **0.535** | **0.494** | 0.279 | 0.272 |
+| MaskDINO `--multi_frame` (job 8900100) | 0.535 | 0.494 | 0.279 | 0.272 |
 | … `--no-cross_frame_attn` (job 8950617) | 0.393 | 0.311 | 0.089 | 0.132 |
 | … `--feature_mode single` (per-frame features, job 8950613) | 0.429 | 0.347 | 0.154 | 0.181 |
+| **… + `--bundles_per_scene 2 --color_jitter 0.2`** (job 9071415) | **0.539** | **0.515** | — | — |
 
-**+46 % mIoU, 2.5× AP50 on the arms' own protocol**, with no post-hoc matching or fusion.
+**+47 % mIoU, 2.6× AP50 on the arms' own protocol** (the 9071415 row, the current multi-view
+best; its per-frame numbers also rise to 0.643 / 0.667), with no post-hoc matching or fusion.
 
 The two ablation rows (2026-07-29, docs/MASKDINO.md §7.4.1) localise the result: **cross-frame
 attention is worth 0.183 bundle AP50** — the only individually-decisive component found anywhere
