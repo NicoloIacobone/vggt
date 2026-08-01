@@ -27,6 +27,11 @@ Usage (full range):
     myenv/bin/python legacy/dataset_build/scripts/extract_sens_subset.py \
         --out_root /cluster/scratch/niacobone/scannet_official_build/scans \
         --start 200 --end 499
+
+--scene_list FILE switches scene selection from "scene{i:04d}_00 for i in start..end"
+to "line[start..end] of FILE" (0-based, inclusive) — for splits that aren't a contiguous
+numeric range of _00 scans, e.g. data/splits/scannetv2_train.txt (1201 scenes, includes
+_01/_02/... rescans). Default (no --scene_list) is unchanged.
 """
 from __future__ import annotations
 
@@ -163,15 +168,23 @@ def main() -> None:
     ap.add_argument("--out_root", required=True, help="build scans root (…/scans)")
     ap.add_argument("--start", type=int, default=200)
     ap.add_argument("--end", type=int, default=499)
+    ap.add_argument("--scene_list", default=None,
+                    help="if set, --start/--end index into this file's lines "
+                         "(0-based, inclusive) instead of scene{i:04d}_00")
     ap.add_argument("--timeout", type=int, default=120)
     ap.add_argument("--retries", type=int, default=4)
     args = ap.parse_args()
 
+    if args.scene_list:
+        all_scenes = [l.strip() for l in Path(args.scene_list).read_text().splitlines() if l.strip()]
+        scenes = all_scenes[args.start:args.end + 1]
+    else:
+        scenes = [f"scene{i:04d}_00" for i in range(args.start, args.end + 1)]
+
     out_root = Path(args.out_root)
     ok = skip = fail = 0
     failed = []
-    for i in range(args.start, args.end + 1):
-        scene = f"scene{i:04d}_00"
+    for scene in scenes:
         res = fetch_scene(scene, out_root, args.timeout, args.retries)
         if res == "ok":
             ok += 1

@@ -18,6 +18,10 @@ Usage (full Phase-2 run, from the vggt repo):
         --convert_out /cluster/scratch/niacobone/scannet_official_build/scans \
         --subset_root /cluster/scratch/niacobone/scannet_official_build/sam3_subsets/scans \
         --start 0 --end 199
+
+--scene_list FILE switches scene selection from "scene{i:04d}_00 for i in start..end" to
+"line[start..end] of FILE" (0-based, inclusive) — see extract_sens_subset.py for the same
+convention (used together for splits like data/splits/scannetv2_train.txt).
 """
 from __future__ import annotations
 
@@ -82,6 +86,9 @@ def main() -> None:
     ap.add_argument("--zips_dir", required=True, help="where the zips land")
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--end", type=int, default=199)
+    ap.add_argument("--scene_list", default=None,
+                    help="if set, --start/--end index into this file's lines "
+                         "(0-based, inclusive) instead of scene{i:04d}_00")
     ap.add_argument("--timeout", type=int, default=120, help="per-read socket timeout (s)")
     ap.add_argument("--retries", type=int, default=4)
     ap.add_argument("--convert_out", default=None,
@@ -99,12 +106,17 @@ def main() -> None:
             ap.error("--convert_out requires --subset_root")
         from legacy.dataset_build.scripts.build_official_masks import convert_scene
 
+    if args.scene_list:
+        all_scenes = [l.strip() for l in Path(args.scene_list).read_text().splitlines() if l.strip()]
+        scenes = all_scenes[args.start:args.end + 1]
+    else:
+        scenes = [f"scene{i:04d}_00" for i in range(args.start, args.end + 1)]
+
     zips_dir = Path(args.zips_dir)
     zips_dir.mkdir(parents=True, exist_ok=True)
     ok = skip = fail = 0
     failed: list[str] = []
-    for i in range(args.start, args.end + 1):
-        scene = f"scene{i:04d}_00"
+    for scene in scenes:
         if args.convert_out:
             marker = Path(args.convert_out) / scene / "raw_data" / ".complete"
             if marker.exists():

@@ -114,9 +114,24 @@ sbatch legacy/d4rt/slurm/train_full.sh
 for t in legacy/d4rt/tests/test_*.py; do python "$t"; done
 
 # --- Dataset rebuild (only if a tar is lost; docs/DATASET.md §5) -------------------------------
+for t in legacy/dataset_build/tests/test_*.py; do myenv/bin/python "$t"; done   # CPU-only
 sbatch legacy/dataset_build/slurm/download_official_gt.sh
 sbatch legacy/dataset_build/slurm/extend_dataset_500.sh
 sbatch legacy/dataset_build/slurm/pack_official_gt.sh
+
+# --- 1201-scene official-train extension (docs/todo.md 1c; separate tar, does not touch the
+# 500-scene one) --------------------------------------------------------------------------------
+# BUILDS NODE-LOCAL. /cluster/scratch is quota'd on FILE COUNT (1.0M soft / 1.5M hard) and the
+# 1201-scene tree is ~1.26M files — building it there fails, and did (docs/DATASET.md §5.1).
+# The tree lives in $TMPDIR; only one compressed chunk tar per range lands on scratch.
+sbatch legacy/dataset_build/slurm/extend_dataset_1201.sh <list_start> <list_end>  # one per chunk
+sbatch legacy/dataset_build/slurm/pack_official_gt_1201.sh   # after all chunks report COMPLETE
+# An incomplete chunk resubmits ITSELF (new job id), so --dependency=afterok on the original id
+# never fires — don't chain the pack that way. With a single chunk covering the whole split,
+# CHAIN_PACK=1 makes the completing job submit the pack itself:
+sbatch --export=ALL,CHAIN_PACK=1 legacy/dataset_build/slurm/extend_dataset_1201.sh 0 1200
+# One-off rescue: fold an existing on-scratch build tree into a chunk tar and free the inodes.
+sbatch legacy/dataset_build/slurm/snapshot_build_1201.sh
 ```
 
 SLURM job logs go to `slurm/logs/` (gitignored). Never let them accumulate in the repo root.

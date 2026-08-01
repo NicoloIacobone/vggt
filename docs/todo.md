@@ -35,12 +35,40 @@ In effort order — each step also de-risks the next:
       --mask_upsample 2`), 9072761 (`… --mask_upsample 4 --train_num_points 12544` — upsample 4
       has never been trained on ScanNet; point-sampled mask loss because 148² full-pixel
       supervision is the COCO-recipe regime).
-- [ ] **1c. Extend the dataset to the full official ScanNet v2 train split (1201 scenes).**
-      Simultaneously the protocol fix (train/eval on the official 1201/312 split like every
-      competitor) and the **biggest performance lever left**: +0.26 AP50 came from 50→490
-      scenes, the curve is still rising, and views-per-scene saturated at 2 (§7.4.1). Rebuild
-      pattern: `legacy/dataset_build/slurm/{download_official_gt,extend_dataset_500,
-      pack_official_gt}.sh`. Mind `--tmp` and the feature-cache RAM budget at 1201 scenes.
+- [~] **1c. Extend the dataset to the full official ScanNet v2 train split (1201 scenes) —
+      TAR BUILT 2026-07-30; nothing trains on it yet.** Simultaneously the protocol fix
+      (train/eval on the official 1201/312 split like every competitor) and the **biggest
+      performance lever left**: +0.26 AP50 came from 50→490 scenes, the curve is still rising,
+      and views-per-scene saturated at 2 (§7.4.1). `data/splits/scannetv2_train.txt` (1201 scan
+      ids — includes `_01`/`_02`/... rescans, NOT a contiguous `scene{i:04d}_00` range, fetched
+      the same way as the existing `scannetv2_val.txt`) drives the build.
+      `extract_sens_subset.py` and `download_2d_gt.py` gained a `--scene_list FILE` option
+      (start/end become 0-based line indices into FILE; default unchanged) since the old
+      range-based selection can't express this split.
+
+      **Attempt 1 failed on the scratch INODE quota** (1.0 M soft / 1.5 M hard *files*): the
+      build tree is ~1046 files/scene, so 1201 scenes is ~1.26 M files. Jobs
+      9079912/14/15/17 died with `OSError(122, 'Disk quota exceeded')` at 1090/1201 scenes and
+      left the account at 1 499 966/1 500 000 files — unable to write anything on scratch.
+      The build is now **node-local** (`$TMPDIR`, `--tmp=120000`); only one compressed chunk
+      tar per range touches scratch, which costs 1 inode. Full rationale + the resumability
+      contract in **docs/DATASET.md §5.1** — read it before changing any build script.
+
+      Attempt 2 (2026-07-30) **SUCCEEDED**, and *preserved* attempt 1's work rather than
+      re-downloading — all 1201 scenes already had their `.sens` subsets (~90 node-hours of
+      streaming) and 1090 were fully converted, so only 111 scenes' GT zips remained:
+      `snapshot_build_1201.sh` (job 9127341: tree → chunk tar, verify every regular file, then
+      delete the tree — reclaimed 1.26 M inodes, scratch 1 499 970 → 243 059 files) →
+      `extend_dataset_1201.sh 0 1200` (job 9127345: restored the chunk tar, `ok=111 skip=1090
+      fail=0`, 42 min) → `pack_official_gt_1201.sh` (job 9161678, submitted by the extend job
+      via `CHAIN_PACK=1`). Result: **`scannet_official_gt_1201.tar.zst`, 29 GB on work — 1201
+      scenes, 17 638 instances, 0 cross-class duplicates, min label purity 1.0, no
+      missing/failed scenes**; archive entry count verified against source (1 328 343).
+      `OFFICIAL_GT_README_1201.md` + `qa_strips_1201/` alongside it.
+      **Remaining:** point a training run at it (`DATA_TAR=...`) — raise `--tmp` (29 GB to
+      stage vs the 500-scene tar's 10 GB) and check the feature-cache RAM budget at 1201
+      scenes. The redundant 29 GB chunk tar in `/cluster/scratch/niacobone/scannet_1201_chunks/`
+      can be deleted (blocks only, 1 inode).
 - [ ] **1d. 3D benchmark eval.** Unproject per-view masks with VGGT's *own* predicted depth +
       cameras into the ScanNet benchmark point cloud and score the official 3D instance AP /
       AP50 / AP25 (SegVGGT recipe: majority-vote per superpoint). `--multi_frame` makes this
