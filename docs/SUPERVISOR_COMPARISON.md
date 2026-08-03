@@ -29,6 +29,8 @@ split** (a separate, harder ruler — do not mix with the table above): single-f
 / 0.662 AP50** per-frame, multi-frame **0.529 / 0.525** per-bundle, plus the first cross-view
 consistency read-out (0.717). Details: `docs/RESULTS.md` §6, `docs/MASKDINO.md` §7.8.
 
+**And since 2026-08-03 there is a number that IS comparable to the literature** — see §5.
+
 ---
 
 ## 2. MaskDINO vs arm C
@@ -190,7 +192,8 @@ skipped rather than counted as zeros.
 - **Published ScanNet instance-segmentation numbers** (SegVGGT, FAST3DIS, IGGT, …). Those unproject
   per-view masks into the scene point cloud and score the official **3D** instance benchmark.
   We score **per-view 2D masks on a 37×37 grid with our own metric implementation**: different
-  task, different GT, different metric code.
+  task, different GT, different metric code. **§5 is the exception** — it runs exactly their
+  protocol and is the only section that may sit next to their numbers.
 - **The official ScanNet v2 val split.** Our val = scenes 0080–0089 is a project convention, kept
   because it is the one ruler every arm and every scale point was measured on. A separate
   comparability read-out on the official val list (77 scenes present in our data, 413 train / 77
@@ -200,6 +203,42 @@ skipped rather than counted as zeros.
 
 ---
 
+## 5. The 3D benchmark — the number that is comparable to the literature (2026-08-03)
+
+Everything above is 2D and self-measured. This section is not: per-view masks are unprojected
+into the scene point cloud using **VGGT's own predicted depth and cameras** (no ground-truth
+geometry at inference), majority-voted per superpoint, and scored by the **official ScanNet 3D
+instance evaluator**, vendored unmodified, on the **official val-312 split** with a model
+trained on the official 1201-scene train split (no overlap).
+
+| Method | backbone | AP | AP50 | AP25 |
+|---|---|---|---|---|
+| SegVGGT (published) | VGGT, **LoRA-adapted** | 0.504 | 0.717 | 0.870 |
+| FAST3DIS (published) | Depth-Anything-V3, **LoRA-adapted** | 0.038 | 0.096 | 0.316 |
+| **ours** | **VGGT, strictly frozen** | **0.023** | **0.067** | **0.268** |
+| ours, tuned lifting knobs | 〃 | 0.029 | 0.083 | 0.305 |
+
+**We are in FAST3DIS's ballpark while never touching the backbone; SegVGGT is an order of
+magnitude ahead.** Both statements belong in any honest summary. The tuned row's two knobs were
+selected on an earlier (leaky) diagnostic run, so the plain row is the headline.
+
+Two findings worth carrying:
+
+1. **Data scale beats leakage.** An earlier checkpoint that had *seen* the val scenes during
+   training scored 0.052 AP50; this leak-free one, trained on 1201 official scenes, scores
+   0.083 — 1.6× better despite the disadvantage. The 3D ruler independently reproduces the 2D
+   conclusion that this track is **data-limited, not architecture-limited**.
+2. **The bottleneck is the 2D→3D lifting, not the decoder.** AP25 is ~4× AP50: objects are
+   found and coarsely placed, but the lifted masks miss the strict-IoU bar. The registration
+   diagnostics say why — median camera-centre error after alignment is 0.14 m, the same order as
+   the voting radius — and only ~16 % of mesh vertices receive any vote. Two *lifting* knobs
+   alone were worth more (+0.016 AP50) than most decoder ablations in §2. That is where the next
+   effort belongs, and it is the price of the "no GT geometry at inference" design.
+
+Details, per-class tables and reproduction: `docs/MASKDINO.md` §9, `docs/RESULTS.md` §5.
+
+---
+
 *Sources in the repo: `docs/RESULTS.md` (all numbers, split by protocol), `docs/MASKDINO.md`
-(architecture, §6 protocol, §7 results, §7.6 COCO equivalence check), `docs/ARMS_SUMMARY.md`
-(the retired arms A–E).*
+(architecture, §6 protocol, §7 results, §7.6 COCO equivalence check, §9 the 3D ruler),
+`docs/ARMS_SUMMARY.md` (the retired arms A–E).*

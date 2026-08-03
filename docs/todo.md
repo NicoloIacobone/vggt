@@ -91,9 +91,18 @@ In effort order — each step also de-risks the next:
       **AP 0.016 / AP50 0.052 / AP25 0.238** at best knobs — FAST3DIS's order of magnitude
       (0.038/0.096/0.316), far below SegVGGT. Verdict: geometry binds (median Sim(3) RMS
       0.14 m ≈ vote radius; AP25 ≈ 5×AP50), not recognition; coverage caps recall.
-      **Remaining:** the reportable number — the leak-free checkpoint now exists (1c):
-      `sbatch --export=ALL,CHECKPOINT=/cluster/work/igp_psr/niacobone/distillation/output/maskdino_sf_list1201_mf_20260802_133826/checkpoint_best_bundle.pth slurm/eval_3d_maskdino.sh`;
-      given the geometric bottleneck expect it near the diagnostic rows.
+      **DONE 2026-08-03 — the reportable number exists** (jobs 9503137 / 9503139, docs/MASKDINO.md
+      §9.6, RESULTS.md §5): leak-free 1201-trained multi-frame checkpoint scores **AP 0.023 /
+      AP50 0.067 / AP25 0.268** (0.029 / 0.083 / 0.305 with tuned lifting knobs — tuned on the
+      leaky diagnostic, so the plain row is the headline). **FAST3DIS's ballpark
+      (0.038 / 0.096 / 0.316) on a strictly frozen backbone**; SegVGGT (0.504 / 0.717 / 0.870)
+      an order of magnitude ahead. Two findings: the leak-free checkpoint **beats** the leaked
+      diagnostic 1.6× (data scale > leakage — the 3D ruler reproducing the 2D data-limited
+      conclusion), and **the lifting step is the binding constraint, not the decoder** → the new
+      workstream 5 below. Fixed while reporting: eval3d output files now name their non-default
+      knobs (two knob settings used to overwrite one file; job 9503137's JSON was lost that way,
+      numbers recovered from its log). Guarded by
+      `tests/test_maskdino_eval3d.py::test_out_path_names_the_knobs`.
 
 ## 2. Complete the multi-frame study (the contribution)
 
@@ -113,8 +122,10 @@ In effort order — each step also de-risks the next:
       match), plus `bundle_num_matched`. Purely additive — no existing key changed.
       **First numbers measured 2026-08-02** (job 9386666, official 1201/312 split,
       docs/MASKDINO.md §7.8): consistency 0.679→0.717 and id_switch 0.607→0.498 over epochs
-      6→12, ~14.1 matched/bundle. Still open: the cut worth having is the §7.4.1 ablation
-      triple (`--no-cross_frame_attn` should cost consistency specifically).
+      6→12, ~14.1 matched/bundle. The cut worth having — `--no-cross_frame_attn` should cost
+      *consistency* specifically — **SUBMITTED 2026-08-03, job 9503176** (official 1201/312
+      split, otherwise identical to job 9386666; read `bundle_view_consistency` /
+      `bundle_id_switch` against 0.717 / 0.498).
 - [ ] **2d. 3D anchors vs 2D DAB boxes** (docs/MASKDINO.md §8.3 — full design sketch there).
       Build on `--multi_frame --feature_mode bundle` — settled by §7.4.1, bundle features are
       the right base. Framed and budgeted as an **ablation** (FAST3DIS owns the mechanism as a
@@ -129,9 +140,33 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 700/1036 px token-grid arm) is bounded by the 0.956→0.99 ceiling gap and stays parked in
 "Longer-term".
 
-## 4. Watching
+## 4. Watching (submitted 2026-08-03)
 
-(Nothing active; recent completions moved to the "Recently closed" section below.)
+- [~] Job **9503176** — `--no-cross_frame_attn` on the official 1201/312 split (2c above;
+      does removing the block cost consistency specifically?). Started 11:07, ~6 h expected.
+
+## 5. Lifting quality — the new binding constraint (opened 2026-08-03 by §9.6)
+
+On the 3D ruler the decoder is no longer what limits us: AP25 ≈ 4× AP50, median camera-centre
+RMS after Sim(3) is 0.14 m (≈ the vote radius), only ~16 % of mesh vertices get a vote, and two
+lifting knobs alone bought +0.016 AP50 — more than most decoder ablations are worth. Ordered by
+expected value per hour:
+
+- [ ] **5a. Knob sweep, honestly.** `--vote_radius` × `--depth_conf_percentile` (× `--icp`)
+      swept on the leak-free checkpoint. The current tuned row inherited its knobs from a leaky
+      run; a clean sweep both replaces it and maps the sensitivity. Cheap (~45 min/point, CPU-ish
+      GPU load) and it bounds how much of the gap is knobs vs. genuine geometry error.
+- [ ] **5b. Coverage.** ~16 % of vertices voted / ~65 % of annotated vertices assigned caps
+      recall outright. Options: more frames per scene (the 25k export has ~16–30; SegVGGT uses up
+      to 24), overlapping bundles, or per-frame confidence-weighted voting instead of hard
+      argmax. Measure `annotated_assigned_frac` as the intermediate target, not AP.
+- [ ] **5c. Registration.** Sim(3)+ICP on camera centres is the FAST3DIS convention, but our RMS
+      is at the vote radius. Try ICP on the *voted points* rather than camera centres, or
+      per-bundle registration with a consistency check. NOTE: registration is eval-only — it must
+      never leak GT geometry into the prediction path (that is the project's selling point).
+- [ ] **5d. Only after 5a–5c:** revisit whether the decoder ever becomes the constraint again on
+      this ruler. If it does, 2d (3D anchors) is the natural next decoder change — and it acts
+      exactly on the geometry that binds here.
 
 ## Recently closed (2026-07-29/30, 2026-08-01) — details in docs/MASKDINO.md §7.4.1, §7.7, §8.2
 

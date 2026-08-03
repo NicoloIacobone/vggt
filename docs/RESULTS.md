@@ -183,17 +183,34 @@ benchmark classes) is unpredictable for our 19-class head (background in our 2D 
 
 | Checkpoint | trained on | AP / AP50 / AP25 (18-class) | 17-class diagnostic | status |
 |---|---|---|---|---|
-| best multi-frame (job 9071415, ep-17 ckpt), defaults — job 9327269 | 0000–0489 (**overlaps val-312!**) | 0.013 / 0.041 / 0.223 | 0.014 / 0.044 / 0.236 | **DIAGNOSTIC ONLY — leakage, §9.4** |
+| **multi-frame, official split (job 9386666 `checkpoint_best_bundle`), defaults — job 9503137** | **1201 official train (leak-free)** | **0.023 / 0.067 / 0.268** | 0.024 / 0.071 / 0.284 | **REPORTABLE** |
+| **same, `--vote_radius 0.1 --depth_conf_percentile 25` — job 9503139** | 〃 | **0.029 / 0.083 / 0.305** | 0.030 / 0.088 / 0.323 | **REPORTABLE**, knobs tuned on the diagnostic run below |
+| best multi-frame (job 9071415, ep-17 ckpt), defaults — job 9327269 | 0000–0489 (**overlaps val-312!**) | 0.013 / 0.041 / 0.223 | 0.014 / 0.044 / 0.236 | DIAGNOSTIC ONLY — leakage, §9.4 |
 | same, `--vote_radius 0.1 --depth_conf_percentile 25` — job 9327271 | 〃 | 0.016 / 0.052 / 0.238 | 0.016 / 0.055 / 0.253 | 〃 |
 | SegVGGT (published; LoRA-adapted VGGT, 1201-scene train) | official split | 0.504 / 0.717 / 0.870 | — | literature anchor |
 | FAST3DIS (published; LoRA-adapted DA3) | official split | 0.038 / 0.096 / 0.316 | — | literature anchor |
 
-Diagnosis (docs/MASKDINO.md §9.5): AP25 ≈ 5× AP50 — geometry binds, not recognition. Median
+**The reportable rows land in FAST3DIS's ballpark: AP25 0.305 vs its 0.316, AP50 0.083 vs 0.096,
+AP 0.029 vs 0.038** — with a *strictly frozen* backbone against its LoRA-adapted DA3. SegVGGT
+remains an order of magnitude ahead.
+
+**The leak-free checkpoint beats the leaked one** (0.083 vs 0.052 AP50 at identical knobs) — a
+result worth stating plainly: 1201 official train scenes outweigh the advantage of having *seen
+the val scenes*, which is the strongest evidence yet that this track is data-limited rather than
+architecture-limited (the same conclusion §2's 2D scaling curve reached). It also means the
+diagnostic rows were a *pessimistic* proxy, not an optimistic one.
+
+Two caveats to carry when quoting: the knobs of the second row were selected on the leaked
+diagnostic run, so the **defaults row (0.023 / 0.067 / 0.268) is the untuned number**; and both
+carry the structural handicaps above (`otherfurniture`, frame coverage).
+
+Diagnosis (docs/MASKDINO.md §9.5): AP25 ≈ 4× AP50 — geometry binds, not recognition. Median
 Sim(3) camera-center RMS 0.14 m and ICP point RMS ~0.10 m are on the order of the vote radius,
-so lifted masks miss the 0.5-IoU bar that the same model clears in 2D (0.667 per-frame AP50);
-coverage caps recall (~15 % of vertices voted, ~63 % of annotated vertices assigned). The
-reportable (leak-free) row requires a checkpoint trained on the official 1201-scene split
-(docs/todo.md 1c) — given the geometric bottleneck it will likely land near the diagnostic rows.
+so lifted masks miss the 0.5-IoU bar that the same model clears in 2D (0.650 per-frame AP50);
+coverage caps recall (median ~16 % of vertices voted, ~65 % of annotated vertices assigned).
+**The lifting step, not the decoder, is now the binding constraint on this ruler** — the +0.016
+AP50 that the two lifting knobs alone bought (0.067 → 0.083) is larger than most decoder
+ablations in §2.
 
 ## 6. Official 1201/312 split — first runs (2026-08-02)
 

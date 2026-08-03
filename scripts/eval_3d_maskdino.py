@@ -97,6 +97,34 @@ def build_argparser():
     return p
 
 
+# Knobs that change the numbers. Two runs of the SAME checkpoint that differ in any of these
+# must not write to the same file — that silently cost us job 9503137's JSON on 2026-08-03
+# (both knob settings landed on `eval3d_<stem>.json`, the second overwrote the first and only
+# the SLURM log preserved the numbers).
+RESULT_AFFECTING = ("num_frames", "eval_topk", "min_score", "mask_prob_threshold",
+                    "vote_radius", "depth_conf_percentile", "icp", "icp_max_dist", "scenes")
+
+
+def default_out_path(ckpt_path: Path, args, parser) -> Path:
+    """
+    `eval3d_<ckpt stem>.json`, plus a compact tag naming every non-default result-affecting knob.
+
+    All-defaults runs keep the documented bare name (docs/MASKDINO.md §9); a tuned run gets e.g.
+    `eval3d_checkpoint_best_bundle__vote_radius0.1_depth_conf_percentile25.0.json`.
+    """
+    parts = []
+    for name in RESULT_AFFECTING:
+        value = getattr(args, name, None)
+        if value == parser.get_default(name):
+            continue
+        rendered = ("no" + name if value is False else
+                    name if value is True else
+                    f"{name}{'-'.join(map(str, value)) if isinstance(value, list) else value}")
+        parts.append(str(rendered).replace("/", "_"))
+    tag = ("__" + "_".join(parts)) if parts else ""
+    return ckpt_path.parent / f"eval3d_{ckpt_path.stem}{tag}.json"
+
+
 # ------------------------------------------------------------------------------------------
 
 def load_model(ckpt_path: Path, device: str):
@@ -251,7 +279,8 @@ def seventeen_class_mean(avgs: Dict) -> Dict[str, float]:
 
 
 def main():
-    args = build_argparser().parse_args()
+    parser = build_argparser()
+    args = parser.parse_args()
     device = args.device if (args.device != "cuda" or torch.cuda.is_available()) else "cpu"
     ckpt_path = Path(args.checkpoint)
     model, train_args = load_model(ckpt_path, device)
@@ -268,7 +297,7 @@ def main():
           f"(multi_frame={train_args.get('multi_frame', False)}, "
           f"feature_mode={train_args.get('feature_mode', 'single')})")
 
-    out_path = Path(args.out) if args.out else ckpt_path.parent / f"eval3d_{ckpt_path.stem}.json"
+    out_path = Path(args.out) if args.out else default_out_path(ckpt_path, args, parser)
     matches, per_scene, failed = {}, {}, []
     for i, scene in enumerate(scenes):
         gt3d = load_scene_3d_gt(gt_root, scene, args.tsv)

@@ -399,6 +399,43 @@ def test_script_helpers():
     print("✅ 17-class diagnostic vs 18-class headline, ply dump round-trips\n")
 
 
+def test_out_path_names_the_knobs():
+    """
+    Two runs of the SAME checkpoint with different result-affecting knobs must not collide —
+    that silently destroyed job 9503137's JSON on 2026-08-03 (only the SLURM log survived).
+    All-defaults keeps the documented bare name (docs/MASKDINO.md §9).
+    """
+    print("=== Testing eval3d output-path disambiguation ===")
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from eval_3d_maskdino import build_argparser, default_out_path
+
+    parser = build_argparser()
+    base = ["--checkpoint", "/r/checkpoint_best_bundle.pth",
+            "--frames_root", "/f", "--gt_root", "/g"]
+    ckpt = Path("/r/checkpoint_best_bundle.pth")
+
+    defaults = default_out_path(ckpt, parser.parse_args(base), parser)
+    assert defaults.name == "eval3d_checkpoint_best_bundle.json", defaults.name
+
+    tuned = default_out_path(ckpt, parser.parse_args(
+        base + ["--vote_radius", "0.1", "--depth_conf_percentile", "25"]), parser)
+    assert tuned != defaults and "vote_radius0.1" in tuned.name, tuned.name
+    assert "depth_conf_percentile25" in tuned.name, tuned.name
+
+    # boolean knobs read as noicp / icp rather than as bare True/False
+    noicp = default_out_path(ckpt, parser.parse_args(base + ["--no-icp"]), parser)
+    assert noicp.name.endswith("__noicp.json"), noicp.name
+
+    # a non-result knob (where the file goes, which device) must NOT change the name
+    same = default_out_path(ckpt, parser.parse_args(base + ["--device", "cpu"]), parser)
+    assert same == defaults, same.name
+
+    # every distinct setting gets a distinct file
+    names = {defaults.name, tuned.name, noicp.name}
+    assert len(names) == 3, names
+    print("✅ result-affecting knobs are named in the output file; defaults unchanged\n")
+
+
 # ------------------------------------------------------------------------------------------
 # end-to-end on a synthetic scene
 # ------------------------------------------------------------------------------------------
@@ -448,5 +485,6 @@ if __name__ == "__main__":
     test_evaluator_iou_half()
     test_evaluator_false_positive()
     test_script_helpers()
+    test_out_path_names_the_knobs()
     test_end_to_end_synthetic()
     print("All test_maskdino_eval3d tests passed! ✅")

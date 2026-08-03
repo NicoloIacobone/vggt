@@ -16,6 +16,15 @@ GT-only ceiling on ScanNet is 0.956 AP50 on the full-resolution ruler, the model
 and `--mask_upsample 2` stays neutral even on that ruler — recognition binds, not resolution.
 3D anchors (§8.3) are designed but not implemented.
 
+**The reportable 3D number exists (§9.6, 2026-08-03).** Trained on the official 1201-scene
+split and scored by the vendored official evaluator on val-312, the multi-frame model reaches
+**AP 0.023 / AP50 0.067 / AP25 0.268** (0.029 / 0.083 / 0.305 with tuned lifting knobs) —
+**FAST3DIS's ballpark (0.038 / 0.096 / 0.316) on a strictly frozen backbone**, with SegVGGT
+(0.504 / 0.717 / 0.870) an order of magnitude ahead. Two things it settles: the leak-free
+checkpoint *beats* the leaked diagnostic 1.6× (data scale outweighs seeing the val scenes —
+the 3D ruler reproducing §7.2's data-limited conclusion), and on this ruler the **lifting step,
+not the decoder, is the binding constraint**.
+
 **The port is verified against upstream (§7.6, 2026-07-29).** Driven with MaskDINO's own released
 COCO weights, our ported decoder + deformable encoder reproduce upstream's published COCO val2017
 result to **+0.004 mask AP / +0.009 box AP** (46.133 vs 46.129 vs paper 46.1). Read §7.6's scope
@@ -904,8 +913,48 @@ Context (published full-split numbers, both on adapted backbones): FAST3DIS 0.03
    so the defaults are not at an optimum — but knob-tuning is secondary to geometry quality.
 4. **The leakage barely matters at this operating point** — the binding constraints are
    geometric, so the honest 1201-trained number (9.4) will likely land nearby; it is still the
-   only quotable one.
+   only quotable one. *(§9.6 shows this prediction was wrong in the useful direction: the
+   leak-free checkpoint scores ~1.6× higher.)*
 
 S-generalisation worked as designed: bundles of 3–55 frames (median 15) through a model trained
 at S=8, no failures — `CrossFrameAttention` has no frame positional encoding, and the two-stage
 top-k just unions over more frames.
+
+### 9.6 The REPORTABLE number (2026-08-03, jobs 9503137 / 9503139)
+
+Checkpoint: `maskdino_sf_list1201_mf_20260802_133826/checkpoint_best_bundle.pth` — trained on
+the official 1201-scene train split, **val-312 never seen** (§9.4 satisfied), bundle-selected
+(todo 2b). 312/312 scenes, 0 failures, ~46 min/run.
+
+| Run | AP / AP50 / AP25 (18-class) | 17-class diagnostic |
+|---|---|---|
+| defaults (radius 5 cm, no conf filter), job 9503137 | 0.023 / 0.067 / 0.268 | 0.024 / 0.071 / 0.284 |
+| `--vote_radius 0.1 --depth_conf_percentile 25`, job 9503139 | **0.029 / 0.083 / 0.305** | 0.030 / 0.088 / 0.323 |
+
+**Quote the defaults row as the headline** — the second row's knobs were chosen on the leaked
+diagnostic runs of §9.5, so it is mildly tuned on data that includes val scenes. Both rows are
+otherwise honest.
+
+Three readings:
+
+1. **We land in FAST3DIS's ballpark on a frozen backbone.** AP25 0.305 vs its 0.316, AP50 0.083
+   vs 0.096, AP 0.029 vs 0.038 — against a *LoRA-adapted* DA3, while we never touch VGGT.
+   SegVGGT (0.504 / 0.717 / 0.870, also LoRA-adapted) stays an order of magnitude ahead; state
+   that plainly rather than framing the gap away.
+2. **The leak-free checkpoint BEATS the leaked one** — 0.083 vs 0.052 AP50 at identical knobs,
+   ~1.6×. §9.5's reading 4 predicted "roughly nearby"; the truth is that 1201 official train
+   scenes outweigh *having seen the val scenes*. This is the 3D ruler independently reproducing
+   §7.2's 2D conclusion: **the track is data-limited, not architecture-limited.** It also means
+   every §9.5 number was a pessimistic proxy.
+3. **The lifting step is now the binding constraint, not the decoder.** Geometry diagnostics are
+   unchanged from §9.5 (median camera-center RMS 0.14 m, ~16 % of vertices voted, ~65 % of
+   annotated vertices assigned) and AP25 is still ~4× AP50. Two *lifting* knobs alone bought
+   +0.016 AP50 — more than most decoder ablations in §7.2.1 are worth. The next lever on this
+   ruler is registration quality / coverage / voting, not query design.
+
+Reproduce: `sbatch --export=ALL,CHECKPOINT=<mf_run_dir>/checkpoint_best_bundle.pth
+slurm/eval_3d_maskdino.sh`. Output files now name any non-default result-affecting knob
+(`eval3d_<stem>__vote_radius0.1_depth_conf_percentile25.0.json`) — before 2026-08-03 both knob
+settings wrote to the same path and the second silently overwrote the first, which is how job
+9503137's JSON was lost (its numbers survive only in `slurm/logs/eval3d_9503137.log`).
+Guarded by `tests/test_maskdino_eval3d.py::test_out_path_names_the_knobs`.
