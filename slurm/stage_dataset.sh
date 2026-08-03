@@ -1,7 +1,9 @@
 # slurm/stage_dataset.sh — stage the ScanNet instance dataset onto node-local scratch.
 #
-# The dataset ships as a single zstd-compressed tar. Which tar is staged is
-# controlled by the DATA_TAR env var:
+# The dataset ships as zstd-compressed tars. Which tar(s) are staged is
+# controlled by the DATA_TAR env var — a single path, or a whitespace-separated
+# list of paths all unpacked into the SAME tree (used for the official
+# 1201-train + 312-val split, whose scene sets are disjoint):
 #   - default here: the SAM3-GT tar `scannet_instance_dataset_full.tar.zst`
 #     (200 scenes, ~2.6 GB; unpacked ~5.4 GB) — backward compatible.
 #   - the train SLURM scripts override it to the official-ScanNet-GT tar
@@ -17,22 +19,26 @@
 # which legacy/d4rt/scripts/train_multiscene.py picks up as the default --scans_root.
 #
 # Requires `zstd` (present at /usr/bin/zstd on the GPU nodes; no module needed). Request
-# enough node-local scratch in the SBATCH header: peak = tar + unpacked tree before the
-# tar is deleted — ≈ 8 GB for the 200-scene tars (`--tmp=16000` MB comfortable), ≈ 19 GB
-# for the 500-scene official tar (`--tmp=24000` MB, what the train scripts request).
+# enough node-local scratch in the SBATCH header: peak = largest tar + all unpacked trees
+# staged so far (tars are staged sequentially and deleted after unpacking) — ≈ 8 GB for the
+# 200-scene tars (`--tmp=16000` MB comfortable), ≈ 19 GB for the 500-scene official tar
+# (`--tmp=24000` MB, what the train scripts request), ≈ 58 GB for the official
+# 1201-train + 312-val pair (`--tmp=90000` MB comfortable).
 
 set -euo pipefail
 
 DATA_TAR="${DATA_TAR:-/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scannet_instance_dataset_full.tar.zst}"
 STAGE_DIR="${TMPDIR:-/tmp}"
-TAR_BASENAME="$(basename "$DATA_TAR")"
 
-echo "[stage] copying $TAR_BASENAME -> $STAGE_DIR ..."
-cp "$DATA_TAR" "$STAGE_DIR/"
-
-echo "[stage] unpacking with zstd ..."
-tar --use-compress-program="zstd -d" -C "$STAGE_DIR" -xf "$STAGE_DIR/$TAR_BASENAME"
-rm -f "$STAGE_DIR/$TAR_BASENAME"   # reclaim the 1.3 GB; the unpacked tree is what we read
+# Sequential copy+unpack+delete per tar keeps the peak at max(tar)+its tree, not the sum.
+for tar_path in $DATA_TAR; do
+    TAR_BASENAME="$(basename "$tar_path")"
+    echo "[stage] copying $TAR_BASENAME -> $STAGE_DIR ..."
+    cp "$tar_path" "$STAGE_DIR/"
+    echo "[stage] unpacking with zstd ..."
+    tar --use-compress-program="zstd -d" -C "$STAGE_DIR" -xf "$STAGE_DIR/$TAR_BASENAME"
+    rm -f "$STAGE_DIR/$TAR_BASENAME"   # reclaim the space; the unpacked tree is what we read
+done
 
 export SCANNET_ROOT="$STAGE_DIR/scans"
 echo "[stage] SCANNET_ROOT=$SCANNET_ROOT ($(ls "$SCANNET_ROOT" | wc -l) scenes)"

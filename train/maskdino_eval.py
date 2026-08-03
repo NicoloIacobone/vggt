@@ -14,7 +14,8 @@ import torch
 
 from data.scannet_overfit import IDX_TO_CLASS
 from models.maskdino import build_bundle_target, to_scannet_class_logits
-from train.eval_metrics import compute_instance_segmentation_metrics
+from train.eval_metrics import (CONSISTENCY_KEYS, compute_instance_segmentation_metrics,
+                                multiview_consistency_metrics)
 from train.maskdino_data import gather_batch
 from train.perframe import (METRIC_KEYS, drop_empty_masks, gt_masks_from_id_map,
                             topk_predictions, upsample_mask_logits)
@@ -92,6 +93,9 @@ def eval_scenes_multiframe(model, scenes: List[Dict], args, device: str
         VOLUME [S, h, w], scored against the bundle's GT volume, with one class score per query
         (the max over the views: an instance exists if some view detects it confidently). This
         is the metric that was meaningless while queries were per-frame.
+      - `bundle_view_consistency` / `bundle_id_switch` / `bundle_num_matched`: the cross-view
+        consistency metrics of §6.6 — does ONE query own each instance in every view it appears
+        in, or does the ownership drift from view to view?
 
     Both use the shared rules of `train/perframe.py`: a prediction that claims no pixels is
     dropped (per frame for the per-frame numbers, per volume for the bundle numbers), and at
@@ -108,7 +112,7 @@ def eval_scenes_multiframe(model, scenes: List[Dict], args, device: str
         s = len(samples)
         out, _ = model.head(feats, psi, None, frames_per_sample=s)
 
-        rows, bundle_rows = [], []
+        rows, bundle_rows, consistency = [], [], None
         for b in range(s):
             if int(targets[b]["labels"].numel()) == 0:
                 continue                        # no GT in this view → undefined metrics
@@ -129,6 +133,9 @@ def eval_scenes_multiframe(model, scenes: List[Dict], args, device: str
             vol, cls = drop_empty_masks(vol, cls)
             vol, cls = topk_predictions(vol, cls, args.eval_topk)
             bundle_rows.append(_score_pair(vol, cls, bt["masks"], bt["labels"] + 1, args))
+            # Cross-view consistency (§6.6) on that same threshold-free pool: it asks whether
+            # ONE query owns the instance in every view, which `bundle_AP50` cannot see.
+            consistency = multiview_consistency_metrics(vol, bt["masks"])
 
         base_keys = METRIC_KEYS + [f"{k}_all" for k in METRIC_KEYS]
         frame_keys = _frame_keys(id_maps is not None)
@@ -139,6 +146,8 @@ def eval_scenes_multiframe(model, scenes: List[Dict], args, device: str
         # cost ~200x the IoU memory for no extra signal about cross-view consistency.
         m.update({f"bundle_{k}": (float(bundle_rows[0][k]) if bundle_rows else 0.0)
                   for k in base_keys})
+        m.update({f"bundle_{k}": (float(consistency[k]) if consistency else 0.0)
+                  for k in CONSISTENCY_KEYS})
         per_scene[scene["name"]] = m
     if was_training:
         model.train()

@@ -51,7 +51,10 @@ scene with `subset/` (~100 stride-5 frames), `masks/<class>/` (per-class binary)
 | **`scannet_official_gt_500.tar.zst`** — the **default** since 2026-07-09 | Official GT, **500 scenes (scene0000–0499), 7379 instances, 0 cross-class duplicates**. Scenes 0200–0499 built 2026-07-09 (`legacy/dataset_build/slurm/extend_dataset_500.sh`). 9 scenes (0240, 0243, 0269, 0292, 0354, 0366, 0438, 0456, 0483) have a **640×480** color camera; their GT is 640×480 too, so RGB↔GT stay consistent and the loader's resize to 518 handles the rest. |
 | `scannet_official_gt_full.tar.zst` (2.3 GB) | The original 200-scene official-GT tar (scene0000–0199, 2950 instances). Kept for exact reproducibility of the runs trained on it. Instance count is below SAM3's ≈4195 because SAM3 double-counted duplicated objects. |
 | `scannet_instance_dataset_full.tar.zst` (~2.6 GB) | The SAM3-generated GT (200 scenes, ≈4195 instances, with the duplicate defect above). Kept as the GT-quality baseline and as a project deliverable. Cross-frame identity from SAM3 video tracking; `wall`/`floor` forced single-instance; all-zero PNGs written where absent. |
+| `scannet_3d_gt_val312.tar.zst` (1.2 GB) — **BUILT 2026-08-01**, docs/todo.md 1d | **3D benchmark GT** for the official val split (`data/splits/scannetv2_val.txt`, all 312 scenes): per scene `_vh_clean_2.ply` (the benchmark mesh) + `_vh_clean_2.0.010000.segs.json` (superpoints) + `.aggregation.json`. Layout `scans3d/<scene>/`, validated per scene (ply magic, segment-id closure). What `slurm/eval_3d_maskdino.sh` scores against (docs/MASKDINO.md §9). Built by `legacy/dataset_build/slurm/download_3d_gt_val312.sh` (job 9326394); a lost tar re-downloads in ~20 min. |
+| `scannet_frames25k_val312.tar.zst` (1.1 GB) — **BUILT 2026-08-01**, docs/todo.md 1d | The val-312 slice of the official **`scannet_frames_25k`** export: per scene `color/*.jpg` + `pose/*.txt` (camera-to-world) + `depth/*.png` + intrinsics, 5 436 frames (~17/scene, sampled across the WHOLE scan — unlike the subset tars above, which cover only raw frames 0–495). Layout `scans25k/<scene>/`; **not** the `raw_data/{subset,masks,…}` layout, and carries no 2D GT. The 3D eval's input frames + its eval-only registration poses. Built by `legacy/dataset_build/slurm/download_frames25k_val312.sh` (job 9326395) from the one 6 GB `v2/tasks` zip. |
 | `scannet_official_gt_1201.tar.zst` (29 GB) — **BUILT 2026-07-30**, docs/todo.md 1c | The full official ScanNet v2 train split (`data/splits/scannetv2_train.txt`, 1201 scan ids — includes `_01`/`_02`/... rescans, not a contiguous `_00` range). **1201 scenes, 17 638 instances, 0 cross-class duplicates, min label purity 1.0, no missing/failed scenes** (`OFFICIAL_GT_README_1201.md`; strips in `qa_strips_1201/`). Built by its own scripts (`extend_dataset_1201.sh` / `pack_official_gt_1201.sh`) into a **node-local** tree, so the 500-scene tar above is untouched *and* the scratch inode quota is not — see §5.1, the first attempt died on that quota. Not yet staged by any training script — point `DATA_TAR` at it, and mind `--tmp` (29 GB to stage, so `--tmp` well above the 500-scene tar's 24000) and the feature-cache RAM budget at 1201 scenes. |
+| `scannet_official_gt_val312.tar.zst` (7.4 GB) — **BUILT 2026-08-01**, docs/todo.md 1c | The **val ruler for the official split** — same 2D GT and same `raw_data/{subset,masks,masks_instance}` layout as the 500/1201 tars, over the full official val list (`data/splits/scannetv2_val.txt`, 312 scan ids, `_01`/`_02` rescans included, **zero overlap with the 1201 train tar**). **312 scenes, 4630 instances, 0 cross-class duplicates, max cross-class IoU 0.0, min label purity 1.0, no missing/failed scenes** (`OFFICIAL_GT_README_val312.md`; strips in `qa_strips_val312/`). Archive entry count verified against source (347 439 png/jpg; 348 375 files incl. markers + `_qa/stats.json`). 8 scenes (0088_02, 0144_00, 0300_01, 0406_02, 0430_01, 0474_02, 0658_00, 0704_00) have a **640×480** color camera, handled exactly as in the 500-scene tar. Built by `extend_dataset_val312.sh` (job 9325618, 1 h 17, `ok=312 skip=0 fail=0` in both stages) → `pack_official_gt_val312.sh` (job 9328388, 2 min, chained via `CHAIN_PACK=1`), node-local per §5.1. Pair it with the 1201 tar for official-split training; nothing stages it yet. |
 
 Specs on group storage: `OFFICIAL_GT_README.md`, `INSTANCE_MASKS_README.md` (+ `…_split2.md`).
 
@@ -110,13 +113,20 @@ Training/val scenes are chosen by *scene id*, not by a split file: the tar holds
 `VAL_SPLIT=official sbatch slurm/train_maskdino.sh`, which intersects it with our range
 (`*_00`, id < `N_SCENES` → **77** scenes at N=490) and trains on the remaining 413. That is a
 separate run on purpose: 74 of those 77 scenes are inside the normal training range, so an
-existing checkpoint cannot be re-scored on them honestly.
+existing checkpoint cannot be re-scored on them honestly. That intersection is a *workaround* for
+the 500-scene tar; with `scannet_official_gt_val312.tar.zst` (§2) the same list is usable as-is,
+all 312 scenes, no intersection.
 
 `data/splits/scannetv2_train.txt` is the matching **official train list** (1201 scan ids),
 fetched 2026-07-30 the same way. Unlike our own N-scene range it is not `_00`-only or
 contiguous by scene number (386 scenes have a `_01` rescan, 215 a `_02`, ...; only 420 of our
 existing 500 `scene0000_00..scene0499_00` happen to be official-train). It drives the 1201-scene
 dataset build (docs/todo.md 1c) — no trainer reads it yet.
+
+The two lists are **disjoint** (verified: 0 shared scan ids), so the 1201-scene and 312-scene
+tars together are the full official train/val protocol — the one every competitor reports on.
+Both were built by the same pipeline with the same QA gates, so a number measured across them is
+not confounded by GT provenance.
 
 ## 5. Rebuilding the GT (only if a tar is lost or conventions change)
 
@@ -144,7 +154,21 @@ sbatch legacy/dataset_build/slurm/extend_dataset_1201.sh <list_start> <list_end>
 sbatch legacy/dataset_build/slurm/pack_official_gt_1201.sh                        # → the tar on work
 ```
 
-### 5.1 The scratch inode quota — why the 1201 build never touches scratch
+The 312-scene official-**val** build is the same pipeline again, pointed at
+`data/splits/scannetv2_val.txt`, with its own chunk dir
+(`/cluster/scratch/niacobone/scannet_val312_chunks`), tar, README and strips dir — so neither the
+500- nor the 1201-scene tar is touched. It is small enough for one chunk, so the extend job
+chains the pack itself and the whole build is one command (~1 h 20 end to end):
+
+```bash
+sbatch --export=ALL,CHAIN_PACK=1 legacy/dataset_build/slurm/extend_dataset_val312.sh 0 311
+sbatch legacy/dataset_build/slurm/pack_official_gt_val312.sh   # only if packing separately
+```
+
+Its `--tmp` is 40000, not the 1201 build's 120000: 312 scenes are ~8 GB of tree plus a ~7.5 GB
+tar.
+
+### 5.1 The scratch inode quota — why the 1201 and val-312 builds never touch scratch
 
 **`/cluster/scratch` is quota'd on FILE COUNT, not just bytes: 1.0 M soft / 1.5 M hard.** The
 build tree is ~1046 files per scene (100 subset jpgs + ~950 per-instance/per-class mask pngs +
@@ -152,8 +176,14 @@ markers + `_qa/stats.json`), so:
 
 | scenes | files | verdict |
 |---|---|---|
+| 312 (official val) | ~0.35 M | fits |
 | 500 | ~0.52 M | fits |
 | **1201** | **~1.26 M** | **over the soft limit; leaves no room for anything else** |
+
+`extend_dataset_val312.sh` / `pack_official_gt_val312.sh` follow the same node-local discipline
+even though 312 scenes would fit: the point is that a build should not spend inodes it doesn't
+have to, and the 1201-scene tree already proved what happens when one does. Its build cost scratch
+**1 inode** (one 7.5 GB chunk tar).
 
 The first 1201-scene attempt (2026-07-30, jobs 9079912/14/15/17) materialised the tree on scratch
 and died with `OSError(122, 'Disk quota exceeded')` after 1090 of 1201 scenes — and left the

@@ -46,6 +46,7 @@ from models.maskdino.model import MaskDINOVGGTModel
 from train.common import (DEFAULT_SCANS_ROOT, append_jsonl, build_scheduler, resolve_scene_dirs)
 from train.maskdino_data import (bundle_index, frame_index, gather_batch, gather_bundle_batch,
                                  prepare_scenes)
+from train.eval_metrics import CONSISTENCY_KEYS
 from train.maskdino_eval import eval_scenes, fmt, mean_metric, visualize
 
 # ------------------------------------------------------------------------------------------
@@ -71,6 +72,19 @@ def save_checkpoint(path: Path, model, args, epoch, train_metrics, val_metrics, 
         payload["scheduler_state_dict"] = scheduler.state_dict()
     torch.save(payload, path)
     print(f"✓ Checkpoint saved to {path} ({path.stat().st_size / 1e6:.1f} MB)")
+
+
+def update_best(best, metric_key, select, epoch, path, model, args, train_metrics, val_metrics):
+    """Track a single best-so-far metric and save its checkpoint when it improves.
+
+    `best` and the returned dict both use `metric_key` for the tracked value and "epoch" for
+    the epoch it was reached at, matching the shape `save_checkpoint`'s `best_info` expects.
+    """
+    if select > best[metric_key]:
+        best = {metric_key: select, "epoch": epoch}
+        if path:
+            save_checkpoint(path, model, args, epoch, train_metrics, val_metrics, best)
+    return best
 
 
 # ------------------------------------------------------------------------------------------
@@ -286,6 +300,7 @@ def main():
     metrics_path = run_dir / "metrics.jsonl" if run_dir else None
     best_path = run_dir / "checkpoint_best.pth" if run_dir else None
     best_ap_path = run_dir / "checkpoint_best_ap50.pth" if run_dir else None
+    best_bundle_path = run_dir / "checkpoint_best_bundle.pth" if run_dir and args.multi_frame else None
     if run_dir:
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "config.json").write_text(json.dumps(vars(args), indent=2, default=str))
@@ -297,6 +312,7 @@ def main():
     print("\n" + "=" * 70 + "\nTRAINING\n" + "=" * 70)
     best = {"val_mIoU": -1.0, "epoch": -1}
     best_ap = {"val_AP50": -1.0, "epoch": -1}
+    best_bundle = {"val_bundle_AP50": -1.0, "epoch": -1}
     t_start = time.time()
     steps_per_epoch = max(1, (len(train_samples) + step_size - 1) // step_size)
 
@@ -355,6 +371,11 @@ def main():
                       f"AP50={mean_metric(va, 'bundle_AP50'):.3f} "
                       f"AP75={mean_metric(va, 'bundle_AP75'):.3f} "
                       f"mAP={mean_metric(va, 'bundle_mAP'):.3f}")
+                # cross-view consistency of the shared queries (docs/MASKDINO.md §6.6)
+                print(f"    val cross-view consistency="
+                      f"{mean_metric(va, 'bundle_view_consistency'):.3f} "
+                      f"id_switch={mean_metric(va, 'bundle_id_switch'):.3f} "
+                      f"(matched {mean_metric(va, 'bundle_num_matched'):.1f}/bundle)")
             if args.eval_full_res:
                 # the full-resolution ruler (docs/MASKDINO.md §6.5) — same detections, 518x518
                 print(f"    val full-res  mIoU={mean_metric(va, 'full_mIoU'):.3f} "
@@ -368,6 +389,7 @@ def main():
                     "mIoU_all", "AP50_all", "AP75_all", "mAP_all"]
             if args.multi_frame:
                 keys += [f"bundle_{k}" for k in keys]
+                keys += [f"bundle_{k}" for k in CONSISTENCY_KEYS]   # §6.6
             if args.eval_full_res:
                 # after the bundle expansion: bundle_* stays on the mask grid (§6.5)
                 keys += [f"full_{k}" for k in ("mIoU", "AP50", "AP75", "mAP", "class_acc",
@@ -380,15 +402,15 @@ def main():
                 append_jsonl(metrics_path, record)
 
             select = mean_metric(va, "mIoU") if val_scenes else mean_metric(tr, "mIoU")
-            if select > best["val_mIoU"]:
-                best = {"val_mIoU": select, "epoch": epoch + 1}
-                if best_path:
-                    save_checkpoint(best_path, model, args, epoch + 1, tr, va, best)
+            best = update_best(best, "val_mIoU", select, epoch + 1, best_path, model, args, tr, va)
             select_ap = mean_metric(va, "AP50") if val_scenes else mean_metric(tr, "AP50")
-            if select_ap > best_ap["val_AP50"]:
-                best_ap = {"val_AP50": select_ap, "epoch": epoch + 1}
-                if best_ap_path:
-                    save_checkpoint(best_ap_path, model, args, epoch + 1, tr, va, best_ap)
+            best_ap = update_best(best_ap, "val_AP50", select_ap, epoch + 1, best_ap_path, model,
+                                  args, tr, va)
+            if args.multi_frame:
+                select_bundle = (mean_metric(va, "bundle_AP50") if val_scenes
+                                 else mean_metric(tr, "bundle_AP50"))
+                best_bundle = update_best(best_bundle, "val_bundle_AP50", select_bundle,
+                                          epoch + 1, best_bundle_path, model, args, tr, va)
 
         if not np.isfinite(mean_loss):
             print("⚠ Loss is not finite — stopping.")
@@ -412,8 +434,12 @@ def main():
               f"(multi-view protocol — comparable to the D4RT arms' per-bundle numbers, "
               f"NOT to the per-frame ones; docs/RESULTS.md §1)")
     if best["epoch"] > 0:
-        print(f"Best val mIoU {best['val_mIoU']:.3f} @ epoch {best['epoch']}; "
-              f"best val AP50 {best_ap['val_AP50']:.3f} @ epoch {best_ap['epoch']}")
+        summary = (f"Best val mIoU {best['val_mIoU']:.3f} @ epoch {best['epoch']}; "
+                  f"best val AP50 {best_ap['val_AP50']:.3f} @ epoch {best_ap['epoch']}")
+        if args.multi_frame and best_bundle["epoch"] > 0:
+            summary += (f"; best val bundle AP50 {best_bundle['val_bundle_AP50']:.3f} "
+                       f"@ epoch {best_bundle['epoch']}")
+        print(summary)
 
     if args.save_checkpoint:
         save_checkpoint(Path(args.save_checkpoint), model, args, args.num_epochs,

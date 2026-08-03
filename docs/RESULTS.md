@@ -37,6 +37,9 @@ tar gives **77** scenes (`*_00`, id < 490). 74 of those sit inside the usual tra
 the read-out needs its **own run** rather than a re-scoring of an existing checkpoint —
 `VAL_SPLIT=official sbatch slurm/train_maskdino.sh` (413 train / 77 val, job 8900194).
 
+**Since 2026-08-02 the full official 1201/312 split has its own runs — §6.** That is a third 2D
+ruler: its numbers live only there and are never mixed into the §2/§3 tables.
+
 ### 1.2 …and none of it is comparable to published ScanNet numbers
 
 Published feed-forward competitors (SegVGGT, FAST3DIS, IGGT, …) unproject their per-view masks
@@ -44,7 +47,9 @@ into the scene point cloud and score the **official 3D instance benchmark** (AP/
 score **per-view 2D masks on the 37×37 patch grid** with our own metric code. Different task,
 different GT, different metric implementation — never put the two in one table. The full
 side-by-side of the two protocols is in `docs/RELATED_WORK.md` ("Numbers: what is comparable to
-what").
+what"). **The bridge now exists (§5): the 3D ruler runs OUR model on THEIR protocol** — it is
+the only place in this project where a number may sit next to SegVGGT's, and it lives in its own
+section for that reason.
 
 ### 1.3 Fixed cached view sets (accepted 2026-07-28)
 
@@ -160,3 +165,69 @@ that head, not of the task.
 Switching from SAM3-generated GT to official ScanNet GT (2026-07-08) cost about half the honest
 AP50 headline. Any pre-2026-07-08 number in `docs/old/` is on the old ruler. Table and reasoning:
 `docs/DATASET.md` §1.
+
+## 5. The 3D ruler — official ScanNet 3D instance benchmark (docs/MASKDINO.md §9)
+
+**A separate protocol on purpose. Nothing here compares to §2 or §3, in either direction** — but
+unlike them, this section's numbers ARE placeable next to SegVGGT (50.4 / 71.7 / 87.0
+AP/AP50/AP25 on ScanNetv2) and FAST3DIS (3.8 / 9.6 / 31.6), because the metric code is the
+official evaluator itself, vendored (`train/benchmark3d.py`), on the official val-312 split and
+the official benchmark point clouds. Per-view masks are unprojected with **VGGT's own predicted
+depth + cameras** (no GT geometry at inference; eval-only Sim(3) registration), majority-voted
+per superpoint, and scored as 3D instances.
+
+Two structural handicaps to remember when reading the table: `otherfurniture` (1 of the 18
+benchmark classes) is unpredictable for our 19-class head (background in our 2D GT — the
+17-class diagnostic column isolates this), and coverage is bounded by the ~16–25
+`scannet_frames_25k` frames per scene (SegVGGT samples up to 24 — comparable).
+
+| Checkpoint | trained on | AP / AP50 / AP25 (18-class) | 17-class diagnostic | status |
+|---|---|---|---|---|
+| best multi-frame (job 9071415, ep-17 ckpt), defaults — job 9327269 | 0000–0489 (**overlaps val-312!**) | 0.013 / 0.041 / 0.223 | 0.014 / 0.044 / 0.236 | **DIAGNOSTIC ONLY — leakage, §9.4** |
+| same, `--vote_radius 0.1 --depth_conf_percentile 25` — job 9327271 | 〃 | 0.016 / 0.052 / 0.238 | 0.016 / 0.055 / 0.253 | 〃 |
+| SegVGGT (published; LoRA-adapted VGGT, 1201-scene train) | official split | 0.504 / 0.717 / 0.870 | — | literature anchor |
+| FAST3DIS (published; LoRA-adapted DA3) | official split | 0.038 / 0.096 / 0.316 | — | literature anchor |
+
+Diagnosis (docs/MASKDINO.md §9.5): AP25 ≈ 5× AP50 — geometry binds, not recognition. Median
+Sim(3) camera-center RMS 0.14 m and ICP point RMS ~0.10 m are on the order of the vote radius,
+so lifted masks miss the 0.5-IoU bar that the same model clears in 2D (0.667 per-frame AP50);
+coverage caps recall (~15 % of vertices voted, ~63 % of annotated vertices assigned). The
+reportable (leak-free) row requires a checkpoint trained on the official 1201-scene split
+(docs/todo.md 1c) — given the geometric bottleneck it will likely land near the diagnostic rows.
+
+## 6. Official 1201/312 split — first runs (2026-08-02)
+
+**A new ruler, on purpose.** Train = the full official ScanNet v2 train split (1201 scenes,
+`scannet_official_gt_1201.tar.zst`), val = the full official val split (312 scenes,
+`scannet_official_gt_val312.tar.zst`) — the exact 2D split every competitor trains on. Nothing
+here is comparable to the 0080–0089-val tables in §2/§3 (the official val reads ~0.07 AP50
+harder per-frame, consistent with the §1.1 read-out), and these are still per-view 2D-mask
+numbers on our own metric code, so they are not leaderboard figures either (§1.2). The only
+prior point on a comparable axis is job 8900194 (§1.1: 0.589 mIoU / 0.604 AP50) — and even that
+comparison carries a caveat: its val was the 77-scene subset, not the full 312.
+
+Both runs: the best recipe (`--bundles_per_scene 2 --color_jitter 0.2`), 12 epochs ≈ 28.8k
+steps (~ the N=490 recipe budget of 29.4k), warmup 2, eval every epoch on all 312 val scenes.
+
+| Run (job) | protocol | mIoU | AP50 | AP75 | mAP |
+|---|---|---|---|---|---|
+| single-frame + `--eval_full_res` (9329716) | per-frame, 37×37 grid | **0.624** | **0.662** | 0.487 | 0.459 |
+| 〃 | per-frame, full 518×518 | 0.611 | 0.651 | 0.466 | 0.437 |
+| multi-frame `--multi_frame --feature_mode bundle` (9386666) | per-frame | 0.623 | 0.650 | 0.470 | 0.443 |
+| 〃 | **per-bundle (multi-view)** | **0.529** | **0.525** | 0.312 | 0.311 |
+
+- **Scale holds up on the honest split**: 0.662 per-frame AP50 vs 8900194's 0.604 (+0.058, with
+  ~3× the training scenes; 77-vs-312-scene val caveat above). The train/val gap at epoch 12
+  (train AP50 0.878 vs val 0.662) says data is still the lever, matching the §2 scaling story.
+- **The multi-view result transfers**: per-bundle 0.529 / 0.525 on the official split vs
+  0.539 / 0.515 on the old one (different rulers — quote per split). Per-frame and per-bundle
+  peaks fall on different epochs again (10 vs 12), so `checkpoint_best_bundle.pth` carries the
+  multi-view number (docs/MASKDINO.md §8.2).
+- **First cross-view consistency measurement** (docs/MASKDINO.md §6.6, todo 2c): at epoch 12,
+  `bundle_view_consistency` **0.717** / `bundle_id_switch` 0.498 (14.1 matched
+  instances/bundle) — a matched instance is explained by its own query in ~72 % of its visible
+  views. Both improve monotonically over training (0.679→0.717 / 0.607→0.498 from epoch 6).
+- Full-res vs grid stays −0.011 AP50, same as on the old split (§7.7's "recognition binds").
+- The multi-frame `checkpoint_best_bundle.pth`
+  (`output/maskdino_sf_list1201_mf_20260802_133826/`) is the leak-free checkpoint the 3D ruler
+  (§5) has been waiting for.

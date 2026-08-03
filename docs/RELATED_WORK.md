@@ -91,9 +91,12 @@ direct competitor adapts its backbone with LoRA.
 2. **Consistency intrinsic to the query, not post-hoc — we already have it; claim it.**
    Our decoder produces `pred_masks [B, N, S, h, w]`: one query = one instance across all
    views by construction, vs the PanSt3R/MV3DIS paradigm of fusing/matching per-view 2D
-   masks. Under-emphasized in our own framing. To substantiate: add an explicit
-   **cross-view consistency metric** to `train/eval_metrics.py` (e.g. per matched instance,
-   IoU agreement of its mask identity across views / ID-switch rate).
+   masks. Under-emphasized in our own framing. **The metric now exists (2026-08-01,
+   docs/MASKDINO.md §6.6):** `train/eval_metrics.py::multiview_consistency_metrics` reports
+   `bundle_view_consistency` (per matched instance, the fraction of its visible views explained
+   at IoU ≥ 0.5 by its bundle-matched query) and `bundle_id_switch` (the fraction where another
+   query is the better match). No run has been scored on it yet — the numbers to quote come
+   from the next `--multi_frame` run, ideally the §7.4.1 ablation triple.
 3. **Backbone-agnostic decoding — SKIP.** Real gap (one decoder across VGGT/CUT3R/Pi3) but
    large engineering scope, Lite3R already owns the "model-agnostic" framing, and it does
    not serve the thesis timeline.

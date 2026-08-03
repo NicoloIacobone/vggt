@@ -24,6 +24,11 @@ annotations (19 classes). Nothing in VGGT is modified or finetuned.
 
 Our MaskDINO port reproduces upstream MaskDINO on COCO val2017 to **0.004 AP**.
 
+Since 2026-08-02 the same recipes are also trained on the **full official ScanNet v2 1201/312
+split** (a separate, harder ruler — do not mix with the table above): single-frame **0.624 mIoU
+/ 0.662 AP50** per-frame, multi-frame **0.529 / 0.525** per-bundle, plus the first cross-view
+consistency read-out (0.717). Details: `docs/RESULTS.md` §6, `docs/MASKDINO.md` §7.8.
+
 ---
 
 ## 2. MaskDINO vs arm C

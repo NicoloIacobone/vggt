@@ -27,8 +27,9 @@ In effort order — each step also de-risks the next:
       **Recognition binds, not resolution — quote §7.7, stop spending here.** The
       `--mask_upsample 4` run OOM'd (no grad accumulation in the ScanNet trainer); per §7.7 not
       worth fixing (~0.004 AP50 of ceiling over ×2).
-- [~] **1c. Extend the dataset to the full official ScanNet v2 train split (1201 scenes) —
-      TAR BUILT 2026-07-30; nothing trains on it yet.** Simultaneously the protocol fix
+- [x] **1c. Extend the dataset to the full official ScanNet v2 train split (1201 scenes) —
+      DONE 2026-08-02: tars built AND first runs trained (docs/RESULTS.md §6,
+      docs/MASKDINO.md §7.8).** Simultaneously the protocol fix
       (train/eval on the official 1201/312 split like every competitor) and the **biggest
       performance lever left**: +0.26 AP50 came from 50→490 scenes, the curve is still rising,
       and views-per-scene saturated at 2 (§7.4.1). `data/splits/scannetv2_train.txt` (1201 scan
@@ -57,17 +58,42 @@ In effort order — each step also de-risks the next:
       scenes, 17 638 instances, 0 cross-class duplicates, min label purity 1.0, no
       missing/failed scenes**; archive entry count verified against source (1 328 343).
       `OFFICIAL_GT_README_1201.md` + `qa_strips_1201/` alongside it.
-      **Remaining:** point a training run at it (`DATA_TAR=...`) — raise `--tmp` (29 GB to
-      stage vs the 500-scene tar's 10 GB) and check the feature-cache RAM budget at 1201
-      scenes. The redundant 29 GB chunk tar in `/cluster/scratch/niacobone/scannet_1201_chunks/`
-      can be deleted (blocks only, 1 inode).
-- [ ] **1d. 3D benchmark eval.** Unproject per-view masks with VGGT's *own* predicted depth +
-      cameras into the ScanNet benchmark point cloud and score the official 3D instance AP /
-      AP50 / AP25 (SegVGGT recipe: majority-vote per superpoint). `--multi_frame` makes this
-      natural — one query already is one instance across views, no post-hoc matching. This is
-      what lets our table sit next to SegVGGT (50.4 / 71.7) and FAST3DIS; without it a 3DV
-      submission has no anchor to the literature. Keep "no GT geometry at inference" as the
-      selling point (docs/RELATED_WORK.md).
+      **The val ruler now exists too — BUILT 2026-08-01.** The 1201 tar is train-split only, and
+      the convention val scenes 0080–0089 split 6 train / 4 official-val, so official-split
+      training had nothing honest to be scored on. Same pipeline, same QA gates, pointed at
+      `data/splits/scannetv2_val.txt` via new sibling scripts (`extend_dataset_val312.sh` job
+      9325618, 1 h 17, `ok=312 skip=0 fail=0` in both stages → `pack_official_gt_val312.sh` job
+      9328388, 2 min, chained by `CHAIN_PACK=1`). Result: **`scannet_official_gt_val312.tar.zst`,
+      7.4 GB on work — 312 scenes, 4630 instances, 0 cross-class duplicates, max cross-class IoU
+      0.0, min label purity 1.0, no missing/failed scenes**; archive entry count verified against
+      source (347 439 png/jpg). `OFFICIAL_GT_README_val312.md` + `qa_strips_val312/` alongside it.
+      The two lists are disjoint (0 shared scan ids), so 1201 + 312 is the full official protocol.
+      **First runs DONE 2026-08-01/02** (docs/RESULTS.md §6, docs/MASKDINO.md §7.8; plumbing:
+      multi-tar `DATA_TAR` + `TRAIN_LIST`/`VAL_LIST` in the slurm scripts, tested by
+      `tests/test_train_maskdino_sh_lists.sh`): single-frame job 9329716 **0.624 mIoU / 0.662
+      AP50** (full-res 0.611 / 0.651); multi-frame job 9386666 per-bundle **0.529 / 0.525**,
+      per-frame 0.623 / 0.650. 12 CPU × 14 GB + `--tmp=90000` + 12 epochs was the right sizing
+      (8h16 / 5h42). Leftover cleanup: the redundant chunk tars in
+      `/cluster/scratch/niacobone/scannet_1201_chunks/` (29 GB) and
+      `/cluster/scratch/niacobone/scannet_val312_chunks/` (7.5 GB) can be deleted
+      (blocks only, 1 inode each).
+- [~] **1d. 3D benchmark eval — PIPELINE BUILT + VERIFIED 2026-08-01** (docs/MASKDINO.md §9,
+      the full protocol; RESULTS.md §5 is where its numbers go). Per-view masks unprojected
+      with VGGT's *own* predicted depth + cameras (no GT geometry at inference), eval-only
+      Sim(3) registration (Umeyama on camera centers + similarity ICP — the FAST3DIS
+      convention), per-vertex votes + majority per superpoint (SegVGGT recipe), scored by the
+      **vendored official evaluator** (`train/benchmark3d.py`; real val scenes' GT fed back as
+      predictions scores exactly 1.000). Data on work: `scannet_3d_gt_val312.tar.zst` +
+      `scannet_frames25k_val312.tar.zst` (whole-scan frames + poses; the stride-5 subsets
+      cover only raw frames 0–495 and would cap recall). Run:
+      `sbatch --export=ALL,CHECKPOINT=... slurm/eval_3d_maskdino.sh`.
+      Diagnostic val-312 runs DONE 2026-08-01 (jobs 9327269/9327271, §9.5 + RESULTS.md §5):
+      **AP 0.016 / AP50 0.052 / AP25 0.238** at best knobs — FAST3DIS's order of magnitude
+      (0.038/0.096/0.316), far below SegVGGT. Verdict: geometry binds (median Sim(3) RMS
+      0.14 m ≈ vote radius; AP25 ≈ 5×AP50), not recognition; coverage caps recall.
+      **Remaining:** the reportable number — the leak-free checkpoint now exists (1c):
+      `sbatch --export=ALL,CHECKPOINT=/cluster/work/igp_psr/niacobone/distillation/output/maskdino_sf_list1201_mf_20260802_133826/checkpoint_best_bundle.pth slurm/eval_3d_maskdino.sh`;
+      given the geometric bottleneck expect it near the diagnostic rows.
 
 ## 2. Complete the multi-frame study (the contribution)
 
@@ -75,14 +101,20 @@ In effort order — each step also de-risks the next:
       best 0.539 mIoU / 0.515 bundle AP50** (+0.021 over 0.494), per-frame 0.643 / 0.667 (up
       from 0.621 / 0.630). Peak per-frame and per-bundle coincide (epoch 19), so
       `checkpoint_best_ap50.pth` carries the headline. This is the recipe 2d builds on.
-- [ ] **2b. Bundle-selected checkpoint.** `checkpoint_best*` selects on the *per-frame* metrics
-      only; the per-bundle peak falls on a different epoch (§7.4.1). Add
-      `checkpoint_best_bundle.pth` selected on bundle AP50 for `--multi_frame` runs, so the
-      multi-view headline is not read off a per-frame-selected checkpoint.
-- [ ] **2c. Cross-view consistency metric** (RELATED_WORK.md gap 2): per matched instance,
-      cross-view IoU-agreement / ID-switch rate. Makes "3D consistent" a *measured* claim
-      rather than an architectural one — and it is the metric that separates us from
-      per-frame + fusion baselines.
+- [x] **2b. Bundle-selected checkpoint — DONE 2026-08-01.** `checkpoint_best*` selected on the
+      *per-frame* metrics only; the per-bundle peak can fall on a different epoch (§7.4.1). Added
+      `checkpoint_best_bundle.pth`, selected on val `bundle_AP50`, saved only for `--multi_frame`
+      runs (docs/MASKDINO.md §8.2). No behaviour change for single-frame runs; nothing retrained.
+- [x] **2c. Cross-view consistency metric — IMPLEMENTED 2026-08-01** (docs/MASKDINO.md §6.6;
+      RELATED_WORK.md gap 2). `train/eval_metrics.py::multiview_consistency_metrics`, reported
+      by the `--multi_frame` eval as `bundle_view_consistency` (per matched instance, fraction
+      of its visible views explained at IoU ≥ 0.5 by its bundle-matched query) and
+      `bundle_id_switch` (fraction of visible views where some *other* query is the best
+      match), plus `bundle_num_matched`. Purely additive — no existing key changed.
+      **First numbers measured 2026-08-02** (job 9386666, official 1201/312 split,
+      docs/MASKDINO.md §7.8): consistency 0.679→0.717 and id_switch 0.607→0.498 over epochs
+      6→12, ~14.1 matched/bundle. Still open: the cut worth having is the §7.4.1 ablation
+      triple (`--no-cross_frame_attn` should cost consistency specifically).
 - [ ] **2d. 3D anchors vs 2D DAB boxes** (docs/MASKDINO.md §8.3 — full design sketch there).
       Build on `--multi_frame --feature_mode bundle` — settled by §7.4.1, bundle features are
       the right base. Framed and budgeted as an **ablation** (FAST3DIS owns the mechanism as a
@@ -99,14 +131,9 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 
 ## 4. Watching
 
-- [~] **COCO `vggt` arm, final segment** (job 9262006; `resnet50` and `dinov2` are DONE —
-      docs/MASKDINO_COCO.md §6: dinov2 38.8 final AP beats frozen-R50 34.3 at 2.7× fewer
-      encoder cells; vggt interval 39.5 @85k ≈ dinov2's 39.8, after trailing early). When
-      `summary.json` lands: fill the vggt row in §6 and write the final vggt-vs-dinov2 verdict
-      ("what 3D pretraining did to 2D semantics" at identical token geometry — the early-gap +
-      endgame-convergence shape is part of the story).
+(Nothing active; recent completions moved to the "Recently closed" section below.)
 
-## Recently closed (2026-07-29/30) — details in docs/MASKDINO.md §7.4.1, §7.7, §8.2
+## Recently closed (2026-07-29/30, 2026-08-01) — details in docs/MASKDINO.md §7.4.1, §7.7, §8.2
 
 - [x] `--bundles_per_scene 4` (job 8950610) — **saturates** (0.699 / 0.722 vs b2's
       0.694 / 0.729, inside noise). Views-per-scene lever exhausted at 2; do NOT fold 4 into
@@ -120,6 +147,11 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 - [x] 2026-07-30: resolution question closed (§7.7, oracle + two full-res runs); multi-view
       best moved to **0.539 / 0.515** (job 9071415, §8.2); COCO r50/dinov2 arms final
       (MASKDINO_COCO.md §6).
+- [x] 2026-08-01: COCO `vggt` arm COMPLETE (job 9262006). **vggt final 37.7 AP vs dinov2 38.8**
+      (−1.1 AP at identical geometry); best checkpoint vggt 39.7 @75k vs dinov2 41.3 @85k
+      (−1.6 AP). Both trail early (14.1 vs 23.4 at overfit-gate), converge mid-training, diverge
+      late. Verdict: 3D pretraining costs ~1–1.6 AP on 2D semantics (docs/MASKDINO_COCO.md §6,
+      reading 3).
 
 ## Longer-term / low priority
 

@@ -56,10 +56,18 @@ python tests/test_maskdino_multiframe.py  # shared-query multi-frame path: cross
                                       # bundle GT + index expansion, bundle matcher, S=1
                                       # equivalence, multi-frame overfit, bundle batching/scoring
 python tests/test_maskdino_viz.py     # figure colouring keyed to identity, not per-frame rank
+python tests/test_maskdino_consistency.py  # cross-view consistency metrics (MASKDINO.md §6.6):
+                                      # planted perfect/switched cases, degenerate inputs,
+                                      # additive bundle_* keys
 python tests/test_maskdino_fullres.py # --eval_full_res ruler (MASKDINO.md §6.5): helpers,
                                       # grid-vs-full ruler difference, both eval paths
+python tests/test_maskdino_eval3d.py  # 3D ruler (MASKDINO.md §9): PLY/GT builders, Umeyama/ICP,
+                                      # unprojection round-trip, votes+majority, the vendored
+                                      # official evaluator vs hand-computed APs, synthetic E2E
 python tests/test_coco_maskdino.py    # COCO track: both pixel-decoder pyramid modes, head
                                       # round-trip, GT helpers, instance inference + RLE, overfit
+bash tests/test_train_maskdino_sh_lists.sh  # slurm scene-list logic via DRY_RUN: numeric-range
+                                      # back-compat, TRAIN_LIST/VAL_LIST split files, filtering
 
 # --- Training (the entry point) ---------------------------------------------------------------
 sbatch slurm/train_maskdino.sh                                 # 50 scenes, ~20k steps
@@ -68,6 +76,17 @@ sbatch --export=ALL,EXTRA_ARGS='--mask_upsample 2' slurm/train_maskdino.sh
 # multi-frame: one query set per bundle of 8 frames (docs/MASKDINO.md §8.2); reports the
 # per-bundle (multi-view) metrics as well as the per-frame ones
 sbatch --export=ALL,N_SCENES=490,EXTRA_ARGS='--multi_frame --feature_mode bundle' slurm/train_maskdino.sh
+# Official 1201/312 split: TRAIN_LIST/VAL_LIST override the numeric-range scene selection, and
+# DATA_TAR takes a space-separated list of tars staged into one tree. Needs bigger resources
+# than the script header (fp16 cache ~110 GB at 1201 scenes; ~58 GB staged) — pass them on the
+# command line. EPOCHS=12 ≈ 28.8k steps at 1201 scenes x 2 bundles (~ the N=490 recipe budget).
+# The scene-list logic is covered by tests/test_train_maskdino_sh_lists.sh (dry-run, CPU-only).
+DS=/cluster/work/igp_psr/niacobone/distillation/dataset/scannet
+sbatch --time=24:00:00 --cpus-per-task=12 --mem-per-cpu=14336 --tmp=90000 \
+    --export=ALL,DATA_TAR="$DS/scannet_official_gt_1201.tar.zst $DS/scannet_official_gt_val312.tar.zst",\
+TRAIN_LIST=data/splits/scannetv2_train.txt,VAL_LIST=data/splits/scannetv2_val.txt,EPOCHS=12,WARMUP=2,\
+EXTRA_ARGS='--bundles_per_scene 2 --color_jitter 0.2' slurm/train_maskdino.sh
+DRY_RUN=1 TRAIN_LIST=... VAL_LIST=... bash slurm/train_maskdino.sh   # echo lists/schedule, no data
 python scripts/train_maskdino.py --train_scenes scene0000_00 --val_scenes scene0080_00 \
     --num_epochs 50 --num_queries 300 --scans_root <scans_root>       # local smoke test
 
@@ -75,6 +94,17 @@ python scripts/train_maskdino.py --train_scenes scene0000_00 --val_scenes scene0
 # Adds full_* metrics scored at the 518x518 GT resolution next to the unchanged grid metrics.
 sbatch --export=ALL,N_SCENES=490,EXTRA_ARGS='--eval_full_res' slurm/train_maskdino.sh
 sbatch slurm/scannet_oracle.sh   # GT-only ceiling of the 37/74/148 grids on ScanNet (CPU-only)
+
+# --- 3D ruler: official ScanNet 3D instance benchmark (docs/MASKDINO.md §9) -------------------
+# THE THIRD PROTOCOL — the only one placeable next to SegVGGT/FAST3DIS; never quote next to the
+# 2D tables. Unprojects a --multi_frame checkpoint's masks with VGGT's OWN predicted
+# depth+cameras (no GT geometry at inference), Sim(3)-registers for scoring only, majority-votes
+# per superpoint, scores with the vendored official evaluator. Checkpoints trained on scenes
+# 0000-0489 overlap val-312: their numbers are DIAGNOSTIC only (§9.4).
+sbatch --export=ALL,CHECKPOINT=<run_dir>/checkpoint_best_bundle.pth slurm/eval_3d_maskdino.sh
+# needs the two val-312 tars on work (built 2026-08-01; rebuild in ~20 min if lost):
+sbatch legacy/dataset_build/slurm/download_3d_gt_val312.sh       # mesh+superpoints+aggregation
+sbatch legacy/dataset_build/slurm/download_frames25k_val312.sh   # whole-scan frames + poses
 
 # --- Re-render a finished run's figures (docs/MASKDINO.md §6.4) -------------------------------
 # Colours are keyed to instance identity, so an object keeps its colour across the frames of a
@@ -132,6 +162,13 @@ sbatch legacy/dataset_build/slurm/pack_official_gt_1201.sh   # after all chunks 
 sbatch --export=ALL,CHAIN_PACK=1 legacy/dataset_build/slurm/extend_dataset_1201.sh 0 1200
 # One-off rescue: fold an existing on-scratch build tree into a chunk tar and free the inodes.
 sbatch legacy/dataset_build/slurm/snapshot_build_1201.sh
+
+# --- 312-scene official-VAL build — the val ruler for the split above (docs/todo.md 1c) --------
+# Same pipeline and QA gates, --scene_list data/splits/scannetv2_val.txt, own chunk dir/tar/README
+# so neither the 500- nor the 1201-scene tar is touched. One chunk is enough, so the extend job
+# chains the pack itself: the whole build is this one command (~1h20 end to end).
+sbatch --export=ALL,CHAIN_PACK=1 legacy/dataset_build/slurm/extend_dataset_val312.sh 0 311
+sbatch legacy/dataset_build/slurm/pack_official_gt_val312.sh   # only if packing separately
 ```
 
 SLURM job logs go to `slurm/logs/` (gitignored). Never let them accumulate in the repo root.

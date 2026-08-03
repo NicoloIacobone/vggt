@@ -11,15 +11,22 @@ Standalone, CPU-only, no VGGT weights.
   - the head runs with frames_per_sample=S and gives every frame the same query semantics
     (shared query init), and single-frame behaviour is bit-identical to before;
   - a 60-step overfit of the whole multi-frame path (bundle matching + per-frame losses).
+  - checkpoint_best_bundle.pth selection (docs/todo.md 2b): update_best in
+    scripts/train_maskdino.py picks the right epoch off a synthetic metrics sequence, and the
+    bundle checkpoint path only exists for --multi_frame runs.
 """
 
+import inspect
+import re
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from maskdino_fixtures import _tiny_head
 from models.maskdino import (CrossFrameAttention, HungarianMatcher, MultiFrameHungarianMatcher,
@@ -302,6 +309,61 @@ def test_multiframe_visualisation():
     print("✅ multi-frame visualisation runs the full bundle, draws max_frames panels\n")
 
 
+def test_update_best_selects_peak_epoch():
+    """update_best (scripts/train_maskdino.py, docs/todo.md 2b) must track the epoch a metric
+    peaked at and only save the checkpoint on a strict improvement."""
+    print("=== Testing update_best selects the right epoch ===")
+    import train_maskdino
+
+    saved = []
+
+    def fake_save_checkpoint(path, model, args, epoch, train_metrics, val_metrics, best_info):
+        saved.append((path, epoch, dict(best_info)))
+
+    orig_save = train_maskdino.save_checkpoint
+    train_maskdino.save_checkpoint = fake_save_checkpoint
+    try:
+        best = {"val_bundle_AP50": -1.0, "epoch": -1}
+        sequence = [0.1, 0.4, 0.3, 0.6, 0.5]   # peak at the 4th synthetic eval
+        for i, val in enumerate(sequence):
+            best = train_maskdino.update_best(best, "val_bundle_AP50", val, i + 1,
+                                              Path("dummy_bundle.pth"), None, None, {}, {})
+        assert best == {"val_bundle_AP50": 0.6, "epoch": 4}, best
+        # only strict improvements (epochs 1, 2, 4) trigger a save
+        assert [e for _, e, _ in saved] == [1, 2, 4], saved
+        assert saved[-1][2] == {"val_bundle_AP50": 0.6, "epoch": 4}
+
+        # no path -> selection still tracked, nothing saved
+        saved.clear()
+        best2 = train_maskdino.update_best({"val_bundle_AP50": -1.0, "epoch": -1},
+                                           "val_bundle_AP50", 0.2, 1, None, None, None, {}, {})
+        assert best2 == {"val_bundle_AP50": 0.2, "epoch": 1}
+        assert saved == []
+    finally:
+        train_maskdino.save_checkpoint = orig_save
+    print("✅ update_best tracks the peak epoch and saves only on improvement\n")
+
+
+def test_bundle_checkpoint_path_requires_multi_frame():
+    """Single-frame args must produce no checkpoint_best_bundle.pth path — the bundle_AP50 key
+    does not exist in per-frame metrics, so the path has to be gated on args.multi_frame."""
+    print("=== Testing checkpoint_best_bundle.pth is gated on --multi_frame ===")
+    import train_maskdino
+
+    src = inspect.getsource(train_maskdino.main)
+    m = re.search(r'best_bundle_path = (.+)\n', src)
+    assert m, "could not find the best_bundle_path assignment in main()"
+    expr = m.group(1)
+    assert "args.multi_frame" in expr, expr
+
+    run_dir = Path("/tmp/some_run_dir")
+    for multi_frame, expect_path in [(False, False), (True, True)]:
+        args = Namespace(multi_frame=multi_frame)
+        result = eval(expr, {"Path": Path}, {"run_dir": run_dir, "args": args})
+        assert (result is not None) == expect_path, (multi_frame, result)
+    print("✅ bundle checkpoint path exists only when --multi_frame is set\n")
+
+
 if __name__ == "__main__":
     test_cross_frame_attention()
     test_bundle_targets_and_index_expansion()
@@ -311,4 +373,6 @@ if __name__ == "__main__":
     test_multiframe_overfit()
     test_bundle_batching_and_eval()
     test_multiframe_visualisation()
+    test_update_best_selects_peak_epoch()
+    test_bundle_checkpoint_path_requires_multi_frame()
     print("All test_maskdino_multiframe tests passed! ✅")

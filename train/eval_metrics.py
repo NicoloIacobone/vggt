@@ -16,6 +16,9 @@ class logits against the ground-truth instance masks/classes:
 All masks may have arbitrary trailing spatial dims (e.g. [N, S, h, w]); they are flattened to
 [N, K] internally, so the metric naturally treats the multi-view mask of an instance as one set
 of pixels across all frames.
+
+`multiview_consistency_metrics` (docs/MASKDINO.md §6.6) is the exception: it needs the frame
+axis kept separate, because it measures whether ONE query explains an instance in EVERY view.
 """
 
 import numpy as np
@@ -43,6 +46,87 @@ def mask_iou_matrix(pred_binary: torch.Tensor, gt_binary: torch.Tensor) -> torch
     area_gt = gt.sum(dim=1)[None, :]                    # [1, N_gt]
     union = area_pred + area_gt - inter
     return inter / union.clamp(min=1e-6)
+
+
+# The keys `multiview_consistency_metrics` returns (the eval prefixes them with `bundle_`).
+CONSISTENCY_KEYS = ["view_consistency", "id_switch", "num_matched"]
+
+
+@torch.no_grad()
+def multiview_consistency_metrics(
+    pred_masks: torch.Tensor,
+    gt_masks: torch.Tensor,
+    mask_threshold: float = 0.5,
+    iou_threshold: float = 0.5,
+) -> Dict[str, float]:
+    """
+    Cross-view consistency of shared queries (docs/MASKDINO.md §6.6, RELATED_WORK.md gap 2).
+
+    Makes "3D consistent" a measured claim: `bundle_AP50` already rewards a query whose mask
+    VOLUME matches a GT instance, but a volume can be right on average while a *different* query
+    owns the object in each view. These two numbers separate those cases.
+
+    Each query is matched to a GT instance ONCE, at bundle level — class-agnostic Hungarian on
+    the IoU of the flattened [S*h*w] volumes, i.e. exactly the assignment `class_acc` uses, one
+    dimension larger. Then, for every matched pair (q, g) and every view where g is visible:
+
+      - view_consistency: fraction of those views where IoU(q, g) in that view >= `iou_threshold`
+        (0.5). 1.0 = the bundle-matched query segments the instance in every view it appears in.
+      - id_switch: fraction of those views where the *best-IoU* query is not q. 0.0 = no view is
+        better explained by some other query. Views where NO query overlaps the instance are
+        excluded from this fraction (nothing owns the instance there, so nothing switched) —
+        that failure mode is what view_consistency counts.
+
+    Both are means over the matched GT instances, so they are recall-flavoured (an instance no
+    query overlaps at all is simply not matched and does not enter either mean). The prediction
+    set is whatever the caller passes; `train/maskdino_eval.py` passes the threshold-free bundle
+    pool, so the numbers do not depend on `--score_threshold`.
+
+    Args:
+        pred_masks (torch.Tensor): [N_pred, S, h, w] mask LOGITS (the frame axis must be axis 1).
+        gt_masks (torch.Tensor): [N_gt, S, h, w] binary GT volumes, all-zero where not visible.
+        mask_threshold (float): probability threshold to binarize predicted masks.
+        iou_threshold (float): per-view IoU a query must reach to "explain" the instance there.
+
+    Returns:
+        dict with keys `view_consistency`, `id_switch`, `num_matched`. Degenerate cases (no GT,
+        no predictions, nothing matched) return all-zeros — read them next to `num_matched`,
+        since a zero `id_switch` there means "undefined", not "perfect".
+    """
+    empty = {"view_consistency": 0.0, "id_switch": 0.0, "num_matched": 0.0}
+    if pred_masks.shape[0] == 0 or gt_masks.shape[0] == 0:
+        return empty
+
+    s = pred_masks.shape[1]
+    pred_bin = (torch.sigmoid(pred_masks) > mask_threshold).flatten(2)   # [N, S, K]
+    gt_bin = (gt_masks > 0.5).flatten(2)                                 # [N_gt, S, K]
+
+    # --- one assignment for the whole bundle (the [S*h*w] volume IoU) -------------------------
+    vol_iou = mask_iou_matrix(pred_bin.flatten(1), gt_bin.flatten(1))    # [N, N_gt]
+    pi, gi = linear_sum_assignment((-vol_iou).cpu().numpy())
+    pairs = [(int(p), int(g)) for p, g in zip(pi, gi) if vol_iou[p, g].item() > 0]
+    if not pairs:
+        return empty
+
+    view_iou = torch.stack([mask_iou_matrix(pred_bin[:, f], gt_bin[:, f]) for f in range(s)])
+    visible = gt_bin.any(dim=2)                                          # [N_gt, S]
+
+    consistency, switches = [], []
+    for p, g in pairs:
+        views = visible[g].nonzero(as_tuple=True)[0]
+        if views.numel() == 0:
+            continue                       # matched to an instance visible nowhere: undefined
+        ious = view_iou[views][:, :, g]                                  # [V, N]
+        consistency.append(float((ious[:, p] >= iou_threshold).float().mean().item()))
+        best_iou, best_q = ious.max(dim=1)
+        covered = best_iou > 0
+        switches.append(float((best_q[covered] != p).float().mean().item())
+                        if bool(covered.any()) else 0.0)
+    if not consistency:
+        return empty
+    return {"view_consistency": float(np.mean(consistency)),
+            "id_switch": float(np.mean(switches)),
+            "num_matched": float(len(consistency))}
 
 
 def _voc_ap(recall: np.ndarray, precision: np.ndarray) -> float:

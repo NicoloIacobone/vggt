@@ -192,14 +192,23 @@ is the last layer only — identical cache footprint to every other arm.
 | `tests/test_maskdino_multiframe.py` | cross-frame block, bundle GT + index expansion, bundle matcher, shared-query forward, S=1 equivalence, multi-frame overfit, bundle batching + scoring |
 | `tests/test_maskdino_viz.py` | identity-keyed figure colouring: stable slots, winner-takes-all painting, colour survives per-frame reordering/filtering (§6.4) |
 | `tests/test_maskdino_fullres.py` | the `--eval_full_res` ruler (§6.5): helpers, the grid-vs-full ruler difference, full_* keys in both eval paths |
+| `tests/test_maskdino_consistency.py` | the cross-view consistency metrics (§6.6): planted-perfect and planted-switch cases, the case volume IoU cannot see, degenerate inputs, additive `bundle_*` keys |
 | `tests/maskdino_fixtures.py` | `_tiny_head`, `_synthetic_targets` shared by the three test modules |
+| `scripts/eval_3d_maskdino.py` | the 3D ruler (§9): official ScanNet 3D instance benchmark eval of a `--multi_frame` checkpoint |
+| `train/scannet3d.py` | 3D benchmark data (§9): minimal PLY reader, superpoints, per-vertex GT ids, 25k frame/pose loading, class tables |
+| `train/benchmark3d.py` | the official 3D instance evaluator, vendored + ported to Python 3 (§9.2) |
+| `train/eval3d_geometry.py` | eval-time Sim(3) registration (Umeyama + similarity ICP), pixel→query assignment, vertex votes, superpoint majority (§9) |
+| `slurm/eval_3d_maskdino.sh` | cluster job: stages the two val-312 tars, runs the 3D eval |
+| `tests/test_maskdino_eval3d.py` | the whole §9 stack CPU-only: PLY/GT fixtures, Umeyama/ICP, unprojection round-trip, votes + majority, evaluator vs hand-computed APs, synthetic end-to-end |
 
 The only shared file this track modified is `train/eval_metrics.py`:
 - an optional `score_mode="softmax"|"sigmoid"` argument (default `"softmax"` = previous
   behaviour, existing tests unchanged) so the same metric code can score sigmoid-focal
   predictions;
 - `reshape(n, -1)` → `flatten(1)`, which fixes a crash on a zero-row prediction tensor (legal
-  input once predictions are pre-filtered, see §6.3). Identical for every non-empty input.
+  input once predictions are pre-filtered, see §6.3). Identical for every non-empty input;
+- a new, self-contained `multiview_consistency_metrics` (§6.6) next to it — additive, called
+  only from the `--multi_frame` eval, nothing existing routes through it.
 
 ## 6. Evaluation protocol — read this before comparing numbers
 
@@ -274,6 +283,52 @@ resolution on ScanNet. When quoting: `full_*` numbers are still *our* metric imp
 leaderboard-comparable (docs/RELATED_WORK.md). Note the 518×518 id map is itself a square resize
 of the native 968×1296 annotation; scoring at native resolution (inverting the squash, as the
 COCO track does) is a possible refinement, not the current implementation.
+
+**6.6 Cross-view consistency (`bundle_view_consistency` / `bundle_id_switch`, added
+2026-08-01).** Everything in §6.1–6.5 measures *how good a mask is*. Nothing measured whether the
+model is **multi-view consistent**, which is the claim the whole `--multi_frame` design rests on
+(§8.2) and the one thing that separates us from per-frame + fusion baselines
+(docs/RELATED_WORK.md gap 2 — "consistency intrinsic to the query, not post-hoc … claim it").
+`bundle_AP50` does not settle it: a query's mask *volume* can match a GT instance well on
+average while a *different* query is the one that actually explains the object in each
+individual view. These two keys make the claim measurable.
+
+Both come from `train/eval_metrics.py::multiview_consistency_metrics`, reported per bundle by
+`eval_scenes_multiframe` next to the existing `bundle_*` keys. The recipe:
+
+1. **Match once, at bundle level.** Class-agnostic Hungarian on the IoU of the flattened
+   `[S·h·w]` volumes — literally the assignment `class_acc` already uses, one dimension larger.
+   Pairs with zero overlap are not matches. The prediction pool is the *threshold-free* bundle
+   pool (`drop_empty_masks` + `--eval_topk`, no `--score_threshold`), so consistency is a
+   property of the masks, not of the operating point.
+2. **`bundle_view_consistency`** — for each matched GT instance, over the views where it is
+   *visible*, the fraction with per-view IoU ≥ 0.5 against **its bundle-matched query**. 1.0 =
+   the same query segments the instance in every view it appears in.
+3. **`bundle_id_switch`** — for the same pairs, the fraction of visible views whose *best-IoU*
+   query is not the bundle-matched one. 0.0 = no view is better explained by somebody else.
+   Views where **no** query overlaps the instance are excluded from this fraction (nothing owns
+   it there, so nothing switched); that failure is what `view_consistency` counts. The two are
+   therefore complementary, not redundant: a **miss** lowers consistency and leaves id_switch
+   alone, a **hand-off** moves both.
+
+Both are means over matched GT instances, so both are recall-flavoured — an instance no query
+overlaps at all never enters either mean. `bundle_num_matched` is reported alongside for exactly
+that reason, and because the degenerate cases (no GT, no predictions, nothing matched) return
+**0.0 for both keys**: a zero `id_switch` there means *undefined*, not *perfect*. Read the three
+together.
+
+Everything stays on the mask grid, for the same reason `bundle_*` does (§6.5). Purely additive:
+no existing key, threshold or scoring path changed, and the single-frame eval is untouched
+(there is no cross-view identity to measure when queries are per-frame). Tests:
+`tests/test_maskdino_consistency.py`, including the case that motivates the metric — a set of
+per-view-perfect queries that hands the object off in every frame scores 0.25/0.75 where one
+shared query scores 1.00/0.00.
+
+**No measurement yet.** The metric was added after job 9071415 (§8.2, the current multi-view
+best) finished, and it is computed inside the eval loop rather than from a saved artefact, so
+the first numbers come from the next `--multi_frame` run. Expect the ablations of §7.4.1 to be
+the interesting cut: `--no-cross_frame_attn` should cost consistency *specifically* if the
+block is what carries cross-view identity.
 
 ## 7. Results
 
@@ -426,8 +481,9 @@ against the per-frame 0.699 (docs/RESULTS.md §1).
 ### 7.4.1 Multi-frame ablations + bundle saturation (jobs 8950610 / 8950613 / 8950617, 2026-07-29)
 
 All at N=490, otherwise the full recipe. Peak numbers per metric family (the per-frame and
-per-bundle peaks can fall on different epochs; `checkpoint_best*` selects on the *per-frame*
-metrics only — a bundle-selected checkpoint does not exist yet):
+per-bundle peaks can fall on different epochs; `checkpoint_best.pth` / `checkpoint_best_ap50.pth`
+select on the *per-frame* metrics — `checkpoint_best_bundle.pth` (§8.2, docs/todo.md 2b) selects
+on `bundle_AP50` and is what these runs would have used had it existed at the time):
 
 | Job | Config | per-frame mIoU / AP50 | bundle mIoU / AP50 | Δbundle AP50 |
 |---|---|---|---|---|
@@ -580,6 +636,38 @@ lever for boundary quality would be the token grid (docs/MASKDINO_COCO.md §1.3,
 input resolution), and even that is bounded by the 0.956→0.99 ceiling gap. Quote §7.7 whenever
 resolution comes up.
 
+### 7.8 Official 1201/312 split — first runs (jobs 9329716 / 9386666, 2026-08-01/02)
+
+The full official protocol (todo 1c's last step): train = all 1201 official train scenes
+(`scannet_official_gt_1201.tar.zst`), val = all 312 official val scenes
+(`scannet_official_gt_val312.tar.zst`), staged into one tree (`DATA_TAR` takes a list;
+`TRAIN_LIST`/`VAL_LIST` feed the split files — plumbing covered by
+`tests/test_train_maskdino_sh_lists.sh`). Best recipe (`--bundles_per_scene 2 --color_jitter
+0.2`), 12 epochs × ~2402 steps/epoch ≈ 28.8k steps ≈ the N=490 recipe budget (29.4k), warmup 2.
+12 CPU × 14 GB (fp16 cache ~110 GB at 1201×2 bundles), `--tmp=90000`, 8h16 (SF, incl.
+`--eval_full_res`) / 5h42 (MF) on one rtx_4090.
+
+**This is a new ruler** — numbers live in docs/RESULTS.md §6, never next to the 0080–0089-val
+tables. Headlines:
+
+- **Single-frame** (job 9329716, `maskdino_sf_list1201_20260801_132724`): val **0.624 mIoU /
+  0.662 AP50** (AP75 0.487, mAP 0.459); full-res ruler 0.611 / 0.651 (−0.011 AP50, same gap as
+  §7.7 found — recognition still binds). Against the only prior official-val point, job
+  8900194's 0.589 / 0.604 (§7.5, val = the 77-scene subset): +0.058 AP50 at ~3× train scenes.
+  Train AP50 0.878 vs val 0.662 at epoch 12 — still data-limited.
+- **Multi-frame** (job 9386666, `--multi_frame --feature_mode bundle`,
+  `maskdino_sf_list1201_mf_20260802_133826`): per-frame 0.623 / 0.650 (peak ep 10); per-bundle
+  **0.529 mIoU / 0.525 AP50** (AP75 0.312, mAP 0.311, peak ep 12 — per-frame and per-bundle
+  peaks diverge again, vindicating `checkpoint_best_bundle.pth`, §8.2). The multi-view result
+  transfers to the honest split (old ruler: 0.539 / 0.515).
+- **First cross-view consistency numbers** (§6.6): `bundle_view_consistency` 0.679 → **0.717**
+  and `bundle_id_switch` 0.607 → **0.498** over epochs 6→12, ~14.1 matched instances/bundle.
+  Roughly: a matched instance is explained by its own query in ~72 % of its visible views, and
+  in ~50 % of views some other query still fits better — the headroom the §7.4.1 ablations
+  (cross-frame attention) act on.
+- Its `checkpoint_best_bundle.pth` is the first checkpoint allowed to quote a reportable 3D
+  number (§9.4 — no train/val leakage).
+
 ## 8. The multi-frame extension
 
 Ordered by cost, each step reusing everything above.
@@ -631,7 +719,11 @@ instance id per frame target, which is the cross-view link the single-frame prot
 numbers, directly comparable to the 0.669 / 0.699 single-frame bar, **and** `bundle_*` — the
 multi-view protocol of arms A–E (one IoU over the concatenated volume, one class score per query
 = max over views), which was meaningless while queries were per-frame and is comparable to arm
-C's 0.367 / 0.199. Never mix the two (docs/RESULTS.md §1).
+C's 0.367 / 0.199. Never mix the two (docs/RESULTS.md §1). Since 2026-08-01 that same eval also
+reports **`bundle_view_consistency` / `bundle_id_switch`** (§6.6): whether one query really owns
+an instance in *every* view, which is the property this whole section claims and which
+`bundle_AP50` alone cannot distinguish from a per-view hand-off. No run has been scored on it
+yet — see §6.6.
 
 Flags: `--multi_frame` (sample = a bundle of `--num_frames` frames), `--batch_bundles`
 (default 1 → 8 frames/step, the same GPU footprint and the same steps/epoch as the single-frame
@@ -647,8 +739,11 @@ former is the only individually-decisive component found anywhere in this track.
 --feature_mode bundle --bundles_per_scene 2 --color_jitter 0.2`, EPOCHS=30, peak at 19):
 per-frame **0.643 / 0.667** (vs 0.621 / 0.630) and a **new multi-view best 0.539 mIoU /
 0.515 bundle AP50** (+0.021 over 0.494). Both peaks fall on the same epoch in this run, so
-`checkpoint_best_ap50.pth` captures the multi-view headline as well — the bundle-selected
-checkpoint (docs/todo.md 2b) is still worth adding for runs where they diverge.
+`checkpoint_best_ap50.pth` captures the multi-view headline as well — but the two peaks *can*
+diverge (§7.4.1), so `--multi_frame` runs now also save **`checkpoint_best_bundle.pth`**,
+selected on val `bundle_AP50` (docs/todo.md 2b, done 2026-08-01). Off for single-frame runs —
+the key doesn't exist there. The end-of-run summary line prints its epoch alongside the other
+two when present.
 
 ### 8.3 3D anchors instead of 2D boxes (designed, not implemented)
 
@@ -691,3 +786,126 @@ Cheap follow-ups that need one flag each: `--mask_upsample 2` (74×74 masks — 
 on the 37×37 patch grid) and `--bundles_per_scene 2 --color_jitter 0.2` (more frame draws without
 new scenes; costs cache memory). Both answered at N=490 (§7.4: upsample neutral, extra draws
 +0.030 AP50 and saturating at 2 per §7.4.1).
+
+## 9. The 3D ruler — official ScanNet 3D instance benchmark (docs/todo.md 1d, 2026-08-01)
+
+**Why.** Nothing in §6–§8 is comparable to any published number (docs/RESULTS.md §1.2): we score
+per-view 2D masks; SegVGGT (50.4 / 71.7 / 87.0 AP/AP50/AP25) and FAST3DIS score **3D instance
+masks on the official benchmark point clouds**. This section is that protocol, end to end. It is
+a **third ruler** — never quote its numbers next to the per-frame or per-bundle tables, and never
+convert between them.
+
+### 9.1 Protocol
+
+`scripts/eval_3d_maskdino.py`, per official-val scene (`slurm/eval_3d_maskdino.sh` for the full
+312):
+
+1. **One forward pass per scene** over all sampled `scannet_frames_25k` frames (~16–25, sampled
+   across the *whole* scan — our stride-5 subset tars cover only raw frames 0–495 and would cap
+   recall): the frozen aggregator feeds the MaskDINO head (**one query set for the whole scene**,
+   `frames_per_sample=S`) and VGGT's own depth + camera heads. **No GT geometry, depth sensor, or
+   pose enters inference** — the selling point vs every fusion/splat pipeline; keep it intact.
+   Inference S (~17 avg) deliberately exceeds the training S=8: `CrossFrameAttention` has no
+   frame positional encoding (§8.2), so the block is defined for any S.
+2. **Pixels → queries.** One class score per query = max sigmoid over views (the §8.2 bundle
+   convention); wall/floor-classified queries are dropped (not benchmark classes, their GT
+   vertices are void — see 9.2); top `--eval_topk` (100) kept. Mask logits are bilinearly
+   upsampled to 518² (the §6.5 rule) and each pixel joins its argmax query above
+   `--mask_prob_threshold` (0.5) — a partition, which is what the majority vote expects.
+3. **Unproject + register.** Pixels are unprojected with the *predicted* depth + intrinsics
+   (`vggt/utils/geometry.py`), optionally confidence-filtered (`--depth_conf_percentile`). VGGT's
+   output lives in an arbitrary-scale bundle frame, so scoring needs an **eval-only Sim(3)**:
+   closed-form Umeyama from predicted-vs-GT *camera centers*, refined by a similarity ICP against
+   the mesh vertices (`--icp`, on by default; scale is re-estimated every iteration). This is the
+   FAST3DIS "Sim(3)+ICP" convention — GT poses are used only to place the finished prediction in
+   the mesh's coordinate frame, never at inference.
+4. **Lift (SegVGGT recipe).** Every kept pixel-point votes for its query on the nearest mesh
+   vertex within `--vote_radius` (5 cm); each superpoint (`.segs.json`) goes entirely to its
+   plurality query (unvoted → unassigned). One query = one 3D instance across the whole scene —
+   no post-hoc matching anywhere, which is exactly what §8.2 buys.
+5. **Score** with the vendored official evaluator (9.2): AP (0.50:0.05:0.95) / AP50 / AP25.
+
+Output: `eval3d_<ckpt stem>.json` next to the checkpoint (headline + per-class + per-scene
+diagnostics: Sim(3) scale, camera-center RMS, ICP inliers, vote coverage). `--dump_ply` writes an
+instance-coloured point cloud per scene for eyeballing.
+
+### 9.2 The evaluator is the official one, vendored
+
+`train/benchmark3d.py` is a line-for-line Python-3 port of
+`ScanNet/BenchmarkScripts/3d_evaluation/evaluate_semantic_instance.py` (fetched 2026-08-01;
+upstream is Python 2), operating on in-memory arrays instead of the txt-file tree. Everything
+score-relevant is untouched: the 10 overlap thresholds, the 100-vertex minimum region, greedy
+confidence-ordered matching, the duplicate-detection FP rule, **void handling** (predictions on
+vertices whose GT class is outside the 18 benchmark classes are ignored, not false positives —
+wall/floor GT is void, which is why dropping wall/floor *predictions* is on us), and the exact
+PR integration. Verified three ways (`tests/test_maskdino_eval3d.py` + the one-off check):
+hand-computed planted APs (an IoU-0.5 pred passes AP25 and fails AP50 on the strict `>`; a
+genuine FP + hard FN gives exactly 0.5; duplicates after full recall cost nothing), a synthetic
+end-to-end run scoring 1.0, and **real val scenes' GT fed back as predictions scoring exactly
+1.000 / 1.000 / 1.000**.
+
+Per-vertex GT is built as the official export does: `1000 * nyu40 + objectId + 1` from
+`.aggregation.json` + the segs file + `scannetv2-labels.combined.tsv`
+(`train/scannet3d.py::build_gt_ids`).
+
+**Classes.** The benchmark scores 18 classes: our 19 minus wall/floor, **plus `otherfurniture`
+(nyu40 39), which our head cannot predict** (it is background in our 2D GT, §4). The official
+18-class average is the headline (comparable to SegVGGT); a 17-common-class average is reported
+alongside as a diagnostic. On the two-scene smoke both otherfurniture instances exist in the GT,
+so the 18-class headline structurally pays ~1/18 of its mass wherever otherfurniture occurs.
+
+### 9.3 Data (one-time, on work; built 2026-08-01, jobs 9326394/9326395)
+
+- `scannet_3d_gt_val312.tar.zst` (1.2 GB): per val scene `_vh_clean_2.ply` + superpoint segs +
+  aggregation, downloaded per scene from the same kaldir v2/scans path the 2D GT came from,
+  validated (ply magic, segment-id closure) — `legacy/dataset_build/{scripts/download_3d_gt.py,
+  slurm/download_3d_gt_val312.sh}`.
+- `scannet_frames25k_val312.tar.zst` (1.1 GB): the val-312 slice of the official
+  `scannet_frames_25k.zip` (v2/tasks, 6.0 GB, one resumable download) — color + **camera-to-world
+  pose** + intrinsics per frame, 5 436 frames, non-finite poses excluded at load time —
+  `legacy/dataset_build/{scripts/repack_frames25k.py, slurm/download_frames25k_val312.sh}`.
+
+### 9.4 Honesty: which checkpoint may quote which number
+
+The official val-312 split overlaps our conventional training range (scenes 0000–0489), so **any
+existing checkpoint's 3D numbers are DIAGNOSTIC only** — they verify the pipeline, they are not
+reportable. The reportable number needs a checkpoint trained on the official 1201-scene split
+(tar built, docs/todo.md 1c) with val-312 never seen. A further caveat for the current diagnostic
+checkpoint (`maskdino_sf_n490_mf_b2jit_20260730_105117/checkpoint_best.pth`): it is the epoch-17
+mIoU-selected checkpoint — the epoch-19 AP50-selected one that carried the 0.515 bundle headline
+did not survive the 2026-07-30 output cleanup (bundle AP50 0.461 at epoch 17).
+
+### 9.5 Results — full val-312 DIAGNOSTIC runs (2026-08-01, jobs 9327269 / 9327271)
+
+Checkpoint: `maskdino_sf_n490_mf_b2jit_20260730_105117/checkpoint_best.pth` (9.4's caveats
+apply: **train/val leakage → diagnostic only**, and it is the epoch-17 not the epoch-19
+checkpoint). 312/312 scenes, 0 failures, ~45 min/run, ~7.6 s/scene.
+
+| Run | AP / AP50 / AP25 (18-class) | 17-class diagnostic |
+|---|---|---|
+| defaults (radius 5 cm, no conf filter), job 9327269 | 0.013 / 0.041 / 0.223 | 0.014 / 0.044 / 0.236 |
+| `--vote_radius 0.1 --depth_conf_percentile 25`, job 9327271 | **0.016 / 0.052 / 0.238** | 0.016 / 0.055 / 0.253 |
+
+Context (published full-split numbers, both on adapted backbones): FAST3DIS 0.038 / 0.096 /
+0.316 — same order of magnitude as us; SegVGGT 0.504 / 0.717 / 0.870 — far above. Per class,
+`toilet` leads (AP50 0.28–0.33); `otherfurniture` is 0 by construction (§9.2).
+
+**Reading (from the per-scene diagnostics in the json):**
+
+1. **Geometry binds, not recognition.** AP25 (0.24) is ~5× AP50 (0.05): objects are found and
+   coarsely localised, but the lifted masks miss the >0.5-IoU bar. That is what the registration
+   numbers predict — median camera-center RMS after Sim(3) is **0.14 m** and ICP point RMS
+   **~0.10 m**, the same order as the vote radius (5–10 cm) — VGGT's own depth/pose drift over a
+   whole-scan S≈17 bundle, not a 2D mask-quality problem (the same model scores 0.667 per-frame
+   AP50). The 2D→3D chain is the price of the "no GT geometry at inference" claim.
+2. **Coverage is the second cap:** ~15 % of mesh vertices receive any vote; ~63 % of annotated
+   vertices get assigned to some instance. Every unassigned GT instance is a hard FN.
+3. Knobs move it a little, in the expected direction (bigger radius + conf filter: +0.011 AP50),
+   so the defaults are not at an optimum — but knob-tuning is secondary to geometry quality.
+4. **The leakage barely matters at this operating point** — the binding constraints are
+   geometric, so the honest 1201-trained number (9.4) will likely land nearby; it is still the
+   only quotable one.
+
+S-generalisation worked as designed: bundles of 3–55 frames (median 15) through a model trained
+at S=8, no failures — `CrossFrameAttention` has no frame positional encoding, and the two-stage
+top-k just unions over more frames.
