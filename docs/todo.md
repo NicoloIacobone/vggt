@@ -122,10 +122,12 @@ In effort order — each step also de-risks the next:
       match), plus `bundle_num_matched`. Purely additive — no existing key changed.
       **First numbers measured 2026-08-02** (job 9386666, official 1201/312 split,
       docs/MASKDINO.md §7.8): consistency 0.679→0.717 and id_switch 0.607→0.498 over epochs
-      6→12, ~14.1 matched/bundle. The cut worth having — `--no-cross_frame_attn` should cost
-      *consistency* specifically — **SUBMITTED 2026-08-03, job 9503176** (official 1201/312
-      split, otherwise identical to job 9386666; read `bundle_view_consistency` /
-      `bundle_id_switch` against 0.717 / 0.498).
+      6→12, ~14.1 matched/bundle. **CLOSED 2026-08-03 by job 9503176** (docs/MASKDINO.md
+      §7.8.1): removing cross-frame attention leaves matched instances unchanged (14.0 vs 14.1)
+      and `view_consistency` nearly so (0.692 vs 0.717), but **`id_switch` jumps 0.498 → 0.682**
+      and bundle AP50 falls 0.525 → 0.389. The block's job is **identity preservation**, not
+      recognition — the mechanism claim the metric was built to support, and a core table for
+      the paper.
 - [ ] **2d. 3D anchors vs 2D DAB boxes** (docs/MASKDINO.md §8.3 — full design sketch there).
       Build on `--multi_frame --feature_mode bundle` — settled by §7.4.1, bundle features are
       the right base. Framed and budgeted as an **ablation** (FAST3DIS owns the mechanism as a
@@ -140,27 +142,25 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 700/1036 px token-grid arm) is bounded by the 0.956→0.99 ceiling gap and stays parked in
 "Longer-term".
 
-## 4. Watching (submitted 2026-08-03)
+## 4. Watching
 
-- [~] Job **9503176** — `--no-cross_frame_attn` on the official 1201/312 split (2c above;
-      does removing the block cost consistency specifically?). Started 11:07, ~6 h expected.
+(Nothing active — everything submitted on 2026-08-03 has landed.)
 
 ## 5. Lifting quality — the new binding constraint (opened 2026-08-03 by §9.6)
 
 On the 3D ruler the decoder is no longer what limits us: AP25 ≈ 4× AP50, median camera-centre
-RMS after Sim(3) is 0.14 m (≈ the vote radius), only ~16 % of mesh vertices get a vote, and two
-lifting knobs alone bought +0.016 AP50 — more than most decoder ablations are worth. Ordered by
-expected value per hour:
+RMS after Sim(3) is 0.14 m, and only ~16 % of mesh vertices get a vote. 5a has now bounded what
+knobs can do (0.067 → 0.091 AP50, still under FAST3DIS's 0.096), so **the remaining gap is
+coverage and registration, in that order**. Ordered by expected value per hour:
 
-- [~] **5a. Knob sweep — SUBMITTED 2026-08-03** (jobs 9508450 / 9508451 / 9508453 / 9508455:
-      radius 0.1 with conf 0, radius 0.05 and 0.15 at conf 25, radius 0.1 at conf 50). With the
-      two points already run this is a 2-factor picture of `--vote_radius` ×
-      `--depth_conf_percentile` on the leak-free checkpoint. **Report it as a SENSITIVITY
-      ANALYSIS, not as a better headline** — the knobs are being swept on val-312, so picking
-      the argmax and quoting it is test-set tuning. The headline stays the defaults row
-      (§9.6); the sweep's job is to say how much of the SegVGGT gap is lifting hyper-parameters
-      versus genuine geometry error, and to replace the currently-quoted tuned row (whose knobs
-      came from a leaky run) with a clean equivalent.
+- [x] **5a. Knob sweep — DONE 2026-08-03** (8 points, docs/MASKDINO.md §9.8). Reported as a
+      **sensitivity analysis, not a headline** (swept on val-312). Findings: the vote radius
+      **saturates at ~0.15 m = the median registration error** (0.090 AP50 at 0.15, unchanged at
+      0.20/0.30 — doubling it does nothing), the confidence filter has an interior optimum at
+      25 % and trades AP25 for AP50, and the **whole grid spans 0.067 → 0.091 AP50, still below
+      FAST3DIS's 0.096**. The useful negative: the remaining gap is *not* a tuning artefact, so
+      it must come from 5b/5c below. Also confirmed the pipeline is deterministic (the repeated
+      defaults run reproduced §9.6 exactly).
 - [ ] **5b. Coverage.** ~16 % of vertices voted / ~65 % of annotated vertices assigned caps
       recall outright. Options: more frames per scene (the 25k export has ~16–30; SegVGGT uses up
       to 24), overlapping bundles, or per-frame confidence-weighted voting instead of hard

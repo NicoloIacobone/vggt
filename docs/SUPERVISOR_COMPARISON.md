@@ -87,7 +87,14 @@ Two ablations (2026-07-29) localise where the consistency comes from: removing t
 **cross-frame attention** costs **−0.18** multi-view AP50 (0.494 → 0.311), and computing the
 frozen features per frame instead of once per bundle costs **−0.15** (0.494 → 0.347) — VGGT's
 global attention writes cross-view correspondence into the frozen tokens, and the decoder's
-cross-frame attention consumes it. The same bundle-level features cost −0.05 *per-frame* AP50 as
+cross-frame attention consumes it.
+
+**What that block actually does is preserve identity, and we can now measure it directly**
+(2026-08-03, official split). Removing it leaves the number of instances the model finds
+unchanged (14.0 vs 14.1 per bundle) and barely moves whether an instance's own query covers a
+given view (0.69 vs 0.72). What breaks is *which* query owns the object: the rate at which some
+**other** query fits a view better jumps from **50 % to 68 %**. Recognition survives; cross-view
+identity does not — which is the mechanism the multi-view score is actually paying for. The same bundle-level features cost −0.05 *per-frame* AP50 as
 a standalone change, so multi-view consistency has a measured price in per-frame accuracy
 (0.729 single-frame best vs 0.630 per-frame for the best multi-view model).
 
@@ -230,10 +237,13 @@ Two findings worth carrying:
    conclusion that this track is **data-limited, not architecture-limited**.
 2. **The bottleneck is the 2D→3D lifting, not the decoder.** AP25 is ~4× AP50: objects are
    found and coarsely placed, but the lifted masks miss the strict-IoU bar. The registration
-   diagnostics say why — median camera-centre error after alignment is 0.14 m, the same order as
-   the voting radius — and only ~16 % of mesh vertices receive any vote. Two *lifting* knobs
-   alone were worth more (+0.016 AP50) than most decoder ablations in §2. That is where the next
-   effort belongs, and it is the price of the "no GT geometry at inference" design.
+   diagnostics say why — median camera-centre error after alignment is 0.14 m — and only ~16 %
+   of mesh vertices receive any vote. An 8-point sweep of the two lifting hyper-parameters moves
+   AP50 from 0.067 to 0.091, more than any decoder ablation in §2 is worth, and the voting
+   radius stops helping exactly at 0.15 m — the size of the registration error. But the whole
+   sweep stays below FAST3DIS's 0.096, so **the gap is not a tuning artefact**: it is coverage
+   and registration quality, which is where the next effort belongs. This is the price of the
+   "no ground-truth geometry at inference" design, and it is now quantified rather than assumed.
 
 Details, per-class tables and reproduction: `docs/MASKDINO.md` §9, `docs/RESULTS.md` §5.
 

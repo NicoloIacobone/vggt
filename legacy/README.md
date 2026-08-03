@@ -47,5 +47,7 @@ rebuild order: `docs/DATASET.md`.
 
 `data/scannet_overfit.py`, `train/eval_metrics.py`, `train/common.py` and `train/perframe.py`
 are shared by both families and stay at the repo root. `vggt/` is the untouched upstream
-backbone. `demos/demo_gradio.py` is the D4RT 3D viewer but stays with the other upstream demos;
-it imports from `legacy.d4rt.*`.
+backbone. `demos/demo_gradio.py` stays with the other upstream demos; it serves **both**
+families — it dispatches on the checkpoint's keys, so D4RT checkpoints keep working exactly as
+before (it still imports from `legacy.d4rt.*`) while MaskDINO checkpoints take the new path in
+`train/maskdino_viz3d.py` (docs/MASKDINO.md §9.7).

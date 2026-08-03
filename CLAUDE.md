@@ -64,6 +64,12 @@ python tests/test_maskdino_fullres.py # --eval_full_res ruler (MASKDINO.md §6.5
 python tests/test_maskdino_eval3d.py  # 3D ruler (MASKDINO.md §9): PLY/GT builders, Umeyama/ICP,
                                       # unprojection round-trip, votes+majority, the vendored
                                       # official evaluator vs hand-computed APs, synthetic E2E
+python tests/test_maskdino_viz3d.py   # 3D viewer colour path (MASKDINO.md §9.7): feature-mode
+                                      # fidelity, max-over-views selection, colour stable across
+                                      # views, end-to-end on a tiny head
+python tests/test_demo_gradio_maskdino.py  # the Gradio glue: MaskDINO-vs-D4RT checkpoint
+                                      # routing, scene dropdown, colouring path (imports the demo
+                                      # with VGGT_DEMO_SKIP_BACKBONE=1, no weights downloaded)
 python tests/test_coco_maskdino.py    # COCO track: both pixel-decoder pyramid modes, head
                                       # round-trip, GT helpers, instance inference + RLE, overfit
 bash tests/test_train_maskdino_sh_lists.sh  # slurm scene-list logic via DRY_RUN: numeric-range
@@ -102,6 +108,17 @@ sbatch slurm/scannet_oracle.sh   # GT-only ceiling of the 37/74/148 grids on Sca
 # per superpoint, scores with the vendored official evaluator. Checkpoints trained on scenes
 # 0000-0489 overlap val-312: their numbers are DIAGNOSTIC only (§9.4).
 sbatch --export=ALL,CHECKPOINT=<run_dir>/checkpoint_best_bundle.pth slurm/eval_3d_maskdino.sh
+# Qualitative 3D (MASKDINO.md §9.7) — TWO different pictures, do not confuse them:
+#   (a) what the benchmark scores: instance-coloured mesh vertices after lifting+voting (grey =
+#       no instance reached that vertex). `--scenes` renames the JSON, so a subset can never
+#       overwrite a full-val result — and a subset is a picture, never a number.
+sbatch --export=ALL,CHECKPOINT=<run_dir>/checkpoint_best_bundle.pth,\
+EXTRA_ARGS='--dump_ply --scenes scene0011_00 scene0015_00 --vote_radius 0.1 --depth_conf_percentile 25' \
+    slurm/eval_3d_maskdino.sh          # → <run_dir>/eval3d_<scene>.ply (MeshLab/CloudCompare)
+#   (b) what the model predicts: VGGT's own point cloud coloured by the head, interactively.
+#       Needs a GPU node. Colours are query ids, identical to the 2D panels' palette.
+python demos/demo_gradio.py --seg_checkpoint <run_dir>/checkpoint_best_bundle.pth \
+    --seg_scans_root /cluster/scratch/niacobone/demo_scans/scans   # 4 val scenes staged there
 # needs the two val-312 tars on work (built 2026-08-01; rebuild in ~20 min if lost):
 sbatch legacy/dataset_build/slurm/download_3d_gt_val312.sh       # mesh+superpoints+aggregation
 sbatch legacy/dataset_build/slurm/download_frames25k_val312.sh   # whole-scan frames + poses
@@ -139,7 +156,8 @@ python scripts/eval_perframe.py --checkpoint <d4rt_run>/checkpoint_best.pth   # 
 # --- Retired D4RT arms (still runnable; see legacy/README.md) ---------------------------------
 python legacy/d4rt/scripts/train_multiscene.py --train_scenes ... --val_scenes ...
 python legacy/d4rt/scripts/visualize_masks.py --checkpoint <run_dir>/checkpoint.pth
-python demos/demo_gradio.py --seg_checkpoint <path>   # 3D viewer for D4RT checkpoints
+python demos/demo_gradio.py --seg_checkpoint <path>   # the same 3D viewer; it dispatches on the
+                                      # checkpoint's keys, so D4RT checkpoints still work
 sbatch legacy/d4rt/slurm/train_full.sh
 for t in legacy/d4rt/tests/test_*.py; do python "$t"; done
 

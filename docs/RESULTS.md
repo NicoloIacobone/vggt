@@ -204,6 +204,11 @@ Two caveats to carry when quoting: the knobs of the second row were selected on 
 diagnostic run, so the **defaults row (0.023 / 0.067 / 0.268) is the untuned number**; and both
 carry the structural handicaps above (`otherfurniture`, frame coverage).
 
+A clean 8-point sweep of the two lifting knobs on the leak-free checkpoint (docs/MASKDINO.md
+§9.8 — a *sensitivity analysis*, not a headline: it is swept on val) spans **0.067 → 0.091
+AP50**. The vote radius saturates at ~0.15 m = the median registration error, and the whole
+grid stays below FAST3DIS's 0.096 — so the remaining gap is not a tuning artefact.
+
 Diagnosis (docs/MASKDINO.md §9.5): AP25 ≈ 4× AP50 — geometry binds, not recognition. Median
 Sim(3) camera-center RMS 0.14 m and ICP point RMS ~0.10 m are on the order of the vote radius,
 so lifted masks miss the 0.5-IoU bar that the same model clears in 2D (0.650 per-frame AP50);
@@ -232,6 +237,8 @@ steps (~ the N=490 recipe budget of 29.4k), warmup 2, eval every epoch on all 31
 | 〃 | per-frame, full 518×518 | 0.611 | 0.651 | 0.466 | 0.437 |
 | multi-frame `--multi_frame --feature_mode bundle` (9386666) | per-frame | 0.623 | 0.650 | 0.470 | 0.443 |
 | 〃 | **per-bundle (multi-view)** | **0.529** | **0.525** | 0.312 | 0.311 |
+| … `--no-cross_frame_attn` (9503176) | per-frame | 0.576 | 0.588 | — | — |
+| 〃 | per-bundle | 0.471 | 0.389 | 0.220 | — |
 
 - **Scale holds up on the honest split**: 0.662 per-frame AP50 vs 8900194's 0.604 (+0.058, with
   ~3× the training scenes; 77-vs-312-scene val caveat above). The train/val gap at epoch 12
@@ -244,6 +251,11 @@ steps (~ the N=490 recipe budget of 29.4k), warmup 2, eval every epoch on all 31
   `bundle_view_consistency` **0.717** / `bundle_id_switch` 0.498 (14.1 matched
   instances/bundle) — a matched instance is explained by its own query in ~72 % of its visible
   views. Both improve monotonically over training (0.679→0.717 / 0.607→0.498 from epoch 6).
+- **Cross-frame attention's job is identity, and the metric proves it** (job 9503176,
+  docs/MASKDINO.md §7.8.1): removing the block leaves the number of matched instances unchanged
+  (14.0 vs 14.1) and `view_consistency` nearly so (0.692 vs 0.717), but **`id_switch` jumps
+  0.498 → 0.682** — in 68 % of views some *other* query fits better. Recognition is intact;
+  identity is what breaks, and −0.136 bundle AP50 follows.
 - Full-res vs grid stays −0.011 AP50, same as on the old split (§7.7's "recognition binds").
 - The multi-frame `checkpoint_best_bundle.pth`
   (`output/maskdino_sf_list1201_mf_20260802_133826/`) is the leak-free checkpoint the 3D ruler

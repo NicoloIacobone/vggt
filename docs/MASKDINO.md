@@ -208,6 +208,10 @@ is the last layer only — identical cache footprint to every other arm.
 | `train/benchmark3d.py` | the official 3D instance evaluator, vendored + ported to Python 3 (§9.2) |
 | `train/eval3d_geometry.py` | eval-time Sim(3) registration (Umeyama + similarity ICP), pixel→query assignment, vertex votes, superpoint majority (§9) |
 | `slurm/eval_3d_maskdino.sh` | cluster job: stages the two val-312 tars, runs the 3D eval |
+| `train/maskdino_viz3d.py` | the interactive 3D viewer's colour path (§9.7): checkpoint loading, the 3D ruler's query selection, identity-keyed per-pixel colours |
+| `demos/demo_gradio.py` | the viewer itself — serves MaskDINO **and** the retired D4RT checkpoints (§9.7) |
+| `tests/test_maskdino_viz3d.py` | feature-mode fidelity, max-over-views selection, colour survives per-view reordering, end-to-end on a tiny head (§9.7) |
+| `tests/test_demo_gradio_maskdino.py` | the viewer's glue: checkpoint-family routing, scene dropdown vs what is on disk, colouring path (§9.7) |
 | `tests/test_maskdino_eval3d.py` | the whole §9 stack CPU-only: PLY/GT fixtures, Umeyama/ICP, unprojection round-trip, votes + majority, evaluator vs hand-computed APs, synthetic end-to-end |
 
 The only shared file this track modified is `train/eval_metrics.py`:
@@ -677,6 +681,37 @@ tables. Headlines:
 - Its `checkpoint_best_bundle.pth` is the first checkpoint allowed to quote a reportable 3D
   number (§9.4 — no train/val leakage).
 
+### 7.8.1 What cross-frame attention actually buys: identity (job 9503176, 2026-08-03)
+
+`--no-cross_frame_attn` on the same official split, otherwise identical to 9386666. This is the
+cut todo 2c was waiting for — the consistency metrics (§6.6) let it be read as a *mechanism*
+claim rather than only as a score drop.
+
+| | with cross-frame attn (9386666) | without (9503176) | Δ |
+|---|---|---|---|
+| per-frame mIoU / AP50 | 0.623 / 0.650 | 0.576 / 0.588 | −0.062 AP50 |
+| per-bundle mIoU / AP50 | 0.529 / 0.525 | 0.471 / 0.389 | **−0.136 AP50** |
+| `bundle_view_consistency` ↑ | **0.717** | 0.692 | −0.025 |
+| `bundle_id_switch` ↓ | **0.498** | 0.682 | **+0.184** |
+| `bundle_num_matched` | 14.1 | 14.0 | ±0 |
+
+**The block's job is identity preservation, and the metrics separate that from recognition.**
+The model finds the same number of instances either way (14.0 vs 14.1 matched per bundle) and
+its own query still covers most views at IoU ≥ 0.5 (0.692 vs 0.717, a small drop) — but
+**`id_switch` jumps from 0.498 to 0.682**: without the block, in 68 % of views some *other*
+query fits the object better than the one that owns it. Identity degrades far more than
+coverage does, which is precisely what a cross-view communication mechanism is supposed to
+prevent, and the −0.136 bundle AP50 follows from it (the multi-view protocol scores one query
+against the whole volume, so a switched view is lost mask).
+
+The two metrics differ in strictness by construction: `view_consistency` asks "does my query
+explain this view at all (IoU ≥ 0.5)?", `id_switch` asks "is some other query *better*?" — a
+view can pass the first and fail the second, which is why the second is the sensitive one and
+the one to quote for this mechanism.
+
+This reproduces the N=490 finding (−0.183 bundle AP50, §7.4.1) on the honest split at
+−0.136, and closes docs/todo.md 2c.
+
 ## 8. The multi-frame extension
 
 Ordered by cost, each step reusing everything above.
@@ -956,5 +991,98 @@ Reproduce: `sbatch --export=ALL,CHECKPOINT=<mf_run_dir>/checkpoint_best_bundle.p
 slurm/eval_3d_maskdino.sh`. Output files now name any non-default result-affecting knob
 (`eval3d_<stem>__vote_radius0.1_depth_conf_percentile25.0.json`) — before 2026-08-03 both knob
 settings wrote to the same path and the second silently overwrote the first, which is how job
-9503137's JSON was lost (its numbers survive only in `slurm/logs/eval3d_9503137.log`).
+9503137's JSON was lost (its numbers survive only in `slurm/logs/eval3d_9503137.log`; the
+defaults run was repeated as job 9532181 and reproduced it exactly — 0.0228 / 0.0672 / 0.2680 —
+so the pipeline is deterministic and the headline now has a JSON behind it).
 Guarded by `tests/test_maskdino_eval3d.py::test_out_path_names_the_knobs`.
+
+### 9.7 Looking at the predictions in 3D (qualitative, 2026-08-03)
+
+Two different pictures, and confusing them is easy: **one shows what the benchmark scores, the
+other shows what the model predicts.**
+
+**(a) The scored product — `--dump_ply`.** `scripts/eval_3d_maskdino.py --dump_ply` writes
+`eval3d_<scene>.ply` next to its JSON: the *benchmark mesh's own vertices*, coloured by the
+instance each one was assigned after the full §9.1 pipeline (unproject with predicted depth +
+cameras → Sim(3)+ICP into the mesh frame → votes within `--vote_radius` → superpoint majority).
+Grey = no instance reached that vertex. Open it in MeshLab/CloudCompare. This is the object the
+AP numbers are computed from, so it is the honest figure for a paper — and the grey is the
+result too: `voted_vertex_frac` is 0.05–0.21 per scene (§9.6 reading 3, the lifting bottleneck,
+made visible).
+
+```bash
+sbatch --export=ALL,CHECKPOINT=<mf_run>/checkpoint_best_bundle.pth,\
+EXTRA_ARGS='--dump_ply --scenes scene0011_00 scene0015_00 --vote_radius 0.1 --depth_conf_percentile 25' \
+    slurm/eval_3d_maskdino.sh
+```
+
+Note `--scenes` is result-affecting, so the JSON gets its own name and a scene subset can never
+overwrite a full-val result. A handful of scenes is a *picture*, never a number: 4 easy val
+scenes scored 0.084 / 0.236 / 0.375, ~3× the 312-scene averages of §9.6.
+
+**(b) What the model predicts — the Gradio viewer.** `demos/demo_gradio.py` now accepts MaskDINO
+checkpoints alongside the retired D4RT ones (it dispatches on the checkpoint's keys) and colours
+**VGGT's own predicted point cloud** by the head's per-view instance assignment. No mesh, no
+registration, no superpoint vote, no GT of any kind — it is the raw 2D→3D product, seen
+interactively.
+
+```bash
+python demos/demo_gradio.py \
+    --seg_checkpoint <mf_run>/checkpoint_best_bundle.pth \
+    --seg_scans_root <a scans tree with the scenes you want>      # optional; uploads work too
+# then: 'Load Checkpoint Scene' (or upload images) → 'Reconstruct' → Color By: Predicted Instances
+```
+
+`train/maskdino_viz3d.py` keeps it honest by *inheriting* both conventions rather than inventing
+its own: query selection is the 3D ruler's (one class score per query = max over views, then
+score threshold + top-k, §9.1 step 2), and colour is keyed to the query index with the same
+tab20 slots as the run's 2D panels (§6.4) — so query 7 wears one colour in the PNG figures, in
+the viewer, and across every view of the bundle. Tokens are rebuilt from the run's own
+`--feature_mode` / `--feature_layers` / `--backbone_dtype`, and a `--multi_frame` checkpoint sees
+the frames as one bundle. Feeding it a **single-frame** checkpoint is allowed but the legend says
+so: with a per-frame query set a colour means nothing across views, which is precisely the
+difference §8 exists to close.
+
+What each picture is good for: (a) answers "how much of the room did we actually label, and
+correctly?" — coverage and registration failures are obvious, per-view mask quality is not.
+(b) answers "are the masks and the cross-view identities any good?" — mask boundaries and colour
+stability across views are obvious, while lifting losses are invisible because there is nothing
+to lift onto. A prediction that looks right in (b) and empty in (a) is a lifting problem, which
+is exactly the diagnosis §9.6 reached numerically.
+
+### 9.8 Lifting-knob sensitivity (todo 5a; jobs 9503137/39, 9508450–55, 9532181–83, 2026-08-03)
+
+The §9.6 tuned row inherited its knobs from the *leaky* diagnostic runs, so they were re-swept
+cleanly on the leak-free checkpoint. **Read this as a sensitivity analysis, not as a better
+headline**: the sweep runs on val-312, so quoting its argmax would be test-set tuning. The
+headline stays the defaults row of §9.6.
+
+All 312 scenes, 0 failures, 18-class metrics:
+
+| `--vote_radius` | `--depth_conf_percentile` | AP | AP50 | AP25 |
+|---|---|---|---|---|
+| **0.05 (default)** | **0 (default)** | 0.023 | **0.067** | 0.268 |
+| 0.05 | 25 | 0.023 | 0.071 | 0.260 |
+| 0.10 | 0 | 0.026 | 0.078 | 0.321 |
+| 0.10 | 25 | 0.029 | 0.083 | 0.305 |
+| 0.10 | 50 | 0.024 | 0.068 | 0.269 |
+| 0.15 | 25 | **0.030** | 0.090 | 0.321 |
+| 0.20 | 25 | 0.029 | 0.090 | 0.325 |
+| 0.30 | 25 | 0.029 | **0.091** | 0.326 |
+
+1. **The vote radius saturates at ~0.15 m — the scale of the registration error.** AP50 climbs
+   0.071 → 0.083 → 0.090 from 5 to 15 cm and then goes flat (0.090 at 20 cm, 0.091 at 30 cm);
+   strict AP peaks at 0.15 and declines slightly, the expected mask-bloating cost. The plateau
+   is the informative part: **doubling the radius past 0.15 m changes nothing**, so beyond that
+   the votes already reach every vertex they are ever going to reach. The radius has to be as
+   wide as the median camera-center RMS (0.14 m, §9.5) to bridge the misalignment, and once it
+   is, what remains is *coverage and assignment*, not "the point landed a few cm off".
+2. **The depth-confidence filter has an interior optimum at 25 %** (0.078 → 0.083 → 0.068 at
+   radius 0.10): filtering half the depth throws away usable geometry. It also trades the two
+   IoU regimes against each other — no filtering gives the best AP25 (0.321) while 25 % gives
+   the best AP50 at the same radius, i.e. it buys boundary precision with coverage.
+3. **Knobs cap out below FAST3DIS.** The whole grid spans 0.067 → 0.091 AP50: lifting
+   hyper-parameters are worth up to +0.024 (+36 % relative) — more than any decoder ablation in
+   §7.2.1 — and still short of FAST3DIS's 0.096. So the remaining gap is **not** a tuning
+   artefact, which is the useful negative result here: it has to come from coverage (§todo 5b)
+   and registration quality (5c), the two things the plateau in reading 1 points at.

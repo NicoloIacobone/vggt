@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
+import contextlib
 import cv2
 import torch
 import numpy as np
@@ -30,47 +31,82 @@ from vggt.utils.geometry import unproject_depth_map_to_point_map
 from legacy.d4rt.models.d4rt_decoder import D4RTInstanceSegmentationHead
 from legacy.d4rt.models.anchor_queries import build_anchors
 from legacy.d4rt.train.postprocess import select_instances, upsample_assignment
-from data.scannet_overfit import IDX_TO_CLASS, decode_checkpoint_images
+from data.scannet_overfit import IDX_TO_CLASS, ScanNetMultiSceneDataset, decode_checkpoint_images
+from train.common import DEFAULT_SCANS_ROOT
+from train.maskdino_data import DTYPES
+from train.maskdino_viz3d import (head_features, is_maskdino_checkpoint, load_maskdino_seg_head,
+                                  maskdino_seg_colors)
 
-# Root for reloading frames from --checkpoint_light checkpoints (no stored pixels).
-SEG_SCANS_ROOT = "/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scans"
+# Root for reloading frames from --checkpoint_light checkpoints (no stored pixels) and, for
+# MaskDINO checkpoints, for ALL frames — those checkpoints store no pixels at all.
+SEG_SCANS_ROOT = DEFAULT_SCANS_ROOT
+
+# A MaskDINO run's --train_scenes can list 1201 scenes; probing every one of them on the work
+# filesystem at startup is slow and the dropdown becomes unusable. Val scenes are listed first.
+MAX_SCENE_CHOICES = 200
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-print("Initializing and loading VGGT model...")
-# model = VGGT.from_pretrained("facebook/VGGT-1B")  # another way to load the model
+# Import-only mode (tests/test_demo_gradio_maskdino.py): the module's glue — checkpoint
+# dispatch, instance colouring, scene loading — is worth testing on CPU, and none of it needs
+# the 1B-parameter backbone. Everything else behaves identically.
+if os.environ.get("VGGT_DEMO_SKIP_BACKBONE"):
+    print("VGGT_DEMO_SKIP_BACKBONE set — skipping backbone load (import-only mode).")
+    model = None
+else:
+    print("Initializing and loading VGGT model...")
+    # model = VGGT.from_pretrained("facebook/VGGT-1B")  # another way to load the model
 
-model = VGGT()
-_URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
-model.load_state_dict(torch.hub.load_state_dict_from_url(_URL))
+    model = VGGT()
+    _URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
+    model.load_state_dict(torch.hub.load_state_dict_from_url(_URL))
 
-
-model.eval()
-model = model.to(device)
+    model.eval()
+    model = model.to(device)
 
 
 # -------------------------------------------------------------------------
-# 0) Optional D4RT instance-segmentation head (for coloring the 3D cloud by
-#    predicted instances). Loaded from a checkpoint produced by
-#    `train_overfit.py --save_checkpoint ...`, which bundles the trained
-#    decoder head together with the exact fixed overfit batch (scene frames +
-#    query coordinates + view ids). See `visualize_masks.py` for the 2D version.
+# 0) Optional instance-segmentation head (for coloring the 3D cloud by predicted
+#    instances). TWO checkpoint families are accepted, told apart by their keys:
+#
+#    * **MaskDINO** (`scripts/train_maskdino.py`, the active model): stores the head
+#      config/weights and the run's own args, but NO pixels — frames are reloaded
+#      from `--seg_scans_root`. With a `--multi_frame` checkpoint one query set is
+#      shared by the whole bundle, so a query is a scene-level identity and its
+#      colour is stable across views; that is the property the 3D view exists to show.
+#    * **D4RT** (retired arms A-E, `legacy/d4rt/`): bundles the trained decoder head
+#      together with the exact fixed overfit batch (scene frames + query coordinates
+#      + view ids). See `legacy/d4rt/scripts/visualize_masks.py` for the 2D version.
+#
+#    The colour convention is the one used by the runs' own 2D panels
+#    (`train/maskdino_eval.paint_identity_map`), so a query has the same colour in
+#    the PNG figures and here — see `train/maskdino_viz3d.py`.
 # -------------------------------------------------------------------------
 SEG = {
-    "head": None,       # D4RTInstanceSegmentationHead
-    "coords": None,     # [1, N, 2] saved query coordinates (currently selected scene)
-    "view_ids": None,   # [1, N] saved query view ids
+    "kind": None,       # "maskdino" | "d4rt"
+    "head": None,       # MaskDINOVGGTHead | D4RTInstanceSegmentationHead
+    "train_args": {},   # MaskDINO only: the run's own CLI args (feature_mode, multi_frame, …)
+    "coords": None,     # D4RT only: [1, N, 2] saved query coordinates (selected scene)
+    "view_ids": None,   # D4RT only: [1, N] saved query view ids
     "gt_classes": None, # [Ng] GT classes (for reference)
     "images": None,     # [1, S, 3, H, W] the exact scene frames of the selected scene
     "frame_names": None,
-    "scenes": None,        # list of per-scene dicts (multi-scene checkpoints)
+    "scenes": None,        # list of per-scene dicts (multi-scene / MaskDINO checkpoints)
     "scene_labels": [],    # human-readable labels for the scene dropdown
+    "score_threshold": 0.25,   # MaskDINO: keep queries at or above this class score
+    "mask_threshold": 0.5,     # MaskDINO: a pixel joins its argmax query above this prob
+    "drop_stuff": False,       # MaskDINO: drop wall/floor (what the 3D benchmark scores)
 }
 
 
 def _select_seg_scene(idx: int):
     """Point the active SEG fields at scene `idx` of the loaded checkpoint."""
     s = SEG["scenes"][idx]
+    if SEG["kind"] == "maskdino":
+        # A MaskDINO checkpoint carries no per-scene state: the head is scene-agnostic and the
+        # frames are read from disk when the scene is loaded. Selecting is just remembering.
+        SEG["images"], SEG["frame_names"] = None, None
+        return
     SEG["coords"] = s["coordinates"]
     SEG["view_ids"] = s["view_ids"]
     SEG["gt_classes"] = s["gt"]["classes"]
@@ -87,9 +123,60 @@ def _find_default_seg_checkpoint():
 
 
 def load_seg_checkpoint(ckpt_path: str):
-    """Load the trained decoder head + its fixed query batch into the global SEG dict."""
-    print(f"Loading D4RT segmentation checkpoint: {ckpt_path}")
+    """Detect the checkpoint family (MaskDINO or legacy D4RT) and load it into SEG."""
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    if is_maskdino_checkpoint(ckpt):
+        return _load_maskdino_checkpoint(ckpt_path)
+    return _load_d4rt_checkpoint(ckpt_path, ckpt)
+
+
+def _load_maskdino_checkpoint(ckpt_path: str):
+    """
+    Load a `scripts/train_maskdino.py` checkpoint: head + the run's own args.
+
+    The scene dropdown is built from the run's OWN scene lists (val first), keeping only the
+    scenes that actually exist under `SEG_SCANS_ROOT` — the dataset tar is staged per job, so
+    the path stored at training time is almost always stale.
+    """
+    print(f"Loading MaskDINO segmentation checkpoint: {ckpt_path}")
+    head, train_args, ckpt = load_maskdino_seg_head(ckpt_path, device)
+    SEG["kind"], SEG["head"], SEG["train_args"] = "maskdino", head, train_args
+
+    scenes = []
+    for split in ("val", "train"):
+        names = [t.strip() for t in str(train_args.get(f"{split}_scenes") or "").split(",")
+                 if t.strip()]
+        for name in names:
+            if len(scenes) >= MAX_SCENE_CHOICES:
+                break
+            scene_dir = os.path.join(SEG_SCANS_ROOT, name, "raw_data")
+            if os.path.isdir(scene_dir):
+                scenes.append({"name": name, "split": split, "scene_dir": scene_dir})
+    SEG["scenes"] = scenes or None
+    SEG["scene_labels"] = [f"{s['name']} ({s['split']})" for s in scenes]
+
+    multi = bool(train_args.get("multi_frame", False))
+    print(f"✓ MaskDINO head ready (epoch {ckpt.get('epoch', '?')}, multi_frame={multi}, "
+          f"feature_mode={train_args.get('feature_mode', 'single')}, "
+          f"{head.num_queries} queries)")
+    if not multi:
+        print("  ⚠ single-frame checkpoint: every view gets its own query set, so instance "
+              "colours are NOT comparable across views in the 3D cloud. Use a --multi_frame "
+              "run's checkpoint_best_bundle.pth for a multi-view-consistent picture.")
+    if scenes:
+        n_val = sum(s["split"] == "val" for s in scenes)
+        print(f"  {len(scenes)} scene(s) available under {SEG_SCANS_ROOT} "
+              f"({n_val} val); pick one in the dropdown or just upload images.")
+    else:
+        print(f"  No scene of this run found under {SEG_SCANS_ROOT} — pass "
+              f"--seg_scans_root <staged scans dir> to enable the scene button. Uploading "
+              f"your own images still works.")
+
+
+def _load_d4rt_checkpoint(ckpt_path: str, ckpt):
+    """Load a retired-arm checkpoint: decoder head + its fixed query batch (legacy/d4rt/)."""
+    print(f"Loading D4RT segmentation checkpoint: {ckpt_path}")
+    SEG["kind"] = "d4rt"
     head_config = ckpt.get("head_config") or dict(
         num_views=10, hidden_dim=256, num_classes=20, num_decoder_layers=4,
         patch_size=9, mask_embed_dim=256, memory_dim=2048, dropout=0.0,
@@ -131,6 +218,47 @@ def load_seg_checkpoint(ckpt_path: str):
 
 @torch.no_grad()
 def compute_seg_colors(images_dev: torch.Tensor, mask_thr: float = 0.5, score_thr: float = 0.5):
+    """Dispatch to the loaded head's colouring path; returns (seg_colors, legend_str)."""
+    if SEG["kind"] == "maskdino":
+        return _maskdino_seg_colors(images_dev)
+    return _d4rt_seg_colors(images_dev, mask_thr, score_thr)
+
+
+@torch.no_grad()
+def _maskdino_seg_colors(images_dev: torch.Tensor):
+    """
+    Run the MaskDINO head on `images_dev` and colour every pixel by the query that owns it.
+
+    The tokens are rebuilt exactly as the run built them (`--feature_mode`, `--feature_layers`,
+    `--backbone_dtype`), and a `--multi_frame` checkpoint sees the whole set of frames as ONE
+    bundle — that is what gives a query a single identity across views, and therefore an object
+    a single colour in the 3D cloud. Selection and colouring live in `train/maskdino_viz3d.py`
+    so the viewer, the 2D figures and the 3D ruler cannot drift apart.
+    """
+    train_args = SEG["train_args"]
+    dtype = DTYPES.get(train_args.get("backbone_dtype", "float32"), torch.float32)
+
+    def aggregator(imgs):
+        ctx = (torch.autocast("cuda", dtype=dtype)
+               if (device == "cuda" and dtype != torch.float32) else contextlib.nullcontext())
+        with ctx:
+            return model.aggregator(imgs)
+
+    feats, patch_start_idx = head_features(aggregator, images_dev, train_args)
+    S = feats.shape[0]
+    multi = bool(train_args.get("multi_frame", False))
+    out, _ = SEG["head"](feats, patch_start_idx, None, frames_per_sample=S if multi else 1)
+    seg_colors, legend = maskdino_seg_colors(
+        out, images_dev, score_threshold=SEG["score_threshold"],
+        mask_threshold=SEG["mask_threshold"], drop_stuff=SEG["drop_stuff"])
+    if not multi:
+        legend += ("  ⚠ single-frame checkpoint: each view has its own query set, so a "
+                   "colour means nothing across views.")
+    return seg_colors, legend
+
+
+@torch.no_grad()
+def _d4rt_seg_colors(images_dev: torch.Tensor, mask_thr: float = 0.5, score_thr: float = 0.5):
     """
     Run the D4RT decoder head on `images_dev` and build a per-pixel instance-colored image.
 
@@ -202,12 +330,31 @@ def compute_seg_colors(images_dev: torch.Tensor, mask_thr: float = 0.5, score_th
 
 # Parse the optional segmentation checkpoint and load it before the UI is built
 # (the "Load D4RT Checkpoint Scene" button is only shown when a checkpoint is available).
-_arg_parser = argparse.ArgumentParser(description="VGGT Gradio demo (+ optional D4RT masks in 3D)")
+_arg_parser = argparse.ArgumentParser(
+    description="VGGT Gradio demo (+ optional predicted instance masks in 3D)")
 _arg_parser.add_argument(
     "--seg_checkpoint", type=str, default=None,
-    help="Path to a D4RT checkpoint.pth (from train_overfit.py) to enable 3D instance "
+    help="Path to a MaskDINO checkpoint (scripts/train_maskdino.py — use a --multi_frame run's "
+         "checkpoint_best_bundle.pth) or a legacy D4RT checkpoint.pth, to enable 3D instance "
          "segmentation coloring. If omitted, the most recent checkpoint under the output dir "
          "is auto-discovered.",
+)
+_arg_parser.add_argument(
+    "--seg_scans_root", type=str, default=SEG_SCANS_ROOT,
+    help="ScanNet scans root the 'Load Checkpoint Scene' button reads frames from (MaskDINO "
+         "checkpoints store no pixels). Defaults to $SCANNET_ROOT or the copy on work.",
+)
+_arg_parser.add_argument(
+    "--seg_score_threshold", type=float, default=SEG["score_threshold"],
+    help="MaskDINO: keep queries whose best class score is at least this (0.25 = the figures').",
+)
+_arg_parser.add_argument(
+    "--seg_mask_threshold", type=float, default=SEG["mask_threshold"],
+    help="MaskDINO: a pixel joins its argmax query only above this sigmoid probability.",
+)
+_arg_parser.add_argument(
+    "--seg_drop_stuff", action="store_true",
+    help="MaskDINO: hide wall/floor instances — what the official 3D benchmark scores.",
 )
 _arg_parser.add_argument(
     "--no_seg", action="store_true", help="Disable segmentation coloring even if a checkpoint exists.",
@@ -215,6 +362,10 @@ _arg_parser.add_argument(
 _cli_args, _ = _arg_parser.parse_known_args()
 
 if not _cli_args.no_seg:
+    SEG_SCANS_ROOT = _cli_args.seg_scans_root
+    SEG["score_threshold"] = _cli_args.seg_score_threshold
+    SEG["mask_threshold"] = _cli_args.seg_mask_threshold
+    SEG["drop_stuff"] = _cli_args.seg_drop_stuff
     _seg_ckpt = _cli_args.seg_checkpoint or _find_default_seg_checkpoint()
     if _seg_ckpt and os.path.exists(_seg_ckpt):
         try:
@@ -222,7 +373,7 @@ if not _cli_args.no_seg:
         except Exception as e:  # pragma: no cover - demo robustness
             print(f"⚠ Could not load segmentation checkpoint ({_seg_ckpt}): {e}")
     else:
-        print("No D4RT segmentation checkpoint found; 3D mask coloring disabled. "
+        print("No segmentation checkpoint found; 3D mask coloring disabled. "
               "Pass --seg_checkpoint /path/to/checkpoint.pth to enable it.")
 
 
@@ -377,25 +528,40 @@ def update_gallery_on_upload(input_video, input_images):
     return None, target_dir, image_paths, "Upload complete. Click 'Reconstruct' to begin 3D processing."
 
 
+def _maskdino_scene_frames(scene: dict):
+    """
+    Read one scene's frames off disk the way the run did: `--num_frames` evenly-spaced views at
+    518x518. MaskDINO checkpoints store no pixels, so this is the only way to get the exact
+    frames the reported numbers were computed on.
+    """
+    train_args = SEG["train_args"]
+    ds = ScanNetMultiSceneDataset(
+        [scene["scene_dir"]], num_frames=train_args.get("num_frames", 8), img_size=518,
+        frame_sampling="even", instance_level=not train_args.get("class_level", False))
+    sample = ds[0]
+    return sample["images"], sample.get("frame_names")
+
+
 def load_checkpoint_scene(scene_label=None):
     """
-    Populate the gallery with the exact scene frames stored in the loaded D4RT checkpoint
-    (written as lossless PNGs so VGGT reconstructs them at the same 518x518 resolution the
-    decoder head was trained on). Lets the user reconstruct that scene and then color the 3D
-    point cloud by the predicted instances ("Color By: Predicted Instances").
+    Populate the gallery with one scene of the loaded checkpoint (written as lossless PNGs so
+    VGGT reconstructs them at the same 518x518 resolution the head was trained on). Lets the
+    user reconstruct that scene and then color the 3D point cloud by the predicted instances
+    ("Color By: Predicted Instances").
 
-    `scene_label` selects which checkpoint scene to load (multi-scene checkpoints store the
-    training scenes AND the held-out validation scene); it also switches the query points /
-    GT used by `compute_seg_colors` to that scene's.
+    `scene_label` selects the scene: a MaskDINO run's val/train scenes read from
+    `--seg_scans_root`, or the scenes a multi-scene D4RT checkpoint stored inside itself (in
+    which case it also switches the query points / GT used by `compute_seg_colors`).
     """
     if SEG["scenes"] is None:
         return None, "None", None, (
-            "No segmentation checkpoint loaded. Start the demo with "
-            "`--seg_checkpoint /path/to/checkpoint.pth`."
+            "No checkpoint scene available. Start the demo with "
+            "`--seg_checkpoint /path/to/checkpoint.pth` (and, for a MaskDINO checkpoint, a "
+            "`--seg_scans_root` that holds the run's scenes). You can also just upload images."
         )
 
-    if scene_label and scene_label in SEG["scene_labels"]:
-        _select_seg_scene(SEG["scene_labels"].index(scene_label))
+    idx = SEG["scene_labels"].index(scene_label) if scene_label in SEG["scene_labels"] else 0
+    _select_seg_scene(idx)
 
     from PIL import Image
 
@@ -404,8 +570,15 @@ def load_checkpoint_scene(scene_label=None):
     target_dir_images = os.path.join(target_dir, "images")
     os.makedirs(target_dir_images, exist_ok=True)
 
-    imgs = SEG["images"][0]  # [S, 3, H, W] in [0, 1]
-    names = SEG["frame_names"]
+    if SEG["kind"] == "maskdino":
+        try:
+            imgs, names = _maskdino_scene_frames(SEG["scenes"][idx])
+        except Exception as e:  # pragma: no cover - demo robustness
+            return None, "None", None, (
+                f"Could not read {SEG['scenes'][idx]['name']} from {SEG_SCANS_ROOT}: {e}")
+    else:
+        imgs = SEG["images"][0]  # [S, 3, H, W] in [0, 1]
+        names = SEG["frame_names"]
     image_paths = []
     for s in range(imgs.shape[0]):
         arr = (imgs[s].permute(1, 2, 0).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
@@ -421,8 +594,8 @@ def load_checkpoint_scene(scene_label=None):
 
     image_paths = sorted(image_paths)
     msg = (
-        f"Loaded checkpoint scene ({len(image_paths)} frames). Click 'Reconstruct', then set "
-        "'Color By' = 'Predicted Instances' to see the masks in 3D."
+        f"Loaded {SEG['scenes'][idx]['name']} ({len(image_paths)} frames). Click 'Reconstruct', "
+        "then set 'Color By' = 'Predicted Instances' to see the masks in 3D."
     )
     return None, target_dir, image_paths, msg
 
@@ -720,11 +893,11 @@ with gr.Blocks(
                     choices=SEG["scene_labels"],
                     value=SEG["scene_labels"][0] if SEG["scene_labels"] else None,
                     label="Checkpoint Scene (train/val)", scale=1,
-                    visible=SEG["head"] is not None and len(SEG["scene_labels"]) > 1,
+                    visible=len(SEG["scene_labels"]) > 1,
                 )
                 load_ckpt_btn = gr.Button(
-                    "Load D4RT Checkpoint Scene", scale=1,
-                    variant="secondary", visible=SEG["head"] is not None,
+                    "Load Checkpoint Scene", scale=1,
+                    variant="secondary", visible=SEG["scenes"] is not None,
                 )
                 clear_btn = gr.ClearButton(
                     [input_video, input_images, reconstruction_output, log_output, target_dir_output, image_gallery],
@@ -998,4 +1171,8 @@ with gr.Blocks(
         outputs=[reconstruction_output, target_dir_output, image_gallery, log_output],
     )
 
+
+# Launch only when run as a script: `tests/test_demo_gradio_maskdino.py` imports this module to
+# exercise its glue on CPU, and an import that starts serving would hang the test.
+if __name__ == "__main__":
     demo.queue(max_size=20).launch(show_error=True, share=False)
