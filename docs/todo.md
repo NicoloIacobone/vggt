@@ -152,10 +152,15 @@ RMS after Sim(3) is 0.14 m (≈ the vote radius), only ~16 % of mesh vertices ge
 lifting knobs alone bought +0.016 AP50 — more than most decoder ablations are worth. Ordered by
 expected value per hour:
 
-- [ ] **5a. Knob sweep, honestly.** `--vote_radius` × `--depth_conf_percentile` (× `--icp`)
-      swept on the leak-free checkpoint. The current tuned row inherited its knobs from a leaky
-      run; a clean sweep both replaces it and maps the sensitivity. Cheap (~45 min/point, CPU-ish
-      GPU load) and it bounds how much of the gap is knobs vs. genuine geometry error.
+- [~] **5a. Knob sweep — SUBMITTED 2026-08-03** (jobs 9508450 / 9508451 / 9508453 / 9508455:
+      radius 0.1 with conf 0, radius 0.05 and 0.15 at conf 25, radius 0.1 at conf 50). With the
+      two points already run this is a 2-factor picture of `--vote_radius` ×
+      `--depth_conf_percentile` on the leak-free checkpoint. **Report it as a SENSITIVITY
+      ANALYSIS, not as a better headline** — the knobs are being swept on val-312, so picking
+      the argmax and quoting it is test-set tuning. The headline stays the defaults row
+      (§9.6); the sweep's job is to say how much of the SegVGGT gap is lifting hyper-parameters
+      versus genuine geometry error, and to replace the currently-quoted tuned row (whose knobs
+      came from a leaky run) with a clean equivalent.
 - [ ] **5b. Coverage.** ~16 % of vertices voted / ~65 % of annotated vertices assigned caps
       recall outright. Options: more frames per scene (the 25k export has ~16–30; SegVGGT uses up
       to 24), overlapping bundles, or per-frame confidence-weighted voting instead of hard
