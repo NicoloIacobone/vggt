@@ -196,11 +196,12 @@ skipped rather than counted as zeros.
 
 ### 4.4 What these numbers are not comparable to
 
-- **Published ScanNet instance-segmentation numbers** (SegVGGT, FAST3DIS, IGGT, …). Those unproject
-  per-view masks into the scene point cloud and score the official **3D** instance benchmark.
-  We score **per-view 2D masks on a 37×37 grid with our own metric implementation**: different
-  task, different GT, different metric code. **§5 is the exception** — it runs exactly their
-  protocol and is the only section that may sit next to their numbers.
+- **Published ScanNet instance-segmentation numbers** (SegVGGT, FAST3DIS, IGGT, …). Those score
+  masks on the scene point cloud against the official **3D** instance benchmark. We score
+  **per-view 2D masks on a 37×37 grid with our own metric implementation**: different
+  task, different GT, different metric code. **§5 is the exception** — it runs the official 3D
+  benchmark and is the only section that may sit next to published numbers, subject to the
+  two-protocol rule stated there.
 - **The official ScanNet v2 val split.** Our val = scenes 0080–0089 is a project convention, kept
   because it is the one ruler every arm and every scale point was measured on. A separate
   comparability read-out on the official val list (77 scenes present in our data, 413 train / 77
@@ -210,7 +211,7 @@ skipped rather than counted as zeros.
 
 ---
 
-## 5. The 3D benchmark — the number that is comparable to the literature (2026-08-03)
+## 5. The 3D benchmark — the number that is comparable to the literature (2026-08-03; protocol note added 2026-08-04)
 
 Everything above is 2D and self-measured. This section is not: per-view masks are unprojected
 into the scene point cloud using **VGGT's own predicted depth and cameras** (no ground-truth
@@ -218,16 +219,54 @@ geometry at inference), majority-voted per superpoint, and scored by the **offic
 instance evaluator**, vendored unmodified, on the **official val-312 split** with a model
 trained on the official 1201-scene train split (no overlap).
 
-| Method | backbone | AP | AP50 | AP25 |
-|---|---|---|---|---|
-| SegVGGT (published) | VGGT, **LoRA-adapted** | 0.504 | 0.717 | 0.870 |
-| FAST3DIS (published) | Depth-Anything-V3, **LoRA-adapted** | 0.038 | 0.096 | 0.316 |
-| **ours** | **VGGT, strictly frozen** | **0.023** | **0.067** | **0.268** |
-| ours, tuned lifting knobs | 〃 | 0.029 | 0.083 | 0.305 |
+**First, which published numbers this can sit next to.** The literature's 3D numbers are **two
+protocols, not one**, split by how a finished 2D mask reaches the benchmark point cloud:
 
-**We are in FAST3DIS's ballpark while never touching the backbone; SegVGGT is an order of
-magnitude ahead.** Both statements belong in any honest summary. The tuned row's two knobs were
-selected on an earlier (leaky) diagnostic run, so the plain row is the headline.
+- **Unposed / predicted-geometry transfer** — masks are unprojected with the model's *own*
+  predicted depth and cameras. FAST3DIS, IGGT and **we** are here. The score is 2D mask quality
+  **×** feed-forward geometry quality.
+- **Posed transfer** — **SegVGGT** is here. Its released evaluator never unprojects: it projects
+  the GT benchmark cloud into each view using ScanNet's **GT poses and intrinsics**, resolving
+  occlusion with the **ScanNet sensor depth** map, so there is no Sim(3), no ICP and no geometry
+  error at all. The score is 2D mask quality alone.
+
+Both use the official ScanNet evaluator with identical options — the evaluator is not the
+difference, the bridge is. This is **not** an accusation: SegVGGT's *model* takes unposed images
+only, exactly like ours, and using GT geometry solely to transfer finished masks for scoring is a
+legitimate way to isolate segmentation quality from reconstruction quality. It simply means the
+two rows below are answering different questions. (Evidence, with file:line references into their
+released code: `docs/RELATED_WORK.md`, "Two 3D protocols"; `docs/MASKDINO.md` §9.9.)
+
+| Method | backbone | protocol | AP | AP50 | AP25 |
+|---|---|---|---|---|---|
+| FAST3DIS (published) | Depth-Anything-V3, **LoRA-adapted** | unposed | 0.038 | 0.096 | 0.316 |
+| IGGT (published) | — | unposed | 0.028 | 0.112 | 0.287 |
+| **ours** | **VGGT, strictly frozen** | **unposed** | **0.023** | **0.067** | **0.268** |
+| ours, tuned lifting knobs | 〃 | unposed | 0.029 | 0.083 | 0.305 |
+| **ours, run under SegVGGT's own protocol** | **VGGT, strictly frozen** | **posed** | **0.060** | **0.156** | **0.408** |
+| SegVGGT (published) | VGGT, **LoRA-adapted** | **posed** | 0.504 | 0.717 | 0.870 |
+
+**Among the methods scored the same way as us we are in FAST3DIS's ballpark, while never touching
+the backbone; SegVGGT's much larger number comes from a protocol in which the 2D→3D step is
+error-free by construction.** Both statements belong in any honest summary, and neither should be
+replaced by "they are an order of magnitude ahead" — that framing compares across protocols. The
+tuned row's two knobs were selected on an earlier (leaky) diagnostic run, so the plain row is the
+headline.
+
+**We now have the like-for-like row too, and it does not close the gap** (added 2026-08-04,
+docs/MASKDINO.md §9.10; `--transfer_mode gt_projection`, licensed by an oracle whose round-trip
+purity is 0.9999 over all 312 scenes). Putting *our* masks through *SegVGGT's* bridge — same
+checkpoint, same 17 frames, same queries, same evaluator, only the 2D→3D step swapped — takes us
+from 0.067 to 0.156 AP50. So the protocol is worth **2.3×** of the gap and **~4.6× is real**
+(their LoRA-adapted backbone, 4–6× the views, 259×196 masks vs our 37×37, 600 kept queries vs
+our 100). The right sentence for a supervisor is: *"printed side by side the two numbers measure
+different things; measured properly, we are 2.3× closer than the table suggests and still
+meaningfully behind."* The unposed 0.023 / 0.067 / 0.268 remains our headline — the posed row is
+a decomposition, not a result.
+
+That decomposition also bounds our own roadmap: 0.156 is what our current masks score with a
+*perfect* bridge, so all remaining lifting/registration work is worth at most +0.089 AP50, and
+anything beyond that has to come from the masks themselves.
 
 Two findings worth carrying:
 

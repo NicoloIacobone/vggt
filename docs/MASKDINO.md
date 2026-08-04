@@ -19,8 +19,13 @@ and `--mask_upsample 2` stays neutral even on that ruler — recognition binds, 
 **The reportable 3D number exists (§9.6, 2026-08-03).** Trained on the official 1201-scene
 split and scored by the vendored official evaluator on val-312, the multi-frame model reaches
 **AP 0.023 / AP50 0.067 / AP25 0.268** (0.029 / 0.083 / 0.305 with tuned lifting knobs) —
-**FAST3DIS's ballpark (0.038 / 0.096 / 0.316) on a strictly frozen backbone**, with SegVGGT
-(0.504 / 0.717 / 0.870) an order of magnitude ahead. Two things it settles: the leak-free
+**FAST3DIS's ballpark (0.038 / 0.096 / 0.316) on a strictly frozen backbone**, alongside IGGT
+(0.028 / 0.112 / 0.287). SegVGGT's 0.504 / 0.717 / 0.870 is **a different protocol** (§9.9): its
+evaluator transfers masks with ScanNet's GT poses and sensor depth, so it measures 2D mask
+quality alone where ours measures 2D mask quality times predicted geometry. **Measured, that
+protocol is worth 2.3× of the gap and no more** (§9.10): run on our own masks it takes us to
+0.060 / 0.156 / 0.408, so a factor of ~4.6 to SegVGGT is real and remains. Two things §9.6
+settles: the leak-free
 checkpoint *beats* the leaked diagnostic 1.6× (data scale outweighs seeing the val scenes —
 the 3D ruler reproducing §7.2's data-limited conclusion), and on this ruler the **lifting step,
 not the decoder, is the binding constraint**.
@@ -842,6 +847,14 @@ masks on the official benchmark point clouds**. This section is that protocol, e
 a **third ruler** — never quote its numbers next to the per-frame or per-bundle tables, and never
 convert between them.
 
+**And the published 3D numbers are themselves two protocols, not one — read §9.9 before quoting
+any of them.** What this section implements is **unposed transfer**: masks reach the point cloud
+through the model's *own predicted* depth and cameras, which is also what FAST3DIS
+(0.038 / 0.096 / 0.316) and IGGT (0.028 / 0.112 / 0.287) do. SegVGGT's 0.504 / 0.717 / 0.870 is
+**posed transfer**: its evaluator moves masks with ScanNet's GT poses, intrinsics and sensor
+depth, so no geometry error enters at all. Same evaluator, different bridge, and the bridge is
+what separates the two clusters.
+
 ### 9.1 Protocol
 
 `scripts/eval_3d_maskdino.py`, per official-val scene (`slurm/eval_3d_maskdino.sh` for the full
@@ -866,9 +879,12 @@ convert between them.
    the mesh vertices (`--icp`, on by default; scale is re-estimated every iteration). This is the
    FAST3DIS "Sim(3)+ICP" convention — GT poses are used only to place the finished prediction in
    the mesh's coordinate frame, never at inference.
-4. **Lift (SegVGGT recipe).** Every kept pixel-point votes for its query on the nearest mesh
-   vertex within `--vote_radius` (5 cm); each superpoint (`.segs.json`) goes entirely to its
-   plurality query (unvoted → unassigned). One query = one 3D instance across the whole scene —
+4. **Lift.** Every kept pixel-point votes for its query on the nearest mesh vertex within
+   `--vote_radius` (5 cm); each superpoint (`.segs.json`) goes entirely to its
+   plurality query (unvoted → unassigned). The **superpoint majority vote is the SegVGGT
+   convention**; the radius is ours and exists only because our points land near, not on, the
+   mesh — under posed transfer (§9.9) there is nothing to bridge. One query = one 3D instance
+   across the whole scene —
    no post-hoc matching anywhere, which is exactly what §8.2 buys.
 5. **Score** with the vendored official evaluator (9.2): AP (0.50:0.05:0.95) / AP50 / AP25.
 
@@ -933,9 +949,11 @@ checkpoint). 312/312 scenes, 0 failures, ~45 min/run, ~7.6 s/scene.
 | defaults (radius 5 cm, no conf filter), job 9327269 | 0.013 / 0.041 / 0.223 | 0.014 / 0.044 / 0.236 |
 | `--vote_radius 0.1 --depth_conf_percentile 25`, job 9327271 | **0.016 / 0.052 / 0.238** | 0.016 / 0.055 / 0.253 |
 
-Context (published full-split numbers, both on adapted backbones): FAST3DIS 0.038 / 0.096 /
-0.316 — same order of magnitude as us; SegVGGT 0.504 / 0.717 / 0.870 — far above. Per class,
-`toilet` leads (AP50 0.28–0.33); `otherfurniture` is 0 by construction (§9.2).
+Context (published full-split numbers, all on adapted backbones): under **our** protocol
+(unposed transfer, §9.9) FAST3DIS scores 0.038 / 0.096 / 0.316 and IGGT 0.028 / 0.112 / 0.287 —
+the same order of magnitude as us. SegVGGT's 0.504 / 0.717 / 0.870 is far above, but under the
+**posed-transfer** protocol, so it is not a like-for-like comparison. Per class, `toilet` leads
+(AP50 0.28–0.33); `otherfurniture` is 0 by construction (§9.2).
 
 **Reading (from the per-scene diagnostics in the json):**
 
@@ -976,9 +994,13 @@ otherwise honest.
 Three readings:
 
 1. **We land in FAST3DIS's ballpark on a frozen backbone.** AP25 0.305 vs its 0.316, AP50 0.083
-   vs 0.096, AP 0.029 vs 0.038 — against a *LoRA-adapted* DA3, while we never touch VGGT.
-   SegVGGT (0.504 / 0.717 / 0.870, also LoRA-adapted) stays an order of magnitude ahead; state
-   that plainly rather than framing the gap away.
+   vs 0.096, AP 0.029 vs 0.038 — against a *LoRA-adapted* DA3, while we never touch VGGT. IGGT
+   (0.028 / 0.112 / 0.287) sits in the same cluster. SegVGGT (0.504 / 0.717 / 0.870, also
+   LoRA-adapted) is **far above but in the other protocol** (§9.9): its masks are transferred
+   with ScanNet's GT poses and sensor depth, so its number carries no geometry error, while every
+   number in this cluster is 2D mask quality *times* predicted-geometry quality. State the
+   protocol difference plainly — and state just as plainly that it is a legitimate evaluation
+   choice on their part, not a trick, since their model is as unposed as ours.
 2. **The leak-free checkpoint BEATS the leaked one** — 0.083 vs 0.052 AP50 at identical knobs,
    ~1.6×. §9.5's reading 4 predicted "roughly nearby"; the truth is that 1201 official train
    scenes outweigh *having seen the val scenes*. This is the 3D ruler independently reproducing
@@ -1126,3 +1148,178 @@ loaded there is a single RGB panel. **Not executable here:** this environment ha
 the WebGL/camera/pointer code is checked structurally (one camera object, one canvas per panel,
 decodable payload, escaped srcdoc) but has never been *run*. Everything upstream of the browser
 — filtering, colours, payload, ordering — is tested numerically.
+
+### 9.9 Two 3D protocols — what our number is and is not comparable to (2026-08-04)
+
+The published ScanNet-3D numbers are printed in the literature as one table. They are **two
+protocols**, separated by how a finished 2D mask reaches the benchmark point cloud — and that
+step, not the evaluator, is what separates the two clusters of results.
+
+| | **posed transfer** | **unposed / predicted-geometry transfer** |
+|---|---|---|
+| who | **SegVGGT** 0.504 / 0.717 / 0.870 | **FAST3DIS** 0.038 / 0.096 / 0.316, **IGGT** 0.028 / 0.112 / 0.287, **this section** 0.023 / 0.067 / 0.268 |
+| mask → point cloud | the GT cloud is **projected into each view** with ScanNet GT poses + intrinsics; occlusion from the ScanNet **sensor depth** map | pixels are **unprojected** with the model's own predicted depth + cameras, then Sim(3)+ICP into the mesh frame for scoring (§9.1 step 3) |
+| geometry error in the bridge | **zero** — correspondence exact by construction | the full feed-forward error (ours: median camera-centre RMS 0.14 m, §9.5) |
+| what the score measures | 2D mask quality | 2D mask quality **×** feed-forward geometry quality |
+| evaluator | official ScanNet, same options as §9.2 | official ScanNet, same options as §9.2 |
+
+**Evidence** (their released code, cloned at `/cluster/scratch/niacobone/SegVGGT`, read
+2026-08-04 — every claim below was checked against the file, not the paper):
+
+- `eval/eval_instance_seg.py:243-336` (`map_pred_inst_to_gt_pointcloud`) **does not unproject**.
+  It projects the GT benchmark point cloud into each view and reads the predicted 2D mask at the
+  landing pixel.
+- Extrinsics come from ScanNet GT `pose/{frame}.txt` (`eval_instance_seg.py:198`); intrinsics
+  from GT `intrinsic_depth.txt` (`eval/instance_eval_common.py:68`); occlusion is decided against
+  the ScanNet **sensor** depth `depth/{frame}.png` within 0.1 m (`eval_instance_seg.py:178-182`,
+  `305-307`, `451`).
+- Therefore **no Sim(3), no ICP, no scale estimation, no vote radius** — none of §9.1 step 3
+  exists on their side, and none of the failure modes §9.6 reading 3 diagnoses can occur.
+- **VGGT's geometry heads are never called** in their instance-eval path:
+  `eval/instance_eval_common.py:168-189` runs the aggregator and the semantic head only.
+- The metric code is mmdet3d's copy of the official ScanNet evaluator with the **same options as
+  our vendored one** — overlaps `[0.5:0.05:0.9] + [0.25]`, `min_region_sizes 100`, 18 classes,
+  superpoint majority (`eval/instance_seg_eval.py:523-540` vs `train/benchmark3d.py:36-37`).
+  **The evaluator is not the difference.**
+
+Secondary differences, all in their favour but none of them the main effect: **~75–100 views per
+scene** (every 20th frame of a full `.sens` extraction — `eval_instance_seg.py:169` plus their
+`docs/data_preparation.md`) against our ~17 from the official 25k export (§9.3); masks at
+**259×196**, half of their 518×392 input (`return_feature_maps_down_ratio: 2` in
+`configs/eval/segvggt_scannetv2.yaml`) against our 37×37 grid; **600** kept query-class pairs
+(`instance_eval_common.py:107`) against our `--eval_topk 100`; and they train and are scored on
+`otherfurniture`, which our 19-class head cannot predict (§9.2).
+
+**Say this fairly.** SegVGGT is not cheating and must never be described as if it were. Their
+*model* consumes unposed RGB only, exactly like ours — the GT geometry appears nowhere in
+inference, only in the transfer of finished masks onto the benchmark cloud for scoring. That is a
+legitimate design: it deliberately isolates segmentation quality from reconstruction quality,
+which is a question worth measuring on its own. The problem is only that both protocols appear in
+the literature inside one table without the distinction, and SegVGGT and FAST3DIS are
+contemporaneous preprints (2603.19926, 2603.25993) so neither could have cited the other.
+
+**What follows for us.** The right comparison for §9.6 is the unposed cluster, where we sit with
+FAST3DIS and IGGT on a strictly frozen backbone. Separately, running the posed protocol on our
+*own* masks isolates our 2D mask quality from our lifting error and bounds what fixing §9.6
+reading 3 could ever buy — the same decomposition SegVGGT's number already enjoys. That is
+docs/todo.md 5e; the mechanism exists as `--transfer_mode gt_projection`, and its number is a
+**diagnostic decomposition only** — the headline stays the unposed one.
+
+**MEASURED 2026-08-04 — §9.10, and it corrects this section.** Under SegVGGT's own bridge our
+masks score 0.060 / 0.156 / 0.408, against their 0.717 AP50. So the protocol is worth a factor
+of **2.3** of the AP50 gap and a factor of **~4.6 is real and remains**. An earlier draft of
+this section called the difference "a different protocol, not a different league"; that is
+**wrong** and has been struck — it is a different protocol *and* a real gap, and the honest
+framing is that the protocol difference makes the raw side-by-side meaningless, not that it
+makes the two models equivalent.
+
+### 9.10 The posed-transfer column, measured (todo 5e; jobs 9607206 / 9607208 / 9607210, 2026-08-04)
+
+§9.9 established that the two published clusters differ by their 2D→3D bridge. This section
+*measures* the difference on our own masks: the same checkpoint, the same frames, the same
+queries, the same evaluator — only the bridge swapped. It is a **decomposition, not a new
+headline**: the reportable number stays §9.6's 0.023 / 0.067 / 0.268.
+
+**`--transfer_mode {unproject,gt_projection}`** (`scripts/eval_3d_maskdino.py`, geometry in
+`train/eval3d_geometry.py`). `unproject` is the default and is byte-for-byte today's pipeline.
+`gt_projection` replaces §9.1 steps 3–4's first half with SegVGGT's
+`map_pred_inst_to_gt_pointcloud`: per frame, the mesh vertices are transformed by `inv(pose)`,
+projected with the GT **depth** intrinsic into the native 640×480 grid, kept when
+`|z_projected − z_sensor| < --depth_tolerance` (0.1 m, SegVGGT's value) against the ScanNet
+sensor depth, and each survivor votes for whichever query owns the pixel it lands on. The
+superpoint majority, the query selection, the class scores and the vendored evaluator are
+untouched, so **the transfer is the only variable**. VGGT's depth and camera heads are not even
+run in this mode, which makes "no predicted geometry in this column" structural rather than a
+convention.
+
+```bash
+sbatch --export=ALL,CHECKPOINT=<mf_run>/checkpoint_best_bundle.pth,\
+EXTRA_ARGS='--transfer_mode gt_projection' slurm/eval_3d_maskdino.sh
+```
+
+**The pixel mapping, derived not assumed.** This is the one place a silent error would produce a
+plausible number, so it is written out in `train/eval3d_geometry.py::mask_grid_intrinsic`.
+ScanNet's color (1296×968) and depth (640×480) intrinsics are the same camera at two
+resolutions — normalised `fx/W, fy/H, cx/W, cy/H` agree to <1e-3 on the val-312 tar — so one
+pose serves both. The depth test runs in the **native** depth grid (the sensor map is never
+resampled). Our mask, however, lives on a 518² grid that `load_frames_by_name` produced by
+**squashing** the whole color image (`Image.resize((518,518))`: no crop, no letterbox, aspect
+ratio not preserved), so `K_mask = diag(518/1296, 518/968, 1) @ K_color`. The two factors differ
+(0.400 vs 0.535); an *isotropic* rescale — the natural assumption if you expect aspect-preserving
+preprocessing, as SegVGGT's own 518×392 pipeline has — misplaces the principal point by ~40 rows
+and every mask read with it. Cross-checked against the reference implementation: SegVGGT's
+per-axis `u * mask_w / depth_w` from the depth grid lands within 0.5 px of this derivation.
+
+**The oracle that licenses the number** (`scripts/eval3d_projection_oracle.py`,
+`slurm/eval3d_projection_oracle.sh`, job 9607210, CPU-only, 312/312 scenes). Mirroring §9.2's
+discipline: the 3D GT is *rendered into every view through the transfer's own projection*
+(nearest vertex wins the z-buffer; unannotated vertices occlude and then paint "no instance") and
+fed straight back as predictions.
+
+| | value | reading |
+|---|---|---|
+| round-trip **purity** | **0.9999** (worst scene 0.9977) | of the annotated vertices the transfer assigned, the fraction returned to their **own** instance — this is the mapping test, and it passes |
+| AP / AP50 / AP25 | 0.828 / **0.948** / 0.974 | the protocol's **ceiling on our ~17-frame budget** |
+| sensor-depth inlier | 0.618 | of projections with a depth reading — the rest are surfaces the frame does not actually see |
+| visible vertices | 0.666 | fraction of mesh vertices any frame sees at all |
+
+The ceiling is 0.948 rather than 1.000 for one reason and it is not the mapping: ~9 % of
+annotated vertices are seen by no frame, so they are missing from every recovered mask and the
+strictest IoU bars fail. Purity 0.9999 is what proves the pixels are read in the right place — a
+shifted, transposed or isotropically-rescaled mapping collapses it, which
+`tests/test_maskdino_eval3d.py` also asserts synthetically.
+
+**Results.** Checkpoint `maskdino_sf_list1201_mf_20260802_133826/checkpoint_best_bundle.pth`
+(leak-free, §9.4 satisfied), all 312 val scenes, 0 failures, all knobs at their defaults. Both
+rows saw **the same 17.4 frames/scene and the same 97.6 kept queries/scene** — every frame of
+the 25k export has its depth png, so not even the frame set moved.
+
+| transfer | AP / AP50 / AP25 (18-class) | 17-class diagnostic | `voted_vertex_frac` | `annotated_assigned_frac` |
+|---|---|---|---|---|
+| `unproject` (**the headline**, §9.6) | **0.023 / 0.067 / 0.268** | 0.024 / 0.071 / 0.284 | 0.153 | 0.635 |
+| `gt_projection` (SegVGGT's protocol) | 0.060 / 0.156 / 0.408 | 0.064 / 0.166 / 0.432 | **0.342** | **0.791** |
+| — oracle ceiling of the second row | 0.828 / 0.948 / 0.974 | — | — | 0.906 |
+
+**What each row measures.** `unproject` = 2D mask quality **×** feed-forward geometry quality;
+it is the number FAST3DIS (0.038 / 0.096 / 0.316) and IGGT (0.028 / 0.112 / 0.287) are
+comparable to, and it is what our claim "no GT geometry at inference" costs. `gt_projection` =
+2D mask quality **alone**, with a perfect 2D↔3D bridge; it is the number SegVGGT
+(0.504 / 0.717 / 0.870) is comparable to. Neither is "the real" number — they answer different
+questions and must always be printed as two columns.
+
+Four readings:
+
+1. **The bridge costs us a factor of 2.3 in AP50** (0.067 → 0.156), 2.6 in strict AP, 1.5 in
+   AP25. That is the price of the frozen-backbone, no-GT-geometry claim, quantified for the
+   first time, and it is a hard **upper bound on everything todo 5b/5c can buy**: perfect
+   registration and perfect coverage would land at 0.156, not at SegVGGT's 0.717.
+2. **Coverage is where the bridge is lost, and it is the single most informative number here.**
+   `voted_vertex_frac` 0.153 → 0.342 (2.24×) and `annotated_assigned_frac` 0.635 → 0.791 track
+   the AP50 ratio almost exactly. §9.6 reading 3 and §9.8 reading 1 diagnosed "the lifting step
+   binds" from the inside; this measures it from the outside and agrees. Note the honest ordering
+   this implies for todo 5: the vote radius already saturates (§9.8), so what is left in the
+   unposed column is *registration*, and it is worth at most +0.089 AP50.
+3. **The protocol explains part of the SegVGGT gap, not the gap.** Under *their* bridge we score
+   0.156 AP50 against their 0.717 — the protocol accounts for a factor of 2.3 out of the ~10.7×
+   raw ratio; a factor of ~4.6 is real and remains. Do not let §9.9's framing harden into "the
+   gap is protocol": it is *partly* protocol, and the rest is a LoRA-adapted backbone, ~75–100
+   views to our 17, 259×196 masks to our 37×37 grid, and 600 kept queries to our 100 (§9.9,
+   secondary differences). §9.9's line "a different protocol, not a different league" is
+   **corrected by this measurement** and has been amended in place.
+4. **View count is *not* the binding constraint of the posed column** — the oracle's 0.948 AP50
+   ceiling on the same 17 frames says the frame budget could at best take 0.156 → 0.164 in
+   relative terms. What binds at 0.156 with a perfect bridge is the **3D-instance criterion
+   itself**: one mask must cover a whole object across *all* its views at IoU > 0.5, where the
+   per-frame ruler scores each view independently and reports 0.65 AP50 for this checkpoint
+   (§7.8). The residual is multi-view completeness and identity — exactly what §8.2 exists to
+   improve, so on this ruler the decoder *is* back in play.
+
+**Regression control** (job 9607208): the refactor that split the two transfer paths was checked
+by re-running the unposed 4-scene subset of §9.7 with identical knobs — it reproduced
+0.084 / 0.236 / 0.375 exactly. No existing number in §9.5–§9.8 moved.
+
+**Filename discipline.** `--transfer_mode` and `--depth_tolerance` are result-affecting, so they
+tag the output (`eval3d_<stem>__transfer_modegt_projection.json`) and can never overwrite the
+unposed headline's file; `tests/test_maskdino_eval3d.py::test_out_path_names_the_knobs` asserts
+it. `--vote_radius`, `--depth_conf_percentile` and `--icp` are **inert** in `gt_projection` mode
+and the script says so at startup if they are set.

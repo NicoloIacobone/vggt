@@ -289,6 +289,230 @@ def test_pixel_assignment():
 
 
 # ------------------------------------------------------------------------------------------
+# the GT-projection transfer (docs/MASKDINO.md §9.9)
+# ------------------------------------------------------------------------------------------
+
+def _looking_down_pose(center):
+    """camera-to-world of a camera at `center` looking along -z world (OpenCV axes)."""
+    R = np.array([[1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0]])   # cam +z -> world -z
+    pose = np.eye(4)
+    pose[:3, :3] = R
+    pose[:3, 3] = center
+    return pose
+
+
+def test_mask_grid_intrinsic():
+    print("=== Testing the mask-grid intrinsic (the 518² square-squash mapping) ===")
+    from train.eval3d_geometry import mask_grid_intrinsic
+    # the real ScanNet numbers: color 1296x968, our grid 518x518
+    K_color = np.array([[1169.62, 0, 646.295], [0, 1167.11, 489.927], [0, 0, 1]])
+    K_mask = mask_grid_intrinsic(K_color, (1296, 968), (518, 518))
+    sx, sy = 518 / 1296, 518 / 968
+    assert abs(sx - sy) > 0.1, "the squash is anisotropic — that is the whole point"
+    assert np.allclose(K_mask, np.diag([sx, sy, 1.0]) @ K_color)
+
+    # a point on the color image's right edge must land on the mask grid's right edge,
+    # and one on the bottom edge on the bottom edge — the extent-to-extent property
+    for (u_c, v_c) in [(0.0, 0.0), (1296.0, 968.0), (646.295, 489.927), (1295.0, 10.0)]:
+        # invert K_color to get the ray that projects to (u_c, v_c), then push it through
+        ray = np.linalg.inv(K_color) @ np.array([u_c, v_c, 1.0])
+        p = K_mask @ ray
+        assert abs(p[0] / p[2] - u_c * sx) < 1e-9 and abs(p[1] / p[2] - v_c * sy) < 1e-9
+    # the principal point stays at the same *relative* position, which an isotropic
+    # rescale by 518/1296 would get wrong by 40 rows
+    assert abs(K_mask[1, 2] - 489.927 * sy) < 1e-9
+    assert abs(K_mask[1, 2] - 489.927 * sx) > 40
+
+    # cross-check against the reference implementation: SegVGGT rescales the DEPTH-grid
+    # pixel per axis (`u * mask_w / depth_w`, eval_instance_seg.py:293-303). ScanNet's two
+    # intrinsics are proportional, so that route must agree with ours to well under a pixel
+    # — if it did not, one of the two derivations would be wrong.
+    K_depth = np.array([[577.591, 0, 318.905], [0, 578.73, 242.684], [0, 0, 1]])
+    K_segvggt = np.diag([518 / 640, 518 / 480, 1.0]) @ K_depth
+    for ray in ([0.0, 0.0, 1.0], [0.4, -0.3, 1.0], [-0.6, 0.5, 1.0]):
+        ours, theirs = K_mask @ np.array(ray), K_segvggt @ np.array(ray)
+        assert np.abs(ours[:2] - theirs[:2]).max() < 0.5, (ours, theirs)
+    print("✅ K_mask = diag(518/W, 518/H, 1) @ K_color: anisotropic, extent-preserving,\n"
+          "   agrees with SegVGGT's depth-grid rescale to <0.5 px\n")
+
+
+def test_project_vertices_to_view():
+    print("=== Testing per-view vertex projection + sensor-depth visibility test ===")
+    from train.eval3d_geometry import project_vertices_to_view
+
+    # a 4x4 depth image and an 8x8 mask grid of the SAME camera: K_mask is K_depth doubled
+    K_depth = np.array([[2.0, 0, 2.0], [0, 2.0, 2.0], [0, 0, 1]])
+    K_mask = np.diag([2.0, 2.0, 1.0]) @ K_depth
+    pose = _looking_down_pose(np.array([0.0, 0.0, 5.0]))       # camera 5 m up, looking down
+
+    # four vertices at world z = 3 (=> 2 m in front of the camera) spread over the image,
+    # one behind the camera, one outside the frustum
+    verts = np.array([[0.0, 0.0, 3.0], [0.5, 0.0, 3.0], [0.0, 0.5, 3.0], [-0.5, -0.5, 3.0],
+                      [0.0, 0.0, 7.0], [20.0, 0.0, 3.0]])
+    depth = np.full((4, 4), 2.0, dtype=np.float64)             # sensor sees the z=3 plane
+
+    vidx, rows, cols, z, st = project_vertices_to_view(
+        verts, pose, K_depth, depth, K_mask, (8, 8), depth_tolerance=0.1)
+    assert set(vidx.tolist()) == {0, 1, 2, 3}, vidx          # behind / outside are gone
+    assert st["front"] == 5 and st["in_depth"] == 4 and st["depth_inlier"] == 4
+    assert np.allclose(z, 2.0)
+    # Hand-computed: world->cam is diag(1,-1,-1) with t = (0,0,5), so a vertex at world
+    # (x, y, 3) has cam (x, -y, 2) and lands at (4 + 4*x/2, 4 - 4*y/2) on the 8x8 grid
+    # (K_mask = [[4,0,4],[0,4,4],[0,0,1]]). Vertex 0 sits on the principal point.
+    hit = dict(zip(vidx.tolist(), zip(rows.tolist(), cols.tolist())))
+    assert hit[0] == (4, 4), hit
+    assert hit[1] == (4, 5) and hit[2] == (3, 4) and hit[3] == (5, 3), hit
+
+    # occlusion: the sensor reports a surface 1 m closer, so nothing is visible any more
+    occluded = np.full((4, 4), 1.0, dtype=np.float64)
+    vidx2, _, _, _, st2 = project_vertices_to_view(
+        verts, pose, K_depth, occluded, K_mask, (8, 8), depth_tolerance=0.1)
+    assert len(vidx2) == 0 and st2["has_reading"] == 4 and st2["depth_inlier"] == 0
+    # ... unless the tolerance is opened past the disagreement
+    vidx3, _, _, _, _ = project_vertices_to_view(
+        verts, pose, K_depth, occluded, K_mask, (8, 8), depth_tolerance=1.5)
+    assert len(vidx3) == 4
+
+    # a missing sensor reading (0 mm) is rejected, not treated as depth 0
+    holes = depth.copy()
+    holes[:] = 0.0
+    vidx4, _, _, _, st4 = project_vertices_to_view(
+        verts, pose, K_depth, holes, K_mask, (8, 8), depth_tolerance=0.1)
+    assert len(vidx4) == 0 and st4["has_reading"] == 0
+    print("✅ projection, frustum culling, depth-agreement visibility, 0-reading guard\n")
+
+
+def test_gt_projection_transfer_recovers_a_known_scene():
+    """
+    A synthetic scene whose correct answer is known by construction: two flat instances on
+    a plane, two cameras, GT masks painted by projecting the vertices. The transfer must
+    return each vertex to its own instance, and the evaluator must score exactly 1.0.
+    """
+    print("=== Testing gt_projection transfer end to end on a known scene ===")
+    from train.benchmark3d import evaluate
+    from train.eval3d_geometry import project_votes_to_vertices, superpoint_majority
+
+    rng = np.random.default_rng(3)
+    # two 200-vertex square patches on the z=0 plane, 1 m apart, + a 200-vertex void patch
+    def patch(cx, cy):
+        return np.stack([rng.uniform(cx - 0.3, cx + 0.3, 200),
+                         rng.uniform(cy - 0.3, cy + 0.3, 200), np.zeros(200)], axis=1)
+    vertices = np.concatenate([patch(-0.7, 0.0), patch(0.7, 0.0), patch(0.0, 1.6)])
+    superpoints = np.repeat(np.arange(6), 100)
+    gt = np.zeros(600, dtype=np.int64)
+    gt[0:200], gt[200:400] = 5 * 1000 + 1, 5 * 1000 + 2       # two chairs; patch 3 is void
+
+    K_depth = np.array([[100.0, 0, 60.0], [0, 100.0, 60.0], [0, 0, 1]])
+    K_mask = np.diag([518 / 120, 518 / 120, 1.0]) @ K_depth
+    poses = np.stack([_looking_down_pose(np.array([0.0, 0.0, 2.0])),
+                      _looking_down_pose(np.array([0.1, 0.4, 2.5]))])
+    # exact sensor depth of the z=0 plane for each camera (the plane fills the frustum)
+    depth_maps = np.stack([np.full((120, 120), p[2, 3]) for p in poses])
+
+    # paint the GT masks by projecting the vertices with the SAME geometry: instance 0 and
+    # instance 1 own the pixels their vertices land on
+    from train.eval3d_geometry import project_vertices_to_view
+    pixel_query = np.full((2, 518, 518), -1, dtype=np.int64)
+    for f in range(2):
+        vidx, rows, cols, _, _ = project_vertices_to_view(
+            vertices, poses[f], K_depth, depth_maps[f], K_mask, (518, 518))
+        inst = np.where(vidx < 200, 0, np.where(vidx < 400, 1, -1))
+        pixel_query[f, rows, cols] = inst
+
+    votes, stats = project_votes_to_vertices(vertices, poses, K_depth, K_mask, depth_maps,
+                                             pixel_query, num_queries=2)
+    assert stats["depth_inlier_frac"] == 1.0            # a plane in full view: every hit
+    assert stats["visible_vertex_frac"] == 1.0
+    assign = superpoint_majority(votes, superpoints)
+    assert (assign[:200] == 0).all() and (assign[200:400] == 1).all()
+    assert (assign[400:] == -1).all()                   # the void patch painted nothing
+
+    preds = [{"mask": assign == q, "label_id": 5, "confidence": 1.0 - 0.1 * q}
+             for q in range(2)]
+    r = evaluate({"s1": preds}, {"s1": gt})
+    assert r["all_ap"] == 1.0 and r["all_ap_50%"] == 1.0 and r["all_ap_25%"] == 1.0
+
+    # the mapping is load-bearing: an ISOTROPIC rescale (SegVGGT's `u * mask_w / depth_w`,
+    # right only for an aspect-preserving resize) would read the wrong pixels. Simulate it
+    # by transferring with a K_mask that scales both axes by 518/120 but on a grid whose
+    # rows were squashed differently.
+    K_wrong = np.diag([518 / 120, 400 / 120, 1.0]) @ K_depth
+    votes_w, _ = project_votes_to_vertices(vertices, poses, K_depth, K_wrong, depth_maps,
+                                           pixel_query, num_queries=2)
+    assign_w = superpoint_majority(votes_w, superpoints)
+    assert not np.array_equal(assign_w, assign), "a wrong intrinsic must change the answer"
+    print("✅ gt_projection: exact round-trip, AP 1.0, wrong intrinsic detected\n")
+
+
+def test_project_votes_shape_guards():
+    print("=== Testing gt_projection transfer input guards ===")
+    from train.eval3d_geometry import project_votes_to_vertices
+    verts = np.zeros((5, 3))
+    K = np.eye(3)
+    for bad, why in [
+        (dict(pixel_query=np.zeros((4, 4), dtype=np.int64), poses=np.zeros((1, 4, 4)),
+              depth_maps=np.zeros((1, 4, 4))), "2-D pixel_query"),
+        (dict(pixel_query=np.zeros((2, 4, 4), dtype=np.int64), poses=np.zeros((1, 4, 4)),
+              depth_maps=np.zeros((2, 4, 4))), "pose/frame count mismatch"),
+    ]:
+        try:
+            project_votes_to_vertices(verts, bad["poses"], K, K, bad["depth_maps"],
+                                      bad["pixel_query"], num_queries=1)
+            raise AssertionError(f"{why} did not raise")
+        except ValueError:
+            pass
+    print("✅ shape guards on pixel_query / poses / depth_maps\n")
+
+
+def test_frames25k_geometry_loaders():
+    print("=== Testing 25k intrinsics / depth / color-size loaders ===")
+    from PIL import Image
+    from train.scannet3d import (load_frames25k_color_size, load_frames25k_depth,
+                                 load_frames25k_intrinsics, sample_frames25k)
+    with tempfile.TemporaryDirectory() as d:
+        scene = Path(d) / "scene0000_00"
+        for sub in ("color", "depth", "pose"):
+            (scene / sub).mkdir(parents=True)
+        eye = "\n".join(" ".join(str(float(i == j)) for j in range(4)) for i in range(4))
+        for k in range(3):
+            (scene / "pose" / f"{k:06d}.txt").write_text(eye)
+            Image.new("RGB", (1296, 968)).save(scene / "color" / f"{k:06d}.jpg")
+        # only two of the three frames have a depth png
+        for k in range(2):
+            arr = np.full((480, 640), 1500, dtype=np.uint16)     # 1.5 m everywhere
+            Image.fromarray(arr).save(scene / "depth" / f"{k:06d}.png")
+        (scene / "intrinsics_color.txt").write_text(
+            "1169.62 0 646.295 0\n0 1167.11 489.927 0\n0 0 1 0\n0 0 0 1\n")
+        (scene / "intrinsics_depth.txt").write_text(
+            "577.591 0 318.905 0\n0 578.73 242.684 0\n0 0 1 0\n0 0 0 1\n")
+
+        # require_depth is opt-in: the default sampling is unchanged (all three frames)
+        assert len(sample_frames25k(scene)) == 3
+        stems = sample_frames25k(scene, require_depth=True)
+        assert stems == ["000000", "000001"]
+
+        K = load_frames25k_intrinsics(scene)
+        assert K["color"].shape == (3, 3) and K["depth"].shape == (3, 3)
+        assert abs(K["color"][0, 0] - 1169.62) < 1e-6 and abs(K["depth"][1, 2] - 242.684) < 1e-6
+        # the two files describe one camera at two resolutions (the §9.9 premise)
+        assert abs(K["color"][0, 0] / 1296 - K["depth"][0, 0] / 640) < 1e-3
+        assert abs(K["color"][1, 1] / 968 - K["depth"][1, 1] / 480) < 1e-3
+
+        depth = load_frames25k_depth(scene, stems)
+        assert depth.shape == (2, 480, 640) and np.allclose(depth, 1.5)   # mm -> meters
+        assert load_frames25k_color_size(scene, stems) == (1296, 968)
+
+        # a color frame of a different size must raise rather than silently mis-map
+        Image.new("RGB", (640, 480)).save(scene / "color" / "000001.jpg")
+        try:
+            load_frames25k_color_size(scene, stems)
+            raise AssertionError("mixed color sizes did not raise")
+        except ValueError:
+            pass
+    print("✅ intrinsics (3x3, one camera at two resolutions), depth mm->m, size guard\n")
+
+
+# ------------------------------------------------------------------------------------------
 # train/benchmark3d.py — the vendored official evaluator
 # ------------------------------------------------------------------------------------------
 
@@ -426,13 +650,22 @@ def test_out_path_names_the_knobs():
     noicp = default_out_path(ckpt, parser.parse_args(base + ["--no-icp"]), parser)
     assert noicp.name.endswith("__noicp.json"), noicp.name
 
+    # --transfer_mode is result-affecting: the SegVGGT-protocol column must never land on
+    # the unprojection headline's file (docs/MASKDINO.md §9.9)
+    gtproj = default_out_path(ckpt, parser.parse_args(
+        base + ["--transfer_mode", "gt_projection"]), parser)
+    assert gtproj != defaults and "gt_projection" in gtproj.name, gtproj.name
+    tol = default_out_path(ckpt, parser.parse_args(
+        base + ["--transfer_mode", "gt_projection", "--depth_tolerance", "0.05"]), parser)
+    assert tol != gtproj and "depth_tolerance0.05" in tol.name, tol.name
+
     # a non-result knob (where the file goes, which device) must NOT change the name
     same = default_out_path(ckpt, parser.parse_args(base + ["--device", "cpu"]), parser)
     assert same == defaults, same.name
 
     # every distinct setting gets a distinct file
-    names = {defaults.name, tuned.name, noicp.name}
-    assert len(names) == 3, names
+    names = {defaults.name, tuned.name, noicp.name, gtproj.name, tol.name}
+    assert len(names) == 5, names
     print("✅ result-affecting knobs are named in the output file; defaults unchanged\n")
 
 
@@ -480,6 +713,11 @@ if __name__ == "__main__":
     test_unprojection_roundtrip()
     test_votes_and_majority()
     test_pixel_assignment()
+    test_mask_grid_intrinsic()
+    test_project_vertices_to_view()
+    test_gt_projection_transfer_recovers_a_known_scene()
+    test_project_votes_shape_guards()
+    test_frames25k_geometry_loaders()
     test_evaluator_perfect()
     test_evaluator_duplicate_and_void()
     test_evaluator_iou_half()

@@ -9,18 +9,29 @@ Per scene (official val split, scannet_frames_25k frames — whole-scan coverage
      MaskDINO head (one query set for the whole scene, `frames_per_sample=S`) and VGGT's
      own depth + camera heads. No GT geometry, depth sensor, or poses enter inference.
   2. Per-view masks are upsampled to 518², each pixel goes to its highest-probability
-     query (> --mask_prob_threshold), and is unprojected with the PREDICTED depth +
-     cameras into the bundle frame.
-  3. Eval-time registration only: a closed-form Sim(3) (Umeyama) from predicted-vs-GT
-     camera centers, optionally refined by similarity ICP against the mesh vertices —
-     the FAST3DIS convention. VGGT's output scale is arbitrary, so this step is what
-     expresses the finished prediction in the benchmark mesh's coordinate frame.
-  4. SegVGGT-style lifting: per-vertex votes within --vote_radius, plurality per
-     superpoint; one query = one 3D instance, no post-hoc matching anywhere.
+     query (> --mask_prob_threshold).
+  3. The 2D→3D TRANSFER, `--transfer_mode` (docs/MASKDINO.md §9.9) — the two modes are
+     different EXPERIMENTS reported side by side, never substitutes for one another:
+       `unproject`     (default, the headline) — push the pixels into 3D with the PREDICTED
+                       depth + cameras, then an eval-time-only Sim(3) (Umeyama on
+                       predicted-vs-GT camera centers, optionally ICP-refined) to express
+                       the finished prediction in the mesh frame, the FAST3DIS convention.
+                       Measures 2D mask quality TIMES feed-forward geometry quality.
+       `gt_projection` (the SegVGGT protocol) — pull the mesh vertices into each view with
+                       the GT pose + GT intrinsics and keep the ones the ScanNet SENSOR
+                       depth confirms within --depth_tolerance. The correspondence is exact
+                       by construction (no Sim(3), no ICP, no scale, no vote radius), so it
+                       measures 2D mask quality ALONE, with a perfect 2D↔3D bridge.
+  4. SegVGGT-style lifting: per-vertex votes (within --vote_radius when unprojecting; at the
+     projected pixel otherwise), plurality per superpoint; one query = one 3D instance, no
+     post-hoc matching anywhere.
   5. The vendored official evaluator (train/benchmark3d.py) scores AP / AP50 / AP25 over
      the benchmark's 18 classes. `otherfurniture` is not predictable by our 19-class head
      (it is background in our 2D GT), so a 17-common-class average is reported as a
      diagnostic next to the official 18-class headline.
+
+In BOTH modes the model still sees only images: GT poses / intrinsics / sensor depth are
+eval-time transfer machinery applied after the head has produced its masks.
 
     python scripts/eval_3d_maskdino.py --checkpoint <run>/checkpoint_best_bundle.pth \
         --frames_root $TMPDIR/scans25k --gt_root $TMPDIR/scans3d
@@ -52,11 +63,13 @@ from train.benchmark3d import (BENCHMARK_CLASS_NAMES, assign_instances_for_scan,
                                MIN_REGION_SIZE, OVERLAPS)
 from train.eval3d_geometry import (accumulate_votes, apply_sim3, assign_pixels_to_queries,
                                    camera_centers_from_extrinsics, icp_refine_sim3,
+                                   mask_grid_intrinsic, project_votes_to_vertices,
                                    superpoint_majority, umeyama_sim3,
                                    unproject_masks_to_points)
 from train.maskdino_data import DTYPES
-from train.scannet3d import SCANNET_IDX_TO_NYU40, load_frames25k_poses, load_scene_3d_gt, \
-    sample_frames25k
+from train.scannet3d import SCANNET_IDX_TO_NYU40, load_frames25k_color_size, \
+    load_frames25k_depth, load_frames25k_intrinsics, load_frames25k_poses, \
+    load_scene_3d_gt, sample_frames25k
 from vggt.utils.geometry import unproject_depth_map_to_point_map
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 
@@ -83,12 +96,27 @@ def build_argparser():
                    help="drop queries below this class score before voting")
     p.add_argument("--mask_prob_threshold", type=float, default=0.5,
                    help="a pixel joins its argmax query only above this sigmoid prob")
+    p.add_argument("--transfer_mode", choices=("unproject", "gt_projection"),
+                   default="unproject",
+                   help="how 2D masks reach the mesh (docs/MASKDINO.md §9.9). 'unproject' "
+                        "(default, the headline) uses VGGT's PREDICTED depth+cameras + "
+                        "Sim(3)/ICP; 'gt_projection' is SegVGGT's protocol — project the "
+                        "mesh into each view with the GT pose+intrinsics, gate on the "
+                        "sensor depth, read the mask there. Different experiments: the "
+                        "second removes feed-forward geometry from the measurement")
+    p.add_argument("--depth_tolerance", type=float, default=0.1,
+                   help="gt_projection only: meters of agreement required between a "
+                        "vertex's projected depth and the ScanNet sensor depth (SegVGGT "
+                        "uses 0.1); inert in unproject mode")
     p.add_argument("--vote_radius", type=float, default=0.05,
-                   help="meters (mesh units): a point votes on the nearest vertex within this")
+                   help="unproject only: meters (mesh units), a point votes on the nearest "
+                        "vertex within this; inert in gt_projection mode")
     p.add_argument("--depth_conf_percentile", type=float, default=0.0,
-                   help="drop the lowest-confidence p%% of depth pixels per scene (0 = keep all)")
+                   help="unproject only: drop the lowest-confidence p%% of predicted-depth "
+                        "pixels per scene (0 = keep all); inert in gt_projection mode")
     p.add_argument("--icp", action=argparse.BooleanOptionalAction, default=True,
-                   help="refine the camera-center Sim(3) by similarity ICP against the mesh")
+                   help="unproject only: refine the camera-center Sim(3) by similarity ICP "
+                        "against the mesh; inert in gt_projection mode (nothing to align)")
     p.add_argument("--icp_max_dist", type=float, default=0.3)
     p.add_argument("--dump_ply", action="store_true",
                    help="write an instance-colored .ply per scene next to --out (eyeballing)")
@@ -102,7 +130,8 @@ def build_argparser():
 # (both knob settings landed on `eval3d_<stem>.json`, the second overwrote the first and only
 # the SLURM log preserved the numbers).
 RESULT_AFFECTING = ("num_frames", "eval_topk", "min_score", "mask_prob_threshold",
-                    "vote_radius", "depth_conf_percentile", "icp", "icp_max_dist", "scenes")
+                    "transfer_mode", "depth_tolerance", "vote_radius",
+                    "depth_conf_percentile", "icp", "icp_max_dist", "scenes")
 
 
 def default_out_path(ckpt_path: Path, args, parser) -> Path:
@@ -149,7 +178,10 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
               args, device: str) -> Dict:
     """The five pipeline steps for one scene; returns preds + diagnostics."""
     t0 = time.time()
-    stems = sample_frames25k(scene_frames_dir, args.num_frames)
+    gt_projection = args.transfer_mode == "gt_projection"
+    # gt_projection reads the sensor depth of every frame it uses, so a frame without one
+    # is not usable there (the default protocol never touches depth/ on disk).
+    stems = sample_frames25k(scene_frames_dir, args.num_frames, require_depth=gt_projection)
     images = load_frames_by_name(str(scene_frames_dir), stems, IMG_SIZE).to(device)  # [S,3,H,W]
     S = images.shape[0]
 
@@ -176,20 +208,25 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
         feats = torch.stack(per_frame)
     else:
         feats = torch.cat([agg_list[i].float() for i in feature_layers], dim=-1)[0]
-    with torch.autocast("cuda", enabled=False) if device.startswith("cuda") \
-            else contextlib.nullcontext():
-        # the fork's aggregator caches only the layers the heads index (4/11/17/23 + last)
-        # and returns None elsewhere — float() only what exists
-        agg32 = [a.float() if a is not None else None for a in agg_list]
-        depth, depth_conf = model.backbone.depth_head(agg32, images=images[None],
-                                                      patch_start_idx=psi)
-        pose_enc = model.backbone.camera_head(agg32)[-1]
-    del agg_list, agg32
-    extri, intri = pose_encoding_to_extri_intri(pose_enc, (IMG_SIZE, IMG_SIZE))
-    depth = depth[0].cpu().numpy()                      # [S, H, W, 1]
-    depth_conf = depth_conf[0].cpu().numpy()            # [S, H, W]
-    extri = extri[0].cpu().numpy()                      # [S, 3, 4] cam-from-world
-    intri = intri[0].cpu().numpy()                      # [S, 3, 3]
+    if gt_projection:
+        # the GT-projection transfer never uses VGGT's geometry, so the heads are not even
+        # run — the "no predicted geometry in this column" claim is structural, not a habit
+        del agg_list
+    else:
+        with torch.autocast("cuda", enabled=False) if device.startswith("cuda") \
+                else contextlib.nullcontext():
+            # the fork's aggregator caches only the layers the heads index (4/11/17/23 +
+            # last) and returns None elsewhere — float() only what exists
+            agg32 = [a.float() if a is not None else None for a in agg_list]
+            depth, depth_conf = model.backbone.depth_head(agg32, images=images[None],
+                                                          patch_start_idx=psi)
+            pose_enc = model.backbone.camera_head(agg32)[-1]
+        del agg_list, agg32
+        extri, intri = pose_encoding_to_extri_intri(pose_enc, (IMG_SIZE, IMG_SIZE))
+        depth = depth[0].cpu().numpy()                      # [S, H, W, 1]
+        depth_conf = depth_conf[0].cpu().numpy()            # [S, H, W]
+        extri = extri[0].cpu().numpy()                      # [S, 3, 4] cam-from-world
+        intri = intri[0].cpu().numpy()                      # [S, 3, 3]
 
     out, _ = model.head(feats, int(psi), None, frames_per_sample=S)
 
@@ -215,38 +252,57 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
                                  args.mask_prob_threshold)
         for f in range(S)])                                            # [S, H, W]
 
-    # -- 3. unproject with the PREDICTED geometry, register with Sim(3) (eval-only) --------
-    world = unproject_depth_map_to_point_map(depth, extri, intri)      # [S, H, W, 3]
-    conf_thr = (np.percentile(depth_conf, args.depth_conf_percentile)
-                if args.depth_conf_percentile > 0 else -np.inf)
-    points, point_query = unproject_masks_to_points(world, pixel_query, depth_conf, conf_thr)
+    # -- 3. the 2D -> 3D transfer (--transfer_mode, docs/MASKDINO.md §9.9) -> votes ---------
+    if gt_projection:
+        # SegVGGT's protocol: pull the mesh into the views instead of pushing pixels out.
+        # No Sim(3), no ICP, no scale, no radius — the correspondence is exact, so the
+        # only thing left being measured is the 2D mask.
+        poses = load_frames25k_poses(scene_frames_dir)
+        K = load_frames25k_intrinsics(scene_frames_dir)
+        K_mask = mask_grid_intrinsic(
+            K["color"], load_frames25k_color_size(scene_frames_dir, stems),
+            (IMG_SIZE, IMG_SIZE))
+        votes, transfer_stats = project_votes_to_vertices(
+            gt3d["vertices"], np.stack([poses[s] for s in stems]), K["depth"], K_mask,
+            load_frames25k_depth(scene_frames_dir, stems), pixel_query, len(keep_idx),
+            args.depth_tolerance)
+    else:
+        # unproject with the PREDICTED geometry, register with Sim(3) (eval-only)
+        world = unproject_depth_map_to_point_map(depth, extri, intri)  # [S, H, W, 3]
+        conf_thr = (np.percentile(depth_conf, args.depth_conf_percentile)
+                    if args.depth_conf_percentile > 0 else -np.inf)
+        points, point_query = unproject_masks_to_points(world, pixel_query, depth_conf,
+                                                        conf_thr)
 
-    poses = load_frames25k_poses(scene_frames_dir)
-    gt_centers = np.stack([poses[s][:3, 3] for s in stems])
-    pred_centers = camera_centers_from_extrinsics(extri)
-    s3, R3, t3 = umeyama_sim3(pred_centers, gt_centers)
-    center_rms = float(np.sqrt(((apply_sim3(pred_centers, s3, R3, t3) - gt_centers) ** 2)
-                               .sum(axis=1).mean()))
-    icp_stats = {}
-    if args.icp:
-        # align the whole predicted cloud (conf-kept pixels), not just the mask pixels
-        cloud = world[depth_conf >= conf_thr] if np.isfinite(conf_thr) \
-            else world.reshape(-1, 3)
-        s3, R3, t3, icp_stats = icp_refine_sim3(cloud, gt3d["vertices"], s3, R3, t3,
-                                                max_dist=args.icp_max_dist)
-    points = apply_sim3(points, s3, R3, t3)
+        poses = load_frames25k_poses(scene_frames_dir)
+        gt_centers = np.stack([poses[s][:3, 3] for s in stems])
+        pred_centers = camera_centers_from_extrinsics(extri)
+        s3, R3, t3 = umeyama_sim3(pred_centers, gt_centers)
+        center_rms = float(np.sqrt(((apply_sim3(pred_centers, s3, R3, t3) - gt_centers) ** 2)
+                                   .sum(axis=1).mean()))
+        icp_stats = {}
+        if args.icp:
+            # align the whole predicted cloud (conf-kept pixels), not just the mask pixels
+            cloud = world[depth_conf >= conf_thr] if np.isfinite(conf_thr) \
+                else world.reshape(-1, 3)
+            s3, R3, t3, icp_stats = icp_refine_sim3(cloud, gt3d["vertices"], s3, R3, t3,
+                                                    max_dist=args.icp_max_dist)
+        points = apply_sim3(points, s3, R3, t3)
+        votes = accumulate_votes(points, point_query, gt3d["vertices"], len(keep_idx),
+                                 args.vote_radius)
+        transfer_stats = {"points": int(len(points)), "sim3_scale": float(s3),
+                          "center_rms_m": center_rms, **icp_stats}
 
-    # -- 4. votes -> superpoint majority -> instances --------------------------------------
-    votes = accumulate_votes(points, point_query, gt3d["vertices"], len(keep_idx),
-                             args.vote_radius)
+    # -- 4. superpoint majority -> instances -----------------------------------------------
     assign = superpoint_majority(votes, gt3d["superpoints"])
     preds = [{"mask": assign == q, "label_id": int(q_label[q]),
               "confidence": float(q_score[q])} for q in range(len(keep_idx))]
 
     annotated = gt3d["gt_ids"] > 0
     stats = {
-        "frames": S, "kept_queries": int(len(keep_idx)), "points": int(len(points)),
-        "sim3_scale": float(s3), "center_rms_m": center_rms, **icp_stats,
+        "frames": S, "kept_queries": int(len(keep_idx)), **transfer_stats,
+        # the two coverage numbers are defined identically in both modes, so they can be
+        # read side by side — the coverage delta is the headline of the comparison
         "voted_vertex_frac": float((votes.sum(axis=1) > 0).mean()),
         "annotated_assigned_frac": float((assign[annotated] >= 0).mean())
         if annotated.any() else float("nan"),
@@ -296,6 +352,17 @@ def main():
     print(f"Scoring {len(scenes)} scene(s), checkpoint {ckpt_path.name} "
           f"(multi_frame={train_args.get('multi_frame', False)}, "
           f"feature_mode={train_args.get('feature_mode', 'single')})")
+    if args.transfer_mode == "gt_projection":
+        print("transfer_mode=gt_projection (SegVGGT's protocol, docs/MASKDINO.md §9.9): the "
+              "mesh is PROJECTED into each view with GT poses + GT intrinsics and gated on "
+              "the ScanNet sensor depth. VGGT's depth/camera heads are not run. This "
+              "measures 2D mask quality with a perfect 2D<->3D bridge — it is a DIFFERENT "
+              "experiment from the `unproject` headline, not a better version of it.")
+        inert = [n for n in ("vote_radius", "depth_conf_percentile", "icp", "icp_max_dist")
+                 if getattr(args, n) != parser.get_default(n)]
+        if inert:
+            print(f"⚠ {', '.join(inert)} set but INERT in gt_projection mode (they only "
+                  f"affect unprojection); they still tag the output filename")
 
     out_path = Path(args.out) if args.out else default_out_path(ckpt_path, args, parser)
     matches, per_scene, failed = {}, {}, []
@@ -330,10 +397,16 @@ def main():
         print(f"⚠ {len(failed)} scene(s) failed (their GT counted as misses): "
               + ", ".join(failed))
 
+    measures = ("2D mask quality TIMES feed-forward geometry quality (predicted depth + "
+                "cameras, Sim(3)+ICP for scoring only)" if args.transfer_mode == "unproject"
+                else "2D mask quality ALONE, with a perfect 2D<->3D bridge (GT poses + GT "
+                     "intrinsics + sensor-depth visibility; SegVGGT's protocol, §9.9)")
     result = {
         "checkpoint": str(ckpt_path),
         "protocol": "official ScanNet 3D instance benchmark (docs/MASKDINO.md §9); "
                     "NOT comparable to any 2D-protocol number",
+        "transfer_mode": args.transfer_mode,
+        "measures": measures,
         "args": {k: v for k, v in vars(args).items() if k != "scenes"},
         "num_scenes": len(scenes),
         "failed_scenes": failed,

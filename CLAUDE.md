@@ -36,6 +36,10 @@ measured against, and `scripts/eval_perframe.py` imports it to produce that base
 - `docs/RELATED_WORK.md` — competitor landscape & positioning. Read before framing any result as
   a contribution.
 - `docs/RIEPILOGO_PROGETTO_IT.md` — full project narrative in Italian for the project owner.
+- `docs/MEETING_2026-08-06_IT.md` — supervisor-meeting briefing in Italian (general → particular:
+  goal & constraints, the four rulers, architecture, multi-frame, 2D/3D results, the two COCO
+  studies, competitor positioning, and a prepared Q&A). Derived from the docs above — if a number
+  changes there, change it here too.
 - `docs/old/` — archived detail: `MILESTONES.md` (the full D4RT story), per-milestone docs,
   executed plans, the todo archive, past meeting slides, the original project brief.
 
@@ -63,7 +67,10 @@ python tests/test_maskdino_fullres.py # --eval_full_res ruler (MASKDINO.md §6.5
                                       # grid-vs-full ruler difference, both eval paths
 python tests/test_maskdino_eval3d.py  # 3D ruler (MASKDINO.md §9): PLY/GT builders, Umeyama/ICP,
                                       # unprojection round-trip, votes+majority, the vendored
-                                      # official evaluator vs hand-computed APs, synthetic E2E
+                                      # official evaluator vs hand-computed APs, synthetic E2E,
+                                      # + the gt_projection transfer (§9.10): the 518² squash
+                                      # intrinsic, sensor-depth visibility, known-scene round
+                                      # trip, knob-naming of --transfer_mode
 python tests/test_maskdino_viz3d.py   # 3D viewer colour path (MASKDINO.md §9.7): feature-mode
                                       # fidelity, max-over-views selection, colour stable across
                                       # views, end-to-end on a tiny head
@@ -106,12 +113,32 @@ sbatch --export=ALL,N_SCENES=490,EXTRA_ARGS='--eval_full_res' slurm/train_maskdi
 sbatch slurm/scannet_oracle.sh   # GT-only ceiling of the 37/74/148 grids on ScanNet (CPU-only)
 
 # --- 3D ruler: official ScanNet 3D instance benchmark (docs/MASKDINO.md §9) -------------------
-# THE THIRD PROTOCOL — the only one placeable next to SegVGGT/FAST3DIS; never quote next to the
-# 2D tables. Unprojects a --multi_frame checkpoint's masks with VGGT's OWN predicted
+# THE THIRD PROTOCOL — the only one placeable next to published numbers; never quote next to the
+# 2D tables. And the published 3D numbers are TWO protocols (§9.9): this is "unposed transfer"
+# (= FAST3DIS, IGGT); SegVGGT's is "posed transfer" (GT poses + sensor depth, no geometry error),
+# so its 0.504/0.717/0.870 is NOT a like-for-like row. Unprojects a --multi_frame checkpoint's
+# masks with VGGT's OWN predicted
 # depth+cameras (no GT geometry at inference), Sim(3)-registers for scoring only, majority-votes
 # per superpoint, scores with the vendored official evaluator. Checkpoints trained on scenes
 # 0000-0489 overlap val-312: their numbers are DIAGNOSTIC only (§9.4).
 sbatch --export=ALL,CHECKPOINT=<run_dir>/checkpoint_best_bundle.pth slurm/eval_3d_maskdino.sh
+# TWO TRANSFER MODES = two experiments, printed as two columns, never merged (MASKDINO.md §9.10):
+#   --transfer_mode unproject      (DEFAULT, the headline) predicted depth+cameras + Sim(3)/ICP;
+#                                  measures 2D mask quality x feed-forward geometry quality.
+#                                  Comparable to FAST3DIS / IGGT.  0.023 / 0.067 / 0.268
+#   --transfer_mode gt_projection  SegVGGT's protocol: project the mesh into each view with GT
+#                                  pose+intrinsics, gate on the ScanNet SENSOR depth, read the
+#                                  mask there. Exact correspondence, so it measures 2D mask
+#                                  quality ALONE. Comparable to SegVGGT.  0.060 / 0.156 / 0.408
+#   Still image-only in both: GT geometry transfers FINISHED masks for scoring, like the Sim(3).
+#   vote_radius / depth_conf_percentile / icp are INERT in gt_projection (the script says so).
+sbatch --export=ALL,CHECKPOINT=<run_dir>/checkpoint_best_bundle.pth,\
+EXTRA_ARGS='--transfer_mode gt_projection' slurm/eval_3d_maskdino.sh
+# The oracle that LICENSES that mode — run it before believing any gt_projection number. Renders
+# the 3D GT back through the same projection; round-trip purity must be ~1.000 (measured 0.9999).
+sbatch slurm/eval3d_projection_oracle.sh          # CPU-only, no checkpoint, ~15 min for 312
+myenv/bin/python scripts/eval3d_projection_oracle.py --frames_root <scans25k> \
+    --gt_root <scans3d> --scenes scene0011_00     # local smoke test, seconds
 # Qualitative 3D (MASKDINO.md §9.7) — TWO different pictures, do not confuse them:
 #   (a) what the benchmark scores: instance-coloured mesh vertices after lifting+voting (grey =
 #       no instance reached that vertex). `--scenes` renames the JSON, so a subset can never

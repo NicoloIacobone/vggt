@@ -10,7 +10,12 @@ Loads what the official 3D instance evaluation needs, with no dependency beyond 
     encoding, built from `<scene>.aggregation.json` + `scannetv2-labels.combined.tsv` —
     the same construction as the official `export_train_mesh_for_evaluation.py`,
   - the scannet_frames_25k frames + camera-to-world poses of a scene (the eval's input
-    frames; poses are used ONLY for eval-time Sim(3) registration, never at inference).
+    frames), and — for `--transfer_mode gt_projection` only (docs/MASKDINO.md §9.9) — the
+    per-scene color/depth intrinsics and the 16-bit sensor depth maps.
+
+GT poses, GT intrinsics and sensor depth are EVAL-TIME TRANSFER machinery: they place a
+finished prediction on the benchmark mesh (Sim(3) registration in the default protocol, the
+projection in `gt_projection`) and never reach inference. The model sees only images.
 
 Class bookkeeping: the benchmark scores 18 classes (nyu40 ids in `BENCHMARK_CLASS_IDS`) —
 no wall/floor, but WITH otherfurniture, which our 19-class head cannot predict. The head's
@@ -20,7 +25,7 @@ are outside the benchmark set and must be dropped before voting.
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -191,17 +196,91 @@ def load_frames25k_poses(scene_dir) -> Dict[str, np.ndarray]:
     return out
 
 
-def sample_frames25k(scene_dir, num_frames: Optional[int] = None) -> List[str]:
+def sample_frames25k(scene_dir, num_frames: Optional[int] = None,
+                     require_depth: bool = False) -> List[str]:
     """
     Frame stems of a 25k scene, evenly subsampled to at most `num_frames` (None = all).
-    Only frames with a finite pose and an existing color jpg qualify.
+    Only frames with a finite pose and an existing color jpg qualify; `require_depth` also
+    demands the sensor depth png (the GT-projection transfer needs it, §9.9 — the default
+    unprojection protocol never reads depth from disk).
     """
     scene_dir = Path(scene_dir)
     poses = load_frames25k_poses(scene_dir)
-    stems = [s for s in sorted(poses) if (scene_dir / "color" / f"{s}.jpg").exists()]
+    stems = [s for s in sorted(poses) if (scene_dir / "color" / f"{s}.jpg").exists()
+             and (not require_depth or (scene_dir / "depth" / f"{s}.png").exists())]
     if not stems:
-        raise ValueError(f"{scene_dir}: no usable frames (finite pose + color jpg)")
+        raise ValueError(f"{scene_dir}: no usable frames (finite pose + color jpg"
+                         + (" + depth png)" if require_depth else ")"))
     if num_frames is not None and len(stems) > num_frames:
         idx = np.linspace(0, len(stems) - 1, num_frames).round().astype(int)
         stems = [stems[i] for i in sorted(set(idx.tolist()))]
     return stems
+
+
+# ------------------------------------------------------------------------------------------
+# GT camera geometry of the 25k frames (the GT-projection transfer, docs/MASKDINO.md §9.9)
+#
+# EVAL-TIME TRANSFER ONLY. Poses, intrinsics and sensor depth loaded here never reach the
+# prediction path — exactly like the Sim(3)+ICP of the default protocol. The model still
+# sees only images.
+# ------------------------------------------------------------------------------------------
+
+def load_frames25k_intrinsics(scene_dir) -> Dict[str, np.ndarray]:
+    """
+    The scene's `{"color": K, "depth": K}` 3x3 intrinsics from `intrinsics_{color,depth}.txt`
+    (ScanNet ships them as 4x4; the top-left 3x3 is the pinhole matrix).
+
+    They are the SAME physical camera at two resolutions: on the val-312 tar the normalised
+    (fx/W, fy/H, cx/W, cy/H) of the two files agree to <1e-3, so one pose serves both and a
+    point's depth-image and color-image projections are consistent.
+    """
+    scene_dir = Path(scene_dir)
+    out = {}
+    for which in ("color", "depth"):
+        path = scene_dir / f"intrinsics_{which}.txt"
+        if not path.exists():
+            raise FileNotFoundError(f"{path} missing (needed by the GT-projection transfer)")
+        mat = np.loadtxt(path, dtype=np.float64)
+        if mat.shape not in ((3, 3), (4, 4)):
+            raise ValueError(f"{path}: expected a 3x3 or 4x4 intrinsic, got {mat.shape}")
+        if not np.isfinite(mat).all():
+            raise ValueError(f"{path}: non-finite intrinsic")
+        out[which] = mat[:3, :3].copy()
+    return out
+
+
+def load_frames25k_depth(scene_dir, stems: List[str]) -> np.ndarray:
+    """
+    Sensor depth maps [S, H, W] in METERS from `depth/<stem>.png` (uint16 millimeters, the
+    ScanNet convention; 0 = no reading, kept as 0 and rejected by the caller's depth test).
+    All frames of a scene share one resolution (640x480); a mismatch raises.
+    """
+    from PIL import Image                      # local: keeps the module numpy-only otherwise
+
+    scene_dir = Path(scene_dir)
+    maps = []
+    for stem in stems:
+        arr = np.asarray(Image.open(scene_dir / "depth" / f"{stem}.png"))
+        if arr.ndim != 2:
+            raise ValueError(f"{scene_dir}/depth/{stem}.png: expected a single-channel "
+                             f"depth png, got shape {arr.shape}")
+        maps.append(arr.astype(np.float32) / 1000.0)
+    if len({m.shape for m in maps}) != 1:
+        raise ValueError(f"{scene_dir}: depth maps of differing sizes "
+                         f"{sorted({m.shape for m in maps})}")
+    return np.stack(maps)
+
+
+def load_frames25k_color_size(scene_dir, stems: List[str]) -> Tuple[int, int]:
+    """
+    The (width, height) of a scene's color jpgs — the resolution `intrinsics_color.txt`
+    refers to, and the denominator of the mask-grid rescale. Reads headers only (PIL is
+    lazy). Raises if the frames disagree, because one intrinsic could not describe both.
+    """
+    from PIL import Image
+
+    scene_dir = Path(scene_dir)
+    sizes = {Image.open(scene_dir / "color" / f"{s}.jpg").size for s in stems}
+    if len(sizes) != 1:
+        raise ValueError(f"{scene_dir}: color frames of differing sizes {sorted(sizes)}")
+    return sizes.pop()

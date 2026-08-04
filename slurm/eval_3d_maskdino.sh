@@ -11,9 +11,16 @@
 #   EXTRA_ARGS   appended verbatim (e.g. '--num_frames 8', '--no-icp',
 #                '--depth_conf_percentile 25', '--dump_ply')
 #
+# The SegVGGT-comparable second column (docs/MASKDINO.md §9.9) — a DIFFERENT experiment,
+# reported next to the default one, never in place of it:
+#   sbatch --export=ALL,CHECKPOINT=<ckpt>,EXTRA_ARGS='--transfer_mode gt_projection' \
+#       slurm/eval_3d_maskdino.sh
+# Its licence is slurm/eval3d_projection_oracle.sh (round-trip purity must be ~1.000).
+#
 # Stages TWO tars node-local: the val-312 3D GT (mesh + superpoints + aggregation) and the
-# val-312 scannet_frames_25k repack (whole-scan frames + poses). Results land next to the
-# checkpoint as eval3d_<ckpt stem>.json.
+# val-312 scannet_frames_25k repack (whole-scan frames + poses + SENSOR DEPTH, which only
+# --transfer_mode gt_projection reads). Results land next to the checkpoint as
+# eval3d_<ckpt stem>.json, plus a tag naming any non-default result-affecting knob.
 #
 # NEVER quote the resulting numbers next to the 2D-protocol tables (docs/RESULTS.md §1) —
 # and remember checkpoints trained on scenes 0000-0489 overlap this val split: their

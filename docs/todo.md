@@ -81,7 +81,8 @@ In effort order — each step also de-risks the next:
       the full protocol; RESULTS.md §5 is where its numbers go). Per-view masks unprojected
       with VGGT's *own* predicted depth + cameras (no GT geometry at inference), eval-only
       Sim(3) registration (Umeyama on camera centers + similarity ICP — the FAST3DIS
-      convention), per-vertex votes + majority per superpoint (SegVGGT recipe), scored by the
+      convention), per-vertex votes + majority per superpoint (the superpoint majority is the
+      SegVGGT convention; the radius is ours), scored by the
       **vendored official evaluator** (`train/benchmark3d.py`; real val scenes' GT fed back as
       predictions scores exactly 1.000). Data on work: `scannet_3d_gt_val312.tar.zst` +
       `scannet_frames25k_val312.tar.zst` (whole-scan frames + poses; the stride-5 subsets
@@ -89,14 +90,17 @@ In effort order — each step also de-risks the next:
       `sbatch --export=ALL,CHECKPOINT=... slurm/eval_3d_maskdino.sh`.
       Diagnostic val-312 runs DONE 2026-08-01 (jobs 9327269/9327271, §9.5 + RESULTS.md §5):
       **AP 0.016 / AP50 0.052 / AP25 0.238** at best knobs — FAST3DIS's order of magnitude
-      (0.038/0.096/0.316), far below SegVGGT. Verdict: geometry binds (median Sim(3) RMS
+      (0.038/0.096/0.316). Verdict: geometry binds (median Sim(3) RMS
       0.14 m ≈ vote radius; AP25 ≈ 5×AP50), not recognition; coverage caps recall.
       **DONE 2026-08-03 — the reportable number exists** (jobs 9503137 / 9503139, docs/MASKDINO.md
       §9.6, RESULTS.md §5): leak-free 1201-trained multi-frame checkpoint scores **AP 0.023 /
       AP50 0.067 / AP25 0.268** (0.029 / 0.083 / 0.305 with tuned lifting knobs — tuned on the
       leaky diagnostic, so the plain row is the headline). **FAST3DIS's ballpark
-      (0.038 / 0.096 / 0.316) on a strictly frozen backbone**; SegVGGT (0.504 / 0.717 / 0.870)
-      an order of magnitude ahead. Two findings: the leak-free checkpoint **beats** the leaked
+      (0.038 / 0.096 / 0.316) on a strictly frozen backbone**, alongside IGGT
+      (0.028 / 0.112 / 0.287). SegVGGT (0.504 / 0.717 / 0.870) is far above but **in a different
+      protocol** — posed transfer, GT poses + sensor depth, no geometry error (established
+      2026-08-04, docs/MASKDINO.md §9.9) — so it is not a like-for-like gap; see 5e.
+      Two findings: the leak-free checkpoint **beats** the leaked
       diagnostic 1.6× (data scale > leakage — the 3D ruler reproducing the 2D data-limited
       conclusion), and **the lifting step is the binding constraint, not the decoder** → the new
       workstream 5 below. Fixed while reporting: eval3d output files now name their non-default
@@ -153,6 +157,13 @@ RMS after Sim(3) is 0.14 m, and only ~16 % of mesh vertices get a vote. 5a has n
 knobs can do (0.067 → 0.091 AP50, still under FAST3DIS's 0.096), so **the remaining gap is
 coverage and registration, in that order**. Ordered by expected value per hour:
 
+**REPRIORITISED 2026-08-04 by 5e.** The posed-transfer measurement puts a **hard ceiling of
+0.156 AP50 on 5b + 5c combined** — that is what our *current* masks score with a perfect
+2D↔3D bridge. Lifting work is therefore worth at most +0.089 AP50, and its oracle also shows
+view count is not the binder. Above that ceiling only the masks themselves move the number, so
+**2d (and multi-view completeness/identity generally) now outranks 5b/5c**. Do 5b/5c only for
+the parts that are cheap.
+
 - [x] **5a. Knob sweep — DONE 2026-08-03** (8 points, docs/MASKDINO.md §9.8). Reported as a
       **sensitivity analysis, not a headline** (swept on val-312). Findings: the vote radius
       **saturates at ~0.15 m = the median registration error** (0.090 AP50 at 0.15, unchanged at
@@ -162,9 +173,11 @@ coverage and registration, in that order**. Ordered by expected value per hour:
       it must come from 5b/5c below. Also confirmed the pipeline is deterministic (the repeated
       defaults run reproduced §9.6 exactly).
 - [ ] **5b. Coverage.** ~16 % of vertices voted / ~65 % of annotated vertices assigned caps
-      recall outright. Options: more frames per scene (the 25k export has ~16–30; SegVGGT uses up
-      to 24), overlapping bundles, or per-frame confidence-weighted voting instead of hard
-      argmax. Measure `annotated_assigned_frac` as the intermediate target, not AP.
+      recall outright. Options: more frames per scene (the 25k export has ~16–30; SegVGGT's
+      *eval* uses ~75–100, every 20th frame of a full `.sens` extraction — 2–24 is their
+      training sampling, so we are behind here, not level), overlapping bundles, or per-frame
+      confidence-weighted voting instead of hard argmax. Measure `annotated_assigned_frac` as
+      the intermediate target, not AP.
 - [ ] **5c. Registration.** Sim(3)+ICP on camera centres is the FAST3DIS convention, but our RMS
       is at the vote radius. Try ICP on the *voted points* rather than camera centres, or
       per-bundle registration with a consistency check. NOTE: registration is eval-only — it must
@@ -172,6 +185,26 @@ coverage and registration, in that order**. Ordered by expected value per hour:
 - [ ] **5d. Only after 5a–5c:** revisit whether the decoder ever becomes the constraint again on
       this ruler. If it does, 2d (3D anchors) is the natural next decoder change — and it acts
       exactly on the geometry that binds here.
+- [x] **5e. POSED-transfer protocol on our own masks — DONE 2026-08-04** (docs/MASKDINO.md
+      §9.10, RESULTS.md §5.1; jobs 9607206 / 9607208 / 9607210). Implemented as
+      `--transfer_mode {unproject,gt_projection}` (default = unchanged behaviour), geometry in
+      `train/eval3d_geometry.py`, licensed by `scripts/eval3d_projection_oracle.py`
+      (round-trip purity **0.9999** over all 312 scenes; a wrong pixel mapping collapses it).
+      Same checkpoint, same 17.4 frames, same 97.6 queries, same evaluator — only the bridge
+      moves: **0.023 / 0.067 / 0.268 → 0.060 / 0.156 / 0.408**, coverage 0.153 → 0.342 voted and
+      0.635 → 0.791 annotated-assigned. Three results that redirect the workstream:
+      **(i)** the bridge costs **2.3× AP50**, so that is a hard **ceiling on 5b + 5c combined** —
+      perfect lifting reaches 0.156, not SegVGGT's 0.717;
+      **(ii)** the protocol explains **2.3× of the ~10.7× SegVGGT gap and no more** — ~4.6× is
+      real (LoRA backbone, 4–6× the views, 259×196 vs 37×37 masks, topk 600 vs 100), so the §9.9
+      line "a different protocol, not a different league" was **wrong** and is struck;
+      **(iii)** the oracle ceiling on our own frame budget is 0.948 AP50, so **view count is not
+      what binds the posed column** — what binds at 0.156 is the 3D-instance criterion itself
+      (one mask covering a whole object across *all* its views at IoU > 0.5, where the per-frame
+      ruler reports 0.65). That is multi-view completeness and identity, i.e. **the decoder is
+      back in play on this ruler** → re-prioritise 2d above 5b/5c.
+      The number is a diagnostic decomposition and is never the headline; the headline stays the
+      unposed 0.023 / 0.067 / 0.268.
 
 ## Recently closed (2026-07-29/30, 2026-08-01) — details in docs/MASKDINO.md §7.4.1, §7.7, §8.2
 

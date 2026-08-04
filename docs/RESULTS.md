@@ -42,14 +42,15 @@ ruler: its numbers live only there and are never mixed into the §2/§3 tables.
 
 ### 1.2 …and none of it is comparable to published ScanNet numbers
 
-Published feed-forward competitors (SegVGGT, FAST3DIS, IGGT, …) unproject their per-view masks
-into the scene point cloud and score the **official 3D instance benchmark** (AP/AP50/AP25). We
-score **per-view 2D masks on the 37×37 patch grid** with our own metric code. Different task,
+Published feed-forward competitors (SegVGGT, FAST3DIS, IGGT, …) score their masks on the
+**official 3D instance benchmark** (AP/AP50/AP25) against the benchmark point clouds. We score
+**per-view 2D masks on the 37×37 patch grid** with our own metric code. Different task,
 different GT, different metric implementation — never put the two in one table. The full
 side-by-side of the two protocols is in `docs/RELATED_WORK.md` ("Numbers: what is comparable to
-what"). **The bridge now exists (§5): the 3D ruler runs OUR model on THEIR protocol** — it is
-the only place in this project where a number may sit next to SegVGGT's, and it lives in its own
-section for that reason.
+what"). **The bridge now exists (§5): the 3D ruler runs OUR model on the official benchmark** —
+it is the only place in this project where a number may sit next to a published one, and it
+lives in its own section for that reason. Read §5's protocol note before doing so: the published
+3D numbers are themselves split across **two different protocols**, and only one of them is ours.
 
 ### 1.3 Fixed cached view sets (accepted 2026-07-28)
 
@@ -169,17 +170,39 @@ AP50 headline. Any pre-2026-07-08 number in `docs/old/` is on the old ruler. Tab
 ## 5. The 3D ruler — official ScanNet 3D instance benchmark (docs/MASKDINO.md §9)
 
 **A separate protocol on purpose. Nothing here compares to §2 or §3, in either direction** — but
-unlike them, this section's numbers ARE placeable next to SegVGGT (50.4 / 71.7 / 87.0
-AP/AP50/AP25 on ScanNetv2) and FAST3DIS (3.8 / 9.6 / 31.6), because the metric code is the
-official evaluator itself, vendored (`train/benchmark3d.py`), on the official val-312 split and
-the official benchmark point clouds. Per-view masks are unprojected with **VGGT's own predicted
-depth + cameras** (no GT geometry at inference; eval-only Sim(3) registration), majority-voted
-per superpoint, and scored as 3D instances.
+unlike them, this section's numbers ARE placeable next to published ones, because the metric code
+is the official evaluator itself, vendored (`train/benchmark3d.py`), on the official val-312 split
+and the official benchmark point clouds. Per-view masks are unprojected with **VGGT's own
+predicted depth + cameras** (no GT geometry at inference; eval-only Sim(3) registration),
+majority-voted per superpoint, and scored as 3D instances.
+
+**Which published numbers, though — the two-protocol rule (established 2026-08-04).** The
+literature's 3D numbers are not one comparable set. They split by *how a finished 2D mask reaches
+the point cloud*, and that step dominates the score:
+
+- **Posed transfer — SegVGGT (0.504 / 0.717 / 0.870).** Its released evaluator never unprojects:
+  it projects the GT benchmark cloud into each view using ScanNet's **GT poses and intrinsics**,
+  resolving occlusion with the **ScanNet sensor depth** map. No Sim(3), no ICP, no vote radius —
+  the 3D↔2D correspondence is exact by construction. That number measures **2D mask quality with
+  a perfect 2D→3D bridge**.
+- **Unposed transfer — FAST3DIS (0.038 / 0.096 / 0.316), IGGT (0.028 / 0.112 / 0.287), and us.**
+  Masks are unprojected with the model's **own predicted** depth and cameras. These numbers
+  measure **2D mask quality × feed-forward geometry quality**.
+
+The evaluator is *not* the difference — both are the official ScanNet one with identical options.
+So FAST3DIS and IGGT cluster with us because they share our protocol; SegVGGT sits far above all
+three because it is in the other one. This is **not** a charge of cheating: SegVGGT's *model*
+takes unposed images only, exactly like ours, and using GT geometry solely to transfer finished
+masks for scoring is a legitimate way to isolate segmentation from reconstruction quality. Full
+evidence, with file:line references into their released code, is in `docs/RELATED_WORK.md`
+("Two 3D protocols").
 
 Two structural handicaps to remember when reading the table: `otherfurniture` (1 of the 18
 benchmark classes) is unpredictable for our 19-class head (background in our 2D GT — the
 17-class diagnostic column isolates this), and coverage is bounded by the ~16–25
-`scannet_frames_25k` frames per scene (SegVGGT samples up to 24 — comparable).
+`scannet_frames_25k` frames per scene (2–24 is SegVGGT's *training* sampling; at **eval** they
+take every 20th frame of a full `.sens` extraction, ~75–100 views per scene — so on coverage we
+are not comparable to them, we are behind).
 
 | Checkpoint | trained on | AP / AP50 / AP25 (18-class) | 17-class diagnostic | status |
 |---|---|---|---|---|
@@ -187,12 +210,19 @@ benchmark classes) is unpredictable for our 19-class head (background in our 2D 
 | **same, `--vote_radius 0.1 --depth_conf_percentile 25` — job 9503139** | 〃 | **0.029 / 0.083 / 0.305** | 0.030 / 0.088 / 0.323 | **REPORTABLE**, knobs tuned on the diagnostic run below |
 | best multi-frame (job 9071415, ep-17 ckpt), defaults — job 9327269 | 0000–0489 (**overlaps val-312!**) | 0.013 / 0.041 / 0.223 | 0.014 / 0.044 / 0.236 | DIAGNOSTIC ONLY — leakage, §9.4 |
 | same, `--vote_radius 0.1 --depth_conf_percentile 25` — job 9327271 | 〃 | 0.016 / 0.052 / 0.238 | 0.016 / 0.055 / 0.253 | 〃 |
-| SegVGGT (published; LoRA-adapted VGGT, 1201-scene train) | official split | 0.504 / 0.717 / 0.870 | — | literature anchor |
-| FAST3DIS (published; LoRA-adapted DA3) | official split | 0.038 / 0.096 / 0.316 | — | literature anchor |
+| FAST3DIS (published; LoRA-adapted DA3) | official split | 0.038 / 0.096 / 0.316 | — | literature anchor, **same protocol** (unposed) |
+| IGGT (published, via FAST3DIS's table) | official split | 0.028 / 0.112 / 0.287 | — | literature anchor, **same protocol** (unposed) |
+| SegVGGT (published; LoRA-adapted VGGT, 1201-scene train) | official split | 0.504 / 0.717 / 0.870 | — | **DIFFERENT protocol** (posed transfer) — not a like-for-like row |
 
-**The reportable rows land in FAST3DIS's ballpark: AP25 0.305 vs its 0.316, AP50 0.083 vs 0.096,
-AP 0.029 vs 0.038** — with a *strictly frozen* backbone against its LoRA-adapted DA3. SegVGGT
-remains an order of magnitude ahead.
+**Among the methods that share our protocol, the reportable rows land in FAST3DIS's ballpark:
+AP25 0.305 vs its 0.316, AP50 0.083 vs 0.096, AP 0.029 vs 0.038** — with a *strictly frozen*
+backbone against its LoRA-adapted DA3, and comparably to IGGT. SegVGGT's much higher number is
+**not a like-for-like gap**: it is scored under posed transfer, where GT poses, intrinsics and
+sensor depth carry the masks onto the point cloud with no geometry error at all, so it measures
+2D mask quality alone while ours measures 2D mask quality times feed-forward geometry quality.
+Quote it as a different protocol, never as an order-of-magnitude deficit — and quote it fairly:
+their model is as unposed as ours, and isolating segmentation from reconstruction is a defensible
+choice.
 
 **The leak-free checkpoint beats the leaked one** (0.083 vs 0.052 AP50 at identical knobs) — a
 result worth stating plainly: 1201 official train scenes outweigh the advantage of having *seen
@@ -216,6 +246,45 @@ coverage caps recall (median ~16 % of vertices voted, ~65 % of annotated vertice
 **The lifting step, not the decoder, is now the binding constraint on this ruler** — the +0.016
 AP50 that the two lifting knobs alone bought (0.067 → 0.083) is larger than most decoder
 ablations in §2.
+
+### 5.1 POSED TRANSFER — a separate protocol block (docs/MASKDINO.md §9.10, 2026-08-04)
+
+**These rows are not the rows above and may not be merged with them.** Everything in §5 so far
+is *unposed* transfer. This block runs the *posed* one — SegVGGT's — on our own masks, via
+`--transfer_mode gt_projection`: the benchmark mesh is projected into each view with ScanNet's
+GT pose + GT intrinsics and gated on the sensor depth, so the 2D↔3D correspondence is exact and
+no predicted geometry enters at all (VGGT's depth and camera heads are not even run). Same
+checkpoint, same 17.4 frames/scene, same 97.6 queries/scene, same evaluator — **the bridge is
+the only variable**.
+
+The model is still image-only in both blocks: GT geometry transfers finished masks for scoring,
+exactly as the Sim(3)+ICP does in the unposed block.
+
+| Protocol | Checkpoint | AP / AP50 / AP25 (18-class) | 17-class diagnostic | coverage: voted / annotated-assigned |
+|---|---|---|---|---|
+| **unposed** (§5 headline, job 9503137/9532181) | 1201-train, leak-free | **0.023 / 0.067 / 0.268** | 0.024 / 0.071 / 0.284 | 0.153 / 0.635 |
+| **posed** (job 9607206) | 〃 (identical file) | **0.060 / 0.156 / 0.408** | 0.064 / 0.166 / 0.432 | **0.342 / 0.791** |
+| — *oracle ceiling of the posed row* (job 9607210) | GT rendered back through the bridge | 0.828 / 0.948 / 0.974 | — | — / 0.906 |
+| SegVGGT (published) | 1201-train, LoRA-adapted VGGT | 0.504 / 0.717 / 0.870 | — | — |
+
+What each row measures: **unposed = 2D mask quality × feed-forward geometry quality** (the
+FAST3DIS/IGGT comparison, and the headline). **Posed = 2D mask quality alone, with a perfect
+bridge** (the SegVGGT comparison). Neither is "the real" number; print both or neither.
+
+Three things to carry when quoting this block:
+
+1. **The bridge costs 2.3× AP50** (0.067 → 0.156). That is the measured price of the
+   no-GT-geometry-at-inference claim, and a hard **ceiling on lifting work** (todo 5b/5c):
+   perfect registration and coverage reach 0.156, not SegVGGT's 0.717.
+2. **The protocol explains part of the SegVGGT gap, not the gap.** Under their own bridge we
+   score 0.156 against their 0.717 — factor 2.3 explained, factor ~4.6 real and remaining
+   (LoRA-adapted backbone, ~75–100 views to our 17, 259×196 masks to our 37×37, 600 kept
+   queries to our 100). Never round this off to "it's just the protocol".
+3. **The posed row is licensed by an oracle, not by plausibility.** Rendering the 3D GT back
+   through the same projection returns **99.99 %** of assigned annotated vertices to their own
+   instance (`scripts/eval3d_projection_oracle.py`, all 312 scenes) — a wrong pixel mapping
+   collapses that number. Its 0.948 AP50 is the ceiling the ~17-frame budget imposes on the
+   posed protocol, which also says **view count is not what binds us at 0.156**.
 
 ## 6. Official 1201/312 split — first runs (2026-08-02)
 
