@@ -51,14 +51,20 @@ matplotlib must stay headless (`Agg`).
 ```bash
 # --- Tests (standalone scripts, not pytest; all CPU-only, no backbone weights needed) --------
 python tests/test_maskdino_model.py   # MSDeformAttn vs naive ref, pixel decoder, decoder configs,
-                                      # box ops, head_config round-trip, initialize_box_type guard
+                                      # box ops, head_config round-trip, initialize_box_type guard,
+                                      # 3D-anchor geometry (§8.3: soft-nearest-patch projection
+                                      # against hand-computed values, pyramid gather, normalisation)
 python tests/test_maskdino_loss.py    # matcher, criterion keys + perfect-prediction zero loss,
                                       # out-of-range GT-label guard
 python tests/test_maskdino_train.py   # per-frame GT builder (incl. class drop), per-frame metric
-                                      # slicing, 60-step synthetic overfit
+                                      # slicing, 60-step synthetic overfit, --anchor_3d position
+                                      # cache (14x14 conf-weighted pooling + order-preserving gather)
 python tests/test_maskdino_multiframe.py  # shared-query multi-frame path: cross-frame block,
                                       # bundle GT + index expansion, bundle matcher, S=1
-                                      # equivalence, multi-frame overfit, bundle batching/scoring
+                                      # equivalence, multi-frame overfit, bundle batching/scoring,
+                                      # + --anchor_3d (MASKDINO.md §8.3): one anchor per bundle
+                                      # projected per view, DN rows left on the 2D path, the flag
+                                      # inert when off, Δ(xyz,log r) head really in the graph
 python tests/test_maskdino_viz.py     # figure colouring keyed to identity, not per-frame rank
 python tests/test_maskdino_consistency.py  # cross-view consistency metrics (MASKDINO.md §6.6):
                                       # planted perfect/switched cases, degenerate inputs,
@@ -93,6 +99,13 @@ sbatch --export=ALL,EXTRA_ARGS='--mask_upsample 2' slurm/train_maskdino.sh
 # multi-frame: one query set per bundle of 8 frames (docs/MASKDINO.md §8.2); reports the
 # per-bundle (multi-view) metrics as well as the per-frame ones
 sbatch --export=ALL,N_SCENES=490,EXTRA_ARGS='--multi_frame --feature_mode bundle' slurm/train_maskdino.sh
+# --anchor_3d (docs/MASKDINO.md §8.3, todo 2d): the decoder's 2D DAB anchor box becomes a 3D
+# anchor (x,y,z,log r) per query per bundle, read off VGGT's frozen POINT head at cache time
+# (+0.146% cache) and soft-projected into each view — no intrinsics/extrinsics. Needs
+# --feature_mode bundle. An ABLATION vs the 2D box (FAST3DIS owns the mechanism), so it is only
+# ever quoted against a control that differs by this flag alone.
+sbatch --export=ALL,N_SCENES=490,EXTRA_ARGS='--multi_frame --feature_mode bundle --anchor_3d' \
+    slurm/train_maskdino.sh
 # Official 1201/312 split: TRAIN_LIST/VAL_LIST override the numeric-range scene selection, and
 # DATA_TAR takes a space-separated list of tars staged into one tree. Needs bigger resources
 # than the script header (fp16 cache ~110 GB at 1201 scenes; ~58 GB staged) — pass them on the
@@ -249,6 +262,7 @@ models/maskdino/          the model — see docs/MASKDINO.md §5 for the per-fil
   decoder.py              MaskDINODecoder: two-stage selection, DAB anchors, DN, deep supervision
   decoder_layers.py       the generic DAB/DINO decoder stack it drives
   multiframe.py           --multi_frame: cross-frame attention, bundle GT, bundle matcher
+  anchor3d.py             --anchor_3d: 3D anchors instead of 2D DAB boxes (the §8.3 ablation)
   matcher.py criterion.py ms_deform_attn.py box_ops.py utils.py
 
 scripts/train_maskdino.py entry point: CLI, construction, epoch loop, checkpointing

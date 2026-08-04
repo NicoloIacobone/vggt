@@ -23,15 +23,21 @@ numero è verificabile.*
    ScanNet**, split ufficiale 1201/312, valutatore ufficiale: **AP 0.023 / AP50 0.067 /
    AP25 0.268**. Siamo nell'ordine di grandezza di **FAST3DIS** (0.038 / 0.096 / 0.316) e di
    **IGGT** (0.028 / 0.112 / 0.287) pur avendo il backbone **congelato** contro i loro adattati
-   con LoRA. **SegVGGT** (0.504 / 0.717 / 0.870) sta molto più in alto, ma **è un protocollo
-   diverso, non un altro campionato**: il loro valutatore porta le maschere sulla nuvola di punti
-   usando **pose, intrinseci e depth del sensore GT di ScanNet**, quindi misura la qualità delle
-   maschere 2D *senza alcun errore di geometria*, mentre il nostro numero misura la qualità delle
-   maschere 2D **moltiplicata** per la qualità della geometria predetta. Va detto chiaramente — e
-   va detto altrettanto chiaramente che la loro non è una scorrettezza (§8.6).
+   con LoRA. **SegVGGT** (0.504 / 0.717 / 0.870) sta molto più in alto, e qui **abbiamo misurato**,
+   non solo argomentato, quanto: il loro valutatore porta le maschere sulla nuvola di punti usando
+   **pose, intrinseci e depth del sensore GT di ScanNet**, quindi misura la qualità delle maschere
+   2D *senza alcun errore di geometria*, mentre il nostro numero misura la qualità delle maschere
+   2D **moltiplicata** per la qualità della geometria predetta. Facendo passare le **nostre stesse
+   maschere** dal loro ponte otteniamo 0.156 AP50: **il protocollo vale un fattore 2.3** del gap
+   (0.067 → 0.156), e un fattore **~4.6 resta reale** (backbone LoRA, 4–6× le viste, maschere
+   259×196 contro la nostra griglia 37×37, 600 predizioni tenute contro le nostre 100). Il
+   protocollo rende il confronto riga-a-riga **privo di senso**, non i due modelli
+   **equivalenti** — e va detto altrettanto chiaramente che la loro non è una scorrettezza (§8.6).
 5. **Due diagnosi solide, entrambe misurate e non ipotizzate.** (a) Il progetto è
-   **data-limited**, non architecture-limited. (b) Sul righello 3D il collo di bottiglia oggi è il
-   **lifting 2D→3D** (registrazione + copertura), non il decoder.
+   **data-limited**, non architecture-limited. (b) Sul righello 3D il **lifting 2D→3D**
+   (registrazione + copertura) è il collo di bottiglia, ma **solo fino a un tetto misurato di
+   0.156 AP50** (§8.4(c)) — sopra quel tetto è di nuovo la completezza/identità multi-view, cioè il
+   **decoder**, a comandare, e questo ha ribaltato la priorità del piano (§13).
 6. **Su COCO 2017** abbiamo fatto due cose diverse che non vanno confuse: una **prova di
    correttezza del porting** (riproduciamo il numero pubblicato di MaskDINO a **0.004 AP**) e uno
    **studio di backbone-swap** (VGGT congelato 37.7 AP vs DINOv2 congelato 38.8 vs ResNet-50
@@ -420,22 +426,31 @@ differenza sta in *come una maschera 2D finita arriva sulla nuvola di punti del 
 | IGGT (pubblicato) | — | senza pose | 0.028 | 0.112 | 0.287 |
 | **noi (headline)** | **VGGT, congelato** | **senza pose** | **0.023** | **0.067** | **0.268** |
 | noi, con i due knob di lifting tarati | 〃 | senza pose | 0.029 | 0.083 | 0.305 |
+| noi, stesse maschere sul ponte di SegVGGT — *decomposizione diagnostica, non un risultato* | 〃 | **con pose** | 0.060 | 0.156 | 0.408 |
 | SegVGGT (pubblicato) | VGGT, **LoRA** | **con pose** — non confrontabile riga-a-riga | 0.504 | 0.717 | 0.870 |
 
 **Come presentarlo, onestamente e senza sminuirsi:**
 
 - *"Fra i metodi valutati come noi siamo nell'ordine di grandezza di FAST3DIS (AP25 0.305 vs
   0.316) e di IGGT, senza mai toccare il backbone, mentre loro adattano il proprio con LoRA."*
-- *"SegVGGT sta molto più in alto, ma è un altro protocollo: il loro valutatore trasferisce le
-  maschere sulla nuvola con pose, intrinseci e depth del sensore GT di ScanNet, quindi il ponte
-  2D→3D è esatto per costruzione. Il loro numero misura la qualità delle maschere 2D; il nostro
-  misura la qualità delle maschere 2D per la qualità della geometria predetta."*
+- *"SegVGGT sta molto più in alto, ma non è un confronto riga-a-riga: il loro valutatore
+  trasferisce le maschere sulla nuvola con pose, intrinseci e depth del sensore GT di ScanNet,
+  quindi il ponte 2D→3D è esatto per costruzione. Il loro numero misura la qualità delle maschere
+  2D; il nostro misura la qualità delle maschere 2D moltiplicata per la qualità della geometria
+  predetta."*
+- *"Quanto vale questa differenza l'abbiamo misurato, non solo argomentato: facendo passare le
+  nostre stesse maschere dal loro ponte otteniamo 0.156 AP50 (quarta riga della tabella — è una
+  decomposizione diagnostica, non una seconda headline). Il protocollo vale un fattore 2.3
+  (0.067 → 0.156); il fattore ~4.6 che resta è reale: backbone LoRA, 4–6× le viste, maschere
+  259×196 contro la nostra griglia 37×37, 600 predizioni tenute contro le nostre 100."*
 - *"Non è una scorrettezza da parte loro: il loro modello prende immagini senza pose esattamente
   come il nostro, e isolare la segmentazione dalla ricostruzione è una scelta di valutazione
   legittima. Il problema è solo che in letteratura i due protocolli finiscono nella stessa
   tabella senza distinzione."*
-- *"La riga headline è quella con i knob di default, perché i knob della seconda riga erano stati
+- *"La riga headline è quella con i knob di default, perché i knob della riga 'tarati' erano stati
   scelti su un run diagnostico che includeva scene di val."*
+- *"La riga headline resta quella senza pose con i knob di default; la riga 'con pose' esiste
+  solo per decomporre il gap con SegVGGT, mai per essere confrontata da sola con FAST3DIS/IGGT."*
 
 ### 8.4 Le due scoperte del righello 3D
 
@@ -458,6 +473,20 @@ E una **sweep pulita di 8 punti** sui due knob di lifting mostra che: il raggio 
 niente), e l'intera griglia va da 0.067 a 0.091 AP50, **restando comunque sotto** lo 0.096 di
 FAST3DIS. **Utile negativo:** il gap residuo *non* è un artefatto di tuning, viene da copertura e
 qualità di registrazione.
+
+**(c) Quel collo di bottiglia ha un tetto misurato, e sopra quel tetto torna a comandare il
+decoder.** Facendo passare le nostre maschere dal ponte "con pose" di SegVGGT (§8.3, riga
+diagnostica) otteniamo 0.156 AP50 — un tetto duro su tutto ciò che copertura e registrazione
+possono comprare insieme: +0.089 AP50 nella lettura migliore, non di più. Un oracolo dedicato
+(la GT 3D resa nella stessa proiezione e rimandata indietro come predizione, purezza di
+round-trip **0.9999** su tutte le 312 scene) mostra inoltre che **il numero di viste non è ciò
+che vincola quel tetto**: a parità di ~17 frame per scena il ceiling è 0.948 AP50. Ciò che vincola
+a 0.156 con un ponte perfetto è il **criterio stesso di istanza 3D**: una maschera deve coprire
+l'intero oggetto in *tutte* le viste a IoU > 0.5, mentre il righello per-frame valuta ogni vista
+per conto suo e per lo stesso checkpoint riporta 0.65 AP50. Il residuo è **completezza e identità
+multi-view** — cioè, su questo righello, **il decoder torna in gioco**. Questo **ribalta la
+priorità fissata il 2026-08-03**: `docs/todo.md` ora mette l'item **2d (anchor 3D vs box DAB 2D)
+sopra 5b/5c** (copertura e registrazione), da fare solo nella parte economica.
 
 ### 8.5 Due handicap strutturali da dichiarare quando si legge la tabella
 
@@ -756,21 +785,28 @@ problema di lifting** — che è esattamente la diagnosi numerica del §8.4.
 
 ## 13. Cosa manca — il piano che proporrei al meeting
 
-Ordinato per valore atteso, con la motivazione di ciascuno:
+Ordinato per valore atteso, con la motivazione di ciascuno. **Riordinato il 2026-08-04 dalla
+misura di §8.4(c)/§14**: la decomposizione con pose mette un tetto duro di 0.156 AP50 su copertura
++ registrazione insieme (al più +0.089 AP50), quindi ora l'anchor 3D viene prima:
 
-1. **Copertura del lifting** (`todo 5b`) — solo ~16 % dei vertici riceve un voto e ~65 % dei
-   vertici annotati viene assegnato: è un tetto secco sul recall. Opzioni: più frame per scena,
-   bundle sovrapposti, voto pesato per confidenza invece di argmax duro. **Metrica intermedia da
-   guardare: `annotated_assigned_frac`, non AP** (così non si insegue il rumore).
-2. **Qualità della registrazione** (`todo 5c`) — il nostro RMS è dell'ordine del raggio di voto.
-   Idee: ICP sui *punti votati* invece che sui centri camera; registrazione per-bundle con un
-   controllo di consistenza. **Vincolo da non violare: la registrazione è solo in valutazione, non
-   deve mai far entrare geometria GT nel path di predizione** — è il punto di vendita del progetto.
-3. **Anchor 3D vs box DAB 2D** (`todo 2d`) — da fare **sopra** il multi-frame (un anchor 3D ha
+1. **Anchor 3D vs box DAB 2D** (`todo 2d`) — ora la voce a valore atteso più alto: sopra il tetto
+   di 0.156 AP50 misurato in §8.4(c), è la completezza/identità multi-view — cioè il decoder — a
+   comandare, non copertura o registrazione. Da fare **sopra** il multi-frame (un anchor 3D ha
    senso solo se una query è un'istanza attraverso le viste). Da presentare come **ablation**, non
    come meccanismo nuovo (FAST3DIS lo possiede), e chiude anche il cerchio sul risultato negativo
    di arm E.
-4. **Solo dopo 1–3**: rivedere se il decoder torna a essere il vincolo su questo righello.
+2. **Copertura del lifting** (`todo 5b`) — solo ~16 % dei vertici riceve un voto e ~65 % dei
+   vertici annotati viene assegnato: è un tetto secco sul recall, ma ora sappiamo che vale **al
+   più +0.089 AP50** insieme a 5c (§8.4(c)), quindi solo la parte economica. Opzioni: più frame per
+   scena, bundle sovrapposti, voto pesato per confidenza invece di argmax duro. **Metrica
+   intermedia da guardare: `annotated_assigned_frac`, non AP** (così non si insegue il rumore).
+3. **Qualità della registrazione** (`todo 5c`) — il nostro RMS è dell'ordine del raggio di voto,
+   stesso tetto di §2 sopra. Idee: ICP sui *punti votati* invece che sui centri camera;
+   registrazione per-bundle con un controllo di consistenza. **Vincolo da non violare: la
+   registrazione è solo in valutazione, non deve mai far entrare geometria GT nel path di
+   predizione** — è il punto di vendita del progetto.
+4. **Solo dopo 1–3**: rivedere se il decoder torna a essere ulteriormente il vincolo su questo
+   righello.
 
 **Cosa NON faremo, e perché** (utile da dire, mostra controllo dello scope):
 
@@ -804,9 +840,27 @@ FAST3DIS e IGGT, dove su AP25 siamo a 0.305 contro il loro 0.316 e 0.287, quindi
 *riconoscimento* funziona. La perdita è concentrata sul salto da AP25 a AP50 (fattore ~4), e le
 diagnostiche dicono esattamente perché: errore di registrazione mediano 0.14 m e solo ~16 % di
 vertici coperti. Abbiamo dimostrato con una sweep di 8 punti che **non è un problema di tuning**
-(il raggio di voto satura proprio a 0.15 m = l'errore di registrazione). Detto ciò, SegVGGT ha
-comunque due vantaggi reali che non neghiamo: adatta il backbone con LoRA e in valutazione usa
-~75–100 viste per scena contro le nostre ~17.
+(il raggio di voto satura proprio a 0.15 m = l'errore di registrazione). Da ultimo, non ci siamo
+fermati ad argomentare la differenza di protocollo: **l'abbiamo misurata**, vedi la prossima
+domanda.
+
+**Q: "E quanto vale, allora, questa differenza di protocollo?"**
+L'abbiamo misurata facendo passare le **nostre stesse maschere** attraverso il ponte 2D→3D "con
+pose" di SegVGGT (`--transfer_mode gt_projection`), stesso checkpoint, stessi frame, stesse query,
+stesso valutatore — cambia solo il ponte. Risultato: 0.023/0.067/0.268 → **0.060/0.156/0.408**.
+Quindi **il protocollo vale un fattore 2.3 su AP50** (0.067 → 0.156) del gap totale con SegVGGT
+(0.717); il fattore **~4.6 restante è reale** e attribuibile a cause concrete ed elencabili, non a
+un mistero: backbone adattato con LoRA, 4–6× le nostre viste, maschere 259×196 contro la nostra
+griglia 37×37, 600 predizioni tenute contro le nostre 100. La misura è **licenziata da un
+oracolo**: rendendo la GT 3D nella stessa proiezione e rimandandola indietro come predizione, la
+purezza di round-trip è **0.9999** su tutte le 312 scene — se la mappatura dei pixel fosse
+sbagliata (shift, trasposizione, riscalatura isotropica) l'oracolo lo tradirebbe subito. Lo stesso
+oracolo dice anche che il numero di viste **non** è ciò che vincola quel 0.156: a parità di ~17
+frame il ceiling è 0.948 AP50. Questa misura ha una conseguenza operativa che riportiamo in §13:
+mette un **tetto duro di 0.156 AP50** su tutto ciò che copertura e registrazione (`todo` 5b/5c)
+possono comprare, e **ribalta la priorità** fissata il 3 agosto — ora l'item 2d (anchor 3D vs box
+DAB 2D) viene prima di 5b/5c, perché sopra quel tetto è la completezza/identità multi-view, cioè
+il decoder, a comandare.
 
 **Q: "Come sapete che il vostro MaskDINO non ha bug?"**
 Tre livelli. (1) I pesi ufficiali di upstream entrano nel nostro decoder a `strict=True`,
@@ -891,6 +945,7 @@ encoding sui frame, quindi è definito per qualunque S. Zero fallimenti su 312 s
 | FAST3DIS (LoRA) | senza pose | 0.038 | 0.096 | 0.316 |
 | IGGT | senza pose | 0.028 | 0.112 | 0.287 |
 | **noi (congelato)** | **senza pose** | **0.023** | **0.067** | **0.268** |
+| noi, stesse maschere sul ponte "con pose" — *decomposizione diagnostica* | con pose | 0.060 | 0.156 | 0.408 |
 | SegVGGT (LoRA) | **con pose** — non confrontabile riga-a-riga | 0.504 | 0.717 | 0.870 |
 
 **Righello 4 — COCO val2017** (verifica, non risultato di progetto)

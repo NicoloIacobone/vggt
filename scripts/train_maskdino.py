@@ -45,7 +45,7 @@ from models.maskdino import (NUM_SCANNET_CLASSES, HungarianMatcher, MultiFrameHu
 from models.maskdino.model import MaskDINOVGGTModel
 from train.common import (DEFAULT_SCANS_ROOT, append_jsonl, build_scheduler, resolve_scene_dirs)
 from train.maskdino_data import (bundle_index, frame_index, gather_batch, gather_bundle_batch,
-                                 prepare_scenes)
+                                 gather_token_xyz, prepare_scenes)
 from train.eval_metrics import CONSISTENCY_KEYS
 from train.maskdino_eval import eval_scenes, fmt, mean_metric, visualize
 
@@ -145,6 +145,14 @@ def build_argparser():
                         "on with --multi_frame, off otherwise). --no-cross_frame_attn isolates "
                         "how much of the multi-frame gain comes from the block rather than from "
                         "shared query init + bundle matching.")
+    p.add_argument("--anchor_3d", action="store_true",
+                   help="Replace the decoder's 2D DAB anchor box with a 3D anchor read off "
+                        "VGGT's own point head (docs/MASKDINO.md §8.3, docs/todo.md 2d). The "
+                        "anchor is one (x,y,z,log r) per query per bundle, projected into each "
+                        "view as a soft nearest patch and refined by Delta(xyz, log r) instead "
+                        "of Delta(box). Needs --feature_mode bundle; meant to be run with "
+                        "--multi_frame. An ABLATION against the 2D-box default, not a new "
+                        "mechanism (FAST3DIS owns it) — see docs/RELATED_WORK.md.")
     p.add_argument("--batch_bundles", type=int, default=1,
                    help="Bundles per step in --multi_frame mode (batch = this x --num_frames "
                         "frames). Ignored in single-frame mode, which uses --batch_frames.")
@@ -209,6 +217,16 @@ def main():
     if args.cross_frame_attn and not args.multi_frame:
         raise SystemExit("--cross_frame_attn needs --multi_frame: with one frame per sample the "
                          "block has nothing to attend across.")
+    if args.anchor_3d:
+        if args.feature_mode != "bundle":
+            raise SystemExit("--anchor_3d needs --feature_mode bundle (docs/MASKDINO.md §8.3): "
+                             "in 'single' mode the aggregator sees one frame at a time, so each "
+                             "frame's pointmap is in its own coordinate frame and a 3D anchor "
+                             "shared across views has no meaning.")
+        if not args.multi_frame:
+            print("⚠ --anchor_3d without --multi_frame: the anchor is still one 3D point per "
+                  "query, but each frame gets its own query set, so it cannot tie identity "
+                  "across views. The intended base is --multi_frame --feature_mode bundle.")
     args.feature_layers = [int(x) for x in args.feature_layers.split(",") if x.strip()]
 
     random.seed(args.seed)
@@ -233,6 +251,7 @@ def main():
         initialize_box_type=args.initialize_box_type if args.two_stage else "no",
         dn=args.dn, dn_num=args.dn_num, noise_scale=args.noise_scale,
         mask_upsample=args.mask_upsample, cross_frame_attn=args.cross_frame_attn,
+        anchor_3d=args.anchor_3d,
     )
     print("\n=== Initializing model ===")
     model = MaskDINOVGGTModel(head_kwargs).to(device)
@@ -326,14 +345,16 @@ def main():
                 continue
 
             optimizer.zero_grad(set_to_none=True)
+            xyz = gather_token_xyz(train_scenes, chunk, device)
             if args.multi_frame:
                 feats, targets, bundles, psi, s = gather_bundle_batch(train_scenes, chunk, device)
-                out, mask_dict = model.head(feats, psi, targets, frames_per_sample=s)
+                out, mask_dict = model.head(feats, psi, targets, frames_per_sample=s,
+                                            token_xyz=xyz)
                 losses = criterion(out, targets, mask_dict, bundle_targets=bundles,
                                    frames_per_sample=s)
             else:
                 feats, targets, psi = gather_batch(train_scenes, chunk, device)
-                out, mask_dict = model.head(feats, psi, targets)
+                out, mask_dict = model.head(feats, psi, targets, token_xyz=xyz)
                 losses = criterion(out, targets, mask_dict)
             total = sum(losses[k] * weight_dict[k] for k in losses if k in weight_dict)
             total.backward()

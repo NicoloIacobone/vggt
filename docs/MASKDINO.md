@@ -797,10 +797,10 @@ selected on val `bundle_AP50` (docs/todo.md 2b, done 2026-08-01). Off for single
 the key doesn't exist there. The end-of-run summary line prints its epoch alongside the other
 two when present.
 
-### 8.3 3D anchors instead of 2D boxes (designed, not implemented)
+### 8.3 3D anchors instead of 2D boxes — `--anchor_3d` (todo 2d, implemented 2026-08-04)
 
-Replace the DAB 4-d box with a 3D anchor from VGGT's point head. Arm E showed 3D anchors alone
-don't beat 2D queries, but arm E had no box refinement, no DN and no deep supervision — the
+Replace the DAB 4-d box with a 3D anchor read off VGGT's own point head. Arm E showed 3D anchors
+alone don't beat 2D queries, but arm E had no box refinement, no DN and no deep supervision — the
 ingredients that make anchors work in DINO.
 
 **Framing (settled 2026-07-28, docs/RELATED_WORK.md).** FAST3DIS (arXiv 2603.25993) already
@@ -810,34 +810,109 @@ own controlled study** ("3D anchors vs 2D DAB boxes, same frozen backbone, same 
 protocol", which nobody has run and which re-tests the arm-E negative result), **not** a new
 mechanism. Budget it accordingly.
 
-**Dependency: do this on top of §8.2, not before it.** A 3D anchor is only meaningful when a
-query is one instance across views — with per-frame queries it is just a 2D box plus a depth.
+**Why it was promoted above the lifting workstream (2026-08-04).** §9.10 measured what our masks
+score with a *perfect* 2D↔3D bridge: 0.156 AP50, against 0.65 AP50 for the same checkpoint on the
+per-frame ruler. So what binds at 0.156 is not lifting but the 3D-instance criterion — one query
+owning a whole object across *all* its views. That is multi-view completeness and identity, i.e.
+the decoder, and the anchor is the decoder's positional prior.
 
-**Design sketch.**
+**Dependency: on top of §8.2, not before it.** A 3D anchor is only meaningful when a query is one
+instance across views — with per-frame queries it is just a 2D box plus a depth. `--anchor_3d`
+therefore **requires `--feature_mode bundle`** (a hard error otherwise): in `single` mode the
+aggregator sees one frame at a time, so each frame's pointmap is in its own coordinate frame and
+an anchor shared across views has no meaning. Without `--multi_frame` it warns.
 
-1. *Geometry cache.* At caching time the frozen point head already runs on the aggregator output
-   we have; store only the **per-patch-token 3D position** (confidence-weighted mean of the
-   token's 14×14 pixels, as in `legacy/d4rt/models/anchor_queries.py::patch_token_positions`) —
-   `[S, 37·37, 3]` + confidence, ~65 kB per scene in fp16, versus ~26 MB for the full pointmap,
-   which is never stored. Reimplement the 15-line pooling next to the cache rather than importing
-   from frozen `legacy/`.
-2. *Anchor = a 3D point (+ scale) per query, shared across the bundle's views.* Two-stage
-   selection already picks top-k memory tokens; each selected token's cached 3D position is its
-   anchor, so 3D two-stage costs a gather.
-3. *Per-view reference points without camera math.* Every patch of view *f* has a cached 3D
-   position, so the query's 2D reference in that view is a **soft nearest patch**:
-   `w = softmax(-‖p_patch − anchor‖² / τ)` over the 37×37 grid, reference `(u,v) = Σ w · (u,v)_patch`.
-   Differentiable in the anchor, needs no intrinsics/extrinsics (unlike FAST3DIS, which projects
-   with its predicted camera), and degrades gracefully where the pointmap is unreliable.
-   Iterative refinement then predicts Δxyz on the anchor instead of Δbox.
-4. *Losses unchanged.* The 2D box stays the prediction target of `_bbox_embed` per view, so the
-   matcher, the box/GIoU losses and DN all keep working exactly as they do today; only the query
-   *positional prior* and the sampling locations change.
+#### The design as built
+
+1. *Geometry cache* (`train/maskdino_data.py::patch_token_positions`, `extract_features(...,
+   need_xyz=True)`). The frozen point head runs on the aggregator output the cache already has,
+   and only the **per-patch-token 3D position** is stored: the confidence-weighted mean of the
+   token's 14×14 pixels, `[S, 37·37, 3]` in fp16. **Measured: 65.71 kB per bundle against
+   45.02 MB of tokens — +0.146 %** (~178 MB over the whole 1201×2 + 312 official-split cache),
+   and no measurable caching-time cost. The ~26 MB pointmap it comes from is never stored. The
+   pooling is re-implemented here rather than imported from frozen
+   `legacy/d4rt/models/anchor_queries.py`, so arm E's published numbers cannot move.
+   Positions are normalised **per bundle** to zero mean / unit RMS radius
+   (`models/maskdino/anchor3d.py::normalize_token_xyz`) — the softmax temperature below is one
+   learned scalar per query and only means something in a comparable coordinate frame. The
+   centre/scale are estimated on the tokens at or above the bundle's **median** point-head
+   confidence, because the unreliable tail of the pointmap is what would otherwise drag them.
+2. *Anchor = `(x, y, z, log r)` per query per bundle* — deliberately 4-d, the same width as the
+   DAB box it replaces. Two-stage selection already picks top-k memory tokens, so 3D two-stage
+   costs a gather: `pyramid_token_xyz` gives every level of the ViTDet pyramid a position (level
+   0 verbatim, coarser levels **nearest**-resampled so a cell straddling a depth discontinuity
+   keeps a real surface position), which makes the positions indexable with the very same top-k
+   index. `r` starts at 0.25 of the bundle's RMS radius for every query. Without two-stage the
+   anchors are a learned `nn.Embedding(num_queries, 4)` instead.
+3. *Per-view reference points without camera math* (`anchor3d.py::project_anchors`). Every patch
+   of view *f* has a position, so the query's 2D reference in that view is a **soft nearest
+   patch**:
+
+   ```
+   w        = softmax(-‖p_patch − a‖² / r²)        over that view's 37×37 grid
+   (cx, cy) = Σ w · (u, v)_patch
+   (w,  h)  = 2 · sqrt(Var_w[(u, v)] + (0.5/37)²)
+   ```
+
+   The reference *size* falls out of the same distribution as its centre — this is the sketch's
+   "3D point **(+ scale)**", realised as the softmax temperature — floored at one patch so a
+   collapsed anchor cannot degenerate the deformable sampling to a single point. Differentiable
+   in the anchor, needs no intrinsics or extrinsics (unlike FAST3DIS, which projects with its
+   predicted camera), and degrades gracefully where the pointmap is unreliable. The result is a
+   `(cx, cy, w, h)` in (0,1), so `gen_sineembed_for_position`, `MSDeformAttn` and `pred_box` are
+   all untouched. Iterative refinement predicts Δ(xyz, log r) on the anchor instead of Δbox.
+4. *Losses unchanged.* The 2D box stays the prediction target of `_bbox_embed` per view — the box
+   at layer *l* is `sigmoid(bbox_embed(h_l) + inverse_sigmoid(ref_l))` exactly as before, only
+   with `ref_l` now coming from the anchor's projection — so the matcher, the box/GIoU losses,
+   deep supervision and DN all keep working as they do today. Only the query *positional prior*
+   and the deformable sampling locations change.
+
+#### Three deviations from the §8.3 sketch, all forced (and one confound, stated)
+
+- **The anchor refinement is NOT detached**, unlike the DAB box. `bbox_embed` can be detached
+  because it learns from the box loss; the 3D anchor has *no loss of its own*, so a detached
+  Δ(xyz, log r) head would receive exactly zero gradient and never train. The gradient reaches it
+  through the soft projection of the following layers' references — which is precisely why the
+  sketch specified a differentiable projection.
+  `tests/test_maskdino_multiframe.py::test_anchor3d_overfit` asserts the head is in the graph.
+- **Δxyz is the mean over the bundle's views** of `anchor_embed(output)`. The anchor is one 3D
+  point per bundle, and the mean is the permutation-equivariant reduction — the same reasoning
+  that keeps `CrossFrameAttention` free of a frame positional encoding (§8.2).
+- **Confidence is used for the intra-patch pooling and the robust normalisation, not as a bias
+  inside the softmax.** One fewer mechanism, and the normalisation is where bad pointmap values
+  actually do damage.
+- **The confound, named:** `initialize_box_type=bitmask` still seeds the *initial* (pre-decoder)
+  box prediction and the two-stage/interm losses, so those are byte-identical to the control —
+  but from decoder layer 0 onward the anchor projection *is* the reference, so the mask-enhanced
+  box init no longer reaches the 9 decoder layers. The ablation therefore moves "2D box refined
+  by `bbox_embed`" → "3D anchor refined by `anchor_embed`" as one unit. That is inherent: the
+  anchor *is* the positional prior, and you cannot have the prior come from the mask and from the
+  3D anchor at once (FAST3DIS has no bitmask init either).
+
+**Files:** `models/maskdino/anchor3d.py` (the geometry, no parameters), the `anchor_3d` argument
+threaded through `head.py` → `decoder.py` → `decoder_layers.py`, the cache and gather in
+`train/maskdino_data.py`, `token_xyz=` at every head call site (`scripts/train_maskdino.py`,
+`train/maskdino_eval.py`, `scripts/eval_3d_maskdino.py`, `demos/demo_gradio.py` via
+`train/maskdino_viz3d.py::head_token_xyz`). Off by default everywhere; the head raises rather
+than silently falling back if it is on and no positions are supplied.
+
+**Note for the 3D ruler.** An `--anchor_3d` checkpoint is the one case where the *model* consumes
+predicted geometry. In `--transfer_mode gt_projection` (§9.10) "no predicted geometry" then
+describes the 2D→3D **bridge** only, not the whole column. `scripts/eval_3d_maskdino.py` runs the
+point head for such checkpoints in both modes and says so here rather than leaving it implicit.
 
 Cheap follow-ups that need one flag each: `--mask_upsample 2` (74×74 masks — currently supervised
 on the 37×37 patch grid) and `--bundles_per_scene 2 --color_jitter 0.2` (more frame draws without
 new scenes; costs cache memory). Both answered at N=490 (§7.4: upsample neutral, extra draws
 +0.030 AP50 and saturating at 2 per §7.4.1).
+
+#### Result
+
+<!-- RESULT-2D: filled in when job 9634920 lands -->
+Run submitted 2026-08-04 as job **9634920** — identical to the control (job 9386666,
+`maskdino_sf_list1201_mf_20260802_133826`: official 1201/312 split, `--multi_frame
+--feature_mode bundle --bundles_per_scene 2 --color_jitter 0.2`, 12 epochs, warmup 2) except for
+`--anchor_3d`. Numbers land here and in docs/RESULTS.md §6.
 
 ## 9. The 3D ruler — official ScanNet 3D instance benchmark (docs/todo.md 1d, 2026-08-01)
 

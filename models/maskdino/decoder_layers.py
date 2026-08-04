@@ -10,6 +10,7 @@ box refinement. `MaskDINODecoder` (decoder.py) supplies the box head and drives 
 import torch
 from torch import nn
 
+from .anchor3d import project_anchors
 from .ms_deform_attn import MSDeformAttn
 from .multiframe import CrossFrameAttention
 from .utils import (MLP, _get_activation_fn, _get_clones, gen_sineembed_for_position,
@@ -86,6 +87,9 @@ class TransformerDecoder(nn.Module):
         self.d_model = d_model
         self.ref_point_head = MLP(query_dim // 2 * d_model, d_model, d_model, 2)
         self.bbox_embed = None  # set by MaskDINODecoder (shared box head, iterative refinement)
+        # --anchor_3d only (docs/MASKDINO.md §8.3): the Delta(xyz, log r) head, also set by
+        # MaskDINODecoder. None keeps the 2D DAB path exactly as it was.
+        self.anchor_embed = None
         self._reset_parameters()
 
     def _reset_parameters(self):
@@ -98,20 +102,40 @@ class TransformerDecoder(nn.Module):
 
     def forward(self, tgt, memory, memory_key_padding_mask=None, refpoints_unsigmoid=None,
                 level_start_index=None, spatial_shapes=None, valid_ratios=None, tgt_mask=None,
-                frames_per_sample=1, num_shared_queries=None):
+                frames_per_sample=1, num_shared_queries=None, anchor=None, token_xyz=None):
         """
         tgt: [nq, bs, d_model]; memory: [hw, bs, d_model]; refpoints_unsigmoid: [nq, bs, 4].
         `frames_per_sample > 1` means the batch is B bundles of S frames (frames contiguous) that
         share their queries; the per-layer `cross_frame` block then mixes the S copies of each of
         the trailing `num_shared_queries` queries (docs/MASKDINO.md §8).
+
+        `anchor` [B, nq_shared, 4] switches on the 3D-anchor path (docs/MASKDINO.md §8.3): the
+        trailing `num_shared_queries` queries take their per-layer reference from the anchor's
+        projection into each view (`token_xyz` [bs, h*w, 3]) instead of from an independently
+        refined 2D box, and are refined by Delta(xyz, log r). The leading rows — the denoising
+        queries, which have no 3D anchor because their slot means a different GT instance in each
+        frame — keep the 2D DAB path untouched.
+
         Returns (list of per-layer outputs [bs, nq, d], list of reference boxes [bs, nq, 4]).
         """
         output = tgt
         intermediate = []
         reference_points = refpoints_unsigmoid.sigmoid()
         ref_points = [reference_points]
+        nq = tgt.shape[0]
+        n_shared = nq if num_shared_queries is None else min(num_shared_queries, nq)
+        n_dn = nq - n_shared          # the denoising rows, always at the FRONT
 
         for layer_id, layer in enumerate(self.layers):
+            if anchor is not None:
+                # The shared queries' reference is not a state that gets refined — it is
+                # recomputed from the current 3D anchor every layer. `reference_points` is what
+                # the layer consumes (DN rows detached, as before); `ref_points[-1]` is the
+                # non-detached twin `pred_box` uses as the box base, and only its DN rows differ.
+                ref_shared = project_anchors(anchor, token_xyz, frames_per_sample).transpose(0, 1)
+                reference_points = torch.cat([reference_points[:n_dn], ref_shared], dim=0)
+                ref_points[-1] = torch.cat([ref_points[-1][:n_dn], ref_shared], dim=0)
+
             reference_points_input = (reference_points[:, :, None]
                                       * torch.cat([valid_ratios, valid_ratios], -1)[None, :])
             query_sine_embed = gen_sineembed_for_position(
@@ -140,6 +164,16 @@ class TransformerDecoder(nn.Module):
                 new_reference_points = (delta_unsig + inverse_sigmoid(reference_points)).sigmoid()
                 reference_points = new_reference_points.detach()
                 ref_points.append(new_reference_points)
+
+            # iterative 3D-anchor refinement. NOT detached, unlike the box above: the anchor has
+            # no loss of its own, so a detached Delta(xyz, log r) head would receive exactly zero
+            # gradient — the gradient reaches it only through the soft projection of the NEXT
+            # layers' references. One anchor per bundle, so the S views' deltas are averaged
+            # (the permutation-equivariant reduction, as in CrossFrameAttention).
+            if anchor is not None and self.anchor_embed is not None:
+                b, s = anchor.shape[0], frames_per_sample
+                delta = self.anchor_embed[layer_id](output[n_dn:])          # [n_shared, bs, 4]
+                anchor = anchor + delta.transpose(0, 1).reshape(b, s, n_shared, 4).mean(dim=1)
 
             intermediate.append(self.norm(output))
 

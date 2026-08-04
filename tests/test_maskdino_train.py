@@ -5,7 +5,10 @@ MaskDINO training path (docs/MASKDINO.md). Standalone, CPU-only, no VGGT weights
   - the per-frame GT builder (labels/boxes/masks) from a synthetic scene batch, including the
     drop of classes the 19-logit head cannot represent;
   - the per-frame metric slicing in train/perframe.py, shared with scripts/eval_perframe.py;
-  - a 60-step overfit of the whole head on one synthetic frame (loss must drop a lot).
+  - a 60-step overfit of the whole head on one synthetic frame (loss must drop a lot);
+  - the --anchor_3d cache side (docs/MASKDINO.md §8.3): the 14x14 confidence-weighted pooling to
+    one 3D position per patch token, its size on disk, and the batching helper that keeps the
+    positions in the same order as the tokens.
 """
 
 import sys
@@ -153,9 +156,59 @@ def test_overfit_single_frame():
     print("✅ Head overfits a single synthetic frame\n")
 
 
+def test_patch_token_positions_and_gather():
+    print("=== Testing --anchor_3d position cache + batching ===")
+    from train.maskdino_data import gather_token_xyz, patch_token_positions
+
+    ps, hp, wp, S = 14, 3, 4, 2
+    H, W = hp * ps, wp * ps
+    pts = torch.zeros(1, S, H, W, 3)
+    conf = torch.zeros(1, S, H, W)
+    # Every pixel of a cell carries a different position; only ONE pixel per cell has non-zero
+    # confidence, so the pooled position must be exactly that pixel's — this is what catches a
+    # transposed or mis-strided reshape, which would otherwise still return plausible numbers.
+    want = torch.zeros(S, hp * wp, 3)
+    for f in range(S):
+        for r in range(hp):
+            for c in range(wp):
+                cell = torch.arange(ps * ps).float().reshape(ps, ps)
+                pts[0, f, r * ps:(r + 1) * ps, c * ps:(c + 1) * ps, 0] = cell
+                pts[0, f, r * ps:(r + 1) * ps, c * ps:(c + 1) * ps, 1] = float(r)
+                pts[0, f, r * ps:(r + 1) * ps, c * ps:(c + 1) * ps, 2] = float(c)
+                pick_r, pick_c = (r + f) % ps, (c + f) % ps
+                conf[0, f, r * ps + pick_r, c * ps + pick_c] = 2.0
+                want[f, r * wp + c] = torch.tensor(
+                    [float(pick_r * ps + pick_c), float(r), float(c)])
+
+    xyz, w = patch_token_positions(pts, conf, patch_size=ps)
+    assert xyz.shape == (S, hp * wp, 3) and w.shape == (S, hp * wp)
+    assert torch.allclose(xyz, want), (xyz[0, :3], want[0, :3])
+    assert torch.allclose(w, torch.full_like(w, 2.0 / (ps * ps)))
+
+    # the size claim of §8.3: kilobytes per bundle in fp16, not the ~26 MB pointmap it came from
+    per_bundle = 8 * 37 * 37 * 3 * 2
+    assert per_bundle < 100_000, per_bundle
+
+    # batching: frame-indexed and bundle-indexed gathers must follow the token order exactly
+    scenes = [{"bundles": [{"token_xyz": torch.arange(2 * 4 * 3).float().reshape(2, 4, 3)},
+                           {"token_xyz": torch.zeros(2, 4, 3)}]},
+              {"bundles": [{"token_xyz": torch.ones(2, 4, 3)}]}]
+    frames = gather_token_xyz(scenes, [(0, 0, 1), (1, 0, 0)], "cpu")
+    assert torch.equal(frames[0], scenes[0]["bundles"][0]["token_xyz"][1])
+    assert torch.equal(frames[1], scenes[1]["bundles"][0]["token_xyz"][0])
+    bundles = gather_token_xyz(scenes, [(0, 0), (1, 0)], "cpu")
+    assert bundles.shape == (4, 4, 3)             # frames of a bundle stay contiguous
+    assert torch.equal(bundles[:2], scenes[0]["bundles"][0]["token_xyz"])
+    # a cache built before the flag existed reports "no positions" instead of crashing
+    assert gather_token_xyz([{"bundles": [{}]}], [(0, 0)], "cpu") is None
+    assert gather_token_xyz(scenes, [], "cpu") is None
+    print("✅ confidence-weighted patch pooling + order-preserving gather OK\n")
+
+
 if __name__ == "__main__":
     test_frame_targets_builder()
     test_frame_targets_out_of_range_class()
     test_perframe_metrics()
     test_overfit_single_frame()
+    test_patch_token_positions_and_gather()
     print("All test_maskdino_train tests passed! ✅")

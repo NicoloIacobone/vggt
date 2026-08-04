@@ -16,7 +16,7 @@ from data.scannet_overfit import IDX_TO_CLASS
 from models.maskdino import build_bundle_target, to_scannet_class_logits
 from train.eval_metrics import (CONSISTENCY_KEYS, compute_instance_segmentation_metrics,
                                 multiview_consistency_metrics)
-from train.maskdino_data import gather_batch
+from train.maskdino_data import gather_batch, gather_token_xyz
 from train.perframe import (METRIC_KEYS, drop_empty_masks, gt_masks_from_id_map,
                             topk_predictions, upsample_mask_logits)
 
@@ -56,7 +56,8 @@ def eval_scenes(model, scenes: List[Dict], args, device: str) -> Dict[str, Dict[
         for start in range(0, len(samples), args.eval_batch_frames):
             chunk = samples[start:start + args.eval_batch_frames]
             feats, targets, psi = gather_batch(scenes, chunk, device)
-            out, _ = model.head(feats, psi, None)
+            out, _ = model.head(feats, psi, None,
+                                token_xyz=gather_token_xyz(scenes, chunk, device))
             for b in range(len(chunk)):
                 # A query that claims no pixels in this frame is not a detection — the same
                 # rule scripts/eval_perframe.py applies to the D4RT baselines, so the two
@@ -110,7 +111,8 @@ def eval_scenes_multiframe(model, scenes: List[Dict], args, device: str
         samples = [(si, 0, fi) for fi in range(len(bundle_targets_all))]
         feats, targets, psi = gather_batch(scenes, samples, device)
         s = len(samples)
-        out, _ = model.head(feats, psi, None, frames_per_sample=s)
+        out, _ = model.head(feats, psi, None, frames_per_sample=s,
+                            token_xyz=gather_token_xyz(scenes, samples, device))
 
         rows, bundle_rows, consistency = [], [], None
         for b in range(s):
@@ -287,7 +289,9 @@ def visualize(model, scenes: List[Dict], args, device: str, out_dir: Path,
         frames = list(range(len(bundle["targets"]))) if multi else with_gt[:max_frames]
         samples = [(si, 0, fi) for fi in frames]
         feats, targets, psi = gather_batch(scenes, samples, device)
-        out, _ = model.head(feats, psi, None, frames_per_sample=len(frames) if multi else 1)
+        out, _ = model.head(feats, psi, None,
+                            frames_per_sample=len(frames) if multi else 1,
+                            token_xyz=gather_token_xyz(scenes, samples, device))
         drawn = 0
         for b, (_, _, fi) in enumerate(samples):
             if fi not in with_gt or drawn >= max_frames:

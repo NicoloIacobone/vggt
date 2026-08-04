@@ -35,8 +35,9 @@ from legacy.d4rt.train.postprocess import select_instances, upsample_assignment
 from data.scannet_overfit import IDX_TO_CLASS, ScanNetMultiSceneDataset, decode_checkpoint_images
 from train.common import DEFAULT_SCANS_ROOT
 from train.maskdino_data import DTYPES
-from train.maskdino_viz3d import (colorize, head_features, is_maskdino_checkpoint,
-                                  load_maskdino_seg_head, maskdino_seg_colors)
+from train.maskdino_viz3d import (colorize, head_features, head_token_xyz,
+                                  is_maskdino_checkpoint, load_maskdino_seg_head,
+                                  maskdino_seg_colors)
 
 # Root for reloading frames from --checkpoint_light checkpoints (no stored pixels) and, for
 # MaskDINO checkpoints, for ALL frames — those checkpoints store no pixels at all.
@@ -262,16 +263,27 @@ def _maskdino_seg_colors(images_dev: torch.Tensor):
     train_args = SEG["train_args"]
     dtype = DTYPES.get(train_args.get("backbone_dtype", "float32"), torch.float32)
 
+    last_agg = {}
+
     def aggregator(imgs):
         ctx = (torch.autocast("cuda", dtype=dtype)
                if (device == "cuda" and dtype != torch.float32) else contextlib.nullcontext())
         with ctx:
-            return model.aggregator(imgs)
+            agg_list, psi = model.aggregator(imgs)
+        last_agg["list"], last_agg["images"], last_agg["psi"] = agg_list, imgs, psi
+        return agg_list, psi
 
     feats, patch_start_idx = head_features(aggregator, images_dev, train_args)
     S = feats.shape[0]
     multi = bool(train_args.get("multi_frame", False))
-    out, _ = SEG["head"](feats, patch_start_idx, None, frames_per_sample=S if multi else 1)
+    # --anchor_3d checkpoints take their query anchors from the frozen point head, so the
+    # positions have to be rebuilt from the very same aggregator pass (docs/MASKDINO.md §8.3).
+    token_xyz = None
+    if SEG["head"].head_config.get("anchor_3d", False):
+        token_xyz = head_token_xyz(model.point_head, last_agg["list"], last_agg["images"],
+                                   last_agg["psi"]).to(feats.dtype)
+    out, _ = SEG["head"](feats, patch_start_idx, None, frames_per_sample=S if multi else 1,
+                         token_xyz=token_xyz)
     seg_colors, legend = maskdino_seg_colors(
         out, images_dev, score_threshold=SEG["score_threshold"],
         mask_threshold=SEG["mask_threshold"], drop_stuff=SEG["drop_stuff"])

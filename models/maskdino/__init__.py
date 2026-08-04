@@ -11,6 +11,7 @@ Layout:
     decoder.py         MaskDINODecoder — two-stage selection, denoising, deep supervision
     decoder_layers.py  the generic DAB/DINO decoder stack it drives
     multiframe.py      shared-across-frames queries: cross-frame attention, bundle GT, bundle matcher
+    anchor3d.py        --anchor_3d: 3D anchors instead of 2D DAB boxes (§8.3 ablation)
     matcher.py         HungarianMatcher (class + box + point-sampled mask cost)
     criterion.py       SetCriterion (focal + BCE/Dice + L1/GIoU, incl. DN and aux losses)
     ms_deform_attn.py  pure-PyTorch multi-scale deformable attention (no CUDA extension)
@@ -21,6 +22,7 @@ Layout:
 must be able to import the head without it.
 """
 
+from .anchor3d import normalize_token_xyz, project_anchors, pyramid_token_xyz
 from .criterion import SetCriterion, build_weight_dict
 from .head import NUM_SCANNET_CLASSES, MaskDINOVGGTHead, build_head_from_config, to_scannet_class_logits
 from .matcher import HungarianMatcher, check_target_labels
@@ -41,4 +43,7 @@ __all__ = [
     "build_bundle_target",
     "bundle_targets_to_device",
     "expand_bundle_indices",
+    "normalize_token_xyz",
+    "project_anchors",
+    "pyramid_token_xyz",
 ]

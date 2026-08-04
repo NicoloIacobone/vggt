@@ -19,6 +19,7 @@ import torch
 from torch import Tensor, nn
 
 from . import box_ops
+from .anchor3d import ANCHOR_LOG_R0, pyramid_token_xyz
 from .decoder_layers import DeformableTransformerDecoderLayer, TransformerDecoder
 from .utils import MLP, gen_encoder_output_proposals, inverse_sigmoid
 
@@ -65,6 +66,7 @@ class MaskDINODecoder(nn.Module):
         dec_n_points: int = 4,
         query_dim: int = 4,
         cross_frame_attn: bool = False,
+        anchor_3d: bool = False,
     ):
         super().__init__()
         self.num_feature_levels = total_num_feature_levels
@@ -85,6 +87,7 @@ class MaskDINODecoder(nn.Module):
         self.num_queries = num_queries
         self.num_classes = num_classes
         self.hidden_dim = hidden_dim
+        self.anchor_3d = anchor_3d
 
         if (not two_stage) or self.learn_tgt:
             self.query_feat = nn.Embedding(num_queries, hidden_dim)
@@ -124,6 +127,21 @@ class MaskDINODecoder(nn.Module):
         # one shared box head applied at every layer (MaskDINO shares, DINO can un-share)
         self.bbox_embed = nn.ModuleList([self._bbox_embed for _ in range(self.num_layers)])
         self.decoder.bbox_embed = self.bbox_embed
+
+        if anchor_3d:
+            # The 3D twin of `_bbox_embed`: Delta(x, y, z, log r), shared across layers and
+            # zero-initialised the same way, so layer 0 starts exactly at the gathered anchor.
+            self._anchor_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+            nn.init.constant_(self._anchor_embed.layers[-1].weight.data, 0)
+            nn.init.constant_(self._anchor_embed.layers[-1].bias.data, 0)
+            self.anchor_embed = nn.ModuleList(
+                [self._anchor_embed for _ in range(self.num_layers)])
+            self.decoder.anchor_embed = self.anchor_embed
+            if not two_stage:
+                # No encoder proposals to gather an anchor from — learn one per query instead.
+                self.anchor_query_embed = nn.Embedding(num_queries, 4)
+                nn.init.normal_(self.anchor_query_embed.weight, std=0.5)
+                nn.init.constant_(self.anchor_query_embed.weight.data[:, 3], ANCHOR_LOG_R0)
 
     # ---- denoising ---------------------------------------------------------------------
 
@@ -273,7 +291,7 @@ class MaskDINODecoder(nn.Module):
     # ---- forward -------------------------------------------------------------------------
 
     def forward(self, x: List[Tensor], mask_features: Tensor, targets: Optional[List[dict]] = None,
-                frames_per_sample: int = 1):
+                frames_per_sample: int = 1, token_xyz: Optional[Tensor] = None):
         """
         Args:
             x: multi-scale memory maps [B, C, H_l, W_l], HIGH→LOW resolution (as produced by
@@ -286,6 +304,9 @@ class MaskDINODecoder(nn.Module):
                query set is SHARED across the S frames of a bundle — selected once per bundle,
                broadcast to every frame, then refined per frame (each view keeps its own anchor
                box) and tied together by the decoder's cross-frame blocks.
+            token_xyz: [B*S, h*w, 3] per-patch 3D positions from VGGT's frozen point head,
+               normalised per bundle. Required by (and only used with) `anchor_3d`
+               (docs/MASKDINO.md §8.3).
         Returns:
             (out, mask_dict) — `out` has pred_logits / pred_masks / pred_boxes (+ aux_outputs,
             interm_outputs); `mask_dict` carries the DN predictions for the criterion.
@@ -295,6 +316,11 @@ class MaskDINODecoder(nn.Module):
         bs = x[0].shape[0]
         s = int(frames_per_sample)
         assert s >= 1 and bs % s == 0, f"batch {bs} is not a multiple of frames_per_sample {s}"
+        if self.anchor_3d and token_xyz is None:
+            raise ValueError(
+                "anchor_3d=True needs `token_xyz` (the cached per-patch 3D positions of VGGT's "
+                "point head); see docs/MASKDINO.md §8.3 and train/maskdino_data.py.")
+        anchor = None
 
         src_flatten, spatial_shapes = [], []
         for lvl, src in enumerate(x):
@@ -343,6 +369,18 @@ class MaskDINODecoder(nn.Module):
                     output_memory, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, self.hidden_dim))
             refpoint_embed = refpoint_embed_undetach.detach()
 
+            if self.anchor_3d:
+                # 3D two-stage costs a gather: every memory token already has a cached 3D
+                # position, so the selected proposals' positions ARE the anchors. The radius
+                # starts at the same constant for every query and is refined per layer.
+                xyz_mem = pyramid_token_xyz(token_xyz, spatial_shapes)   # [bs, sum_hw, 3]
+                xyz_b = xyz_mem.reshape(bs // s, s * xyz_mem.shape[1], 3)
+                anchor_xyz = torch.gather(
+                    xyz_b, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 3)).detach()
+                anchor = torch.cat(
+                    [anchor_xyz, anchor_xyz.new_full((*anchor_xyz.shape[:2], 1), ANCHOR_LOG_R0)],
+                    dim=-1)                                              # [B, Q, 4]
+
             outputs_class, outputs_mask = self.forward_prediction_heads(
                 tgt_undetach.transpose(0, 1), mask_features)
             tgt = self.query_feat.weight[None].repeat(bs, 1, 1) if self.learn_tgt \
@@ -366,6 +404,8 @@ class MaskDINODecoder(nn.Module):
         else:
             tgt = self.query_feat.weight[None].repeat(bs, 1, 1)
             refpoint_embed = self.query_embed.weight[None].repeat(bs, 1, 1)
+            if self.anchor_3d:
+                anchor = self.anchor_query_embed.weight[None].repeat(bs // s, 1, 1)
 
         tgt_mask = None
         mask_dict = None
@@ -396,6 +436,8 @@ class MaskDINODecoder(nn.Module):
             tgt_mask=tgt_mask,
             frames_per_sample=s,
             num_shared_queries=self.num_queries,
+            anchor=anchor,
+            token_xyz=token_xyz,
         )
         for i, output in enumerate(hs):
             outputs_class, outputs_mask = self.forward_prediction_heads(

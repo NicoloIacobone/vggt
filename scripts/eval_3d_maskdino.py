@@ -57,6 +57,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data.scannet_overfit import load_frames_by_name
 from models.maskdino.head import MaskDINOVGGTHead, to_scannet_class_logits
+from models.maskdino.anchor3d import normalize_token_xyz
 from models.maskdino.model import MaskDINOVGGTModel
 from train.benchmark3d import (BENCHMARK_CLASS_NAMES, assign_instances_for_scan,
                                compute_averages, evaluate_matches, format_results,
@@ -66,7 +67,7 @@ from train.eval3d_geometry import (accumulate_votes, apply_sim3, assign_pixels_t
                                    mask_grid_intrinsic, project_votes_to_vertices,
                                    superpoint_majority, umeyama_sim3,
                                    unproject_masks_to_points)
-from train.maskdino_data import DTYPES
+from train.maskdino_data import DTYPES, patch_token_positions
 from train.scannet3d import SCANNET_IDX_TO_NYU40, load_frames25k_color_size, \
     load_frames25k_depth, load_frames25k_intrinsics, load_frames25k_poses, \
     load_scene_3d_gt, sample_frames25k
@@ -208,6 +209,22 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
         feats = torch.stack(per_frame)
     else:
         feats = torch.cat([agg_list[i].float() for i in feature_layers], dim=-1)[0]
+    # --anchor_3d checkpoints (docs/MASKDINO.md §8.3) read their query anchors off the frozen
+    # POINT head, so their positions have to be rebuilt here exactly as the training cache built
+    # them. Note this is the one case where the model itself consumes predicted geometry: in
+    # gt_projection mode "no predicted geometry" then describes the 2D→3D BRIDGE only, not the
+    # whole column. Stated rather than silently true.
+    token_xyz = None
+    if model.head.head_config.get("anchor_3d", False):
+        with torch.autocast("cuda", enabled=False) if device.startswith("cuda") \
+                else contextlib.nullcontext():
+            agg32p = [a.float() if a is not None else None for a in agg_list]
+            pts, pconf = model.backbone.point_head(agg32p, images=images[None],
+                                                   patch_start_idx=psi)
+        del agg32p
+        xyz, w = patch_token_positions(pts, pconf)
+        token_xyz = normalize_token_xyz(xyz, w).to(feats.dtype)
+        del pts, pconf
     if gt_projection:
         # the GT-projection transfer never uses VGGT's geometry, so the heads are not even
         # run — the "no predicted geometry in this column" claim is structural, not a habit
@@ -228,7 +245,8 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
         extri = extri[0].cpu().numpy()                      # [S, 3, 4] cam-from-world
         intri = intri[0].cpu().numpy()                      # [S, 3, 3]
 
-    out, _ = model.head(feats, int(psi), None, frames_per_sample=S)
+    out, _ = model.head(feats, int(psi), None, frames_per_sample=S,
+                        token_xyz=token_xyz)
 
     # -- 2. keep queries, assign pixels ----------------------------------------------------
     # one class score per query = max over views (the bundle-protocol convention, §8.2)

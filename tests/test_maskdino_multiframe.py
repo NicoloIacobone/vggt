@@ -10,7 +10,10 @@ Standalone, CPU-only, no VGGT weights.
   - MultiFrameHungarianMatcher recovers a planted multi-view assignment;
   - the head runs with frames_per_sample=S and gives every frame the same query semantics
     (shared query init), and single-frame behaviour is bit-identical to before;
-  - a 60-step overfit of the whole multi-frame path (bundle matching + per-frame losses).
+  - a 60-step overfit of the whole multi-frame path (bundle matching + per-frame losses);
+  - --anchor_3d (docs/MASKDINO.md §8.3): one 3D anchor per query per bundle projected to a
+    different reference in each view, DN rows left on the 2D DAB path, the flag inert when off,
+    and the Delta(xyz, log r) head actually receiving gradient (it cannot be detached).
   - checkpoint_best_bundle.pth selection (docs/todo.md 2b): update_best in
     scripts/train_maskdino.py picks the right epoch off a synthetic metrics sequence, and the
     bundle checkpoint path only exists for --multi_frame runs.
@@ -344,6 +347,144 @@ def test_update_best_selects_peak_epoch():
     print("✅ update_best tracks the peak epoch and saves only on improvement\n")
 
 
+def _plane_token_xyz(s, g, seed=0):
+    """S frames whose patch positions are the SAME g*g 3D points in a different order per frame —
+    i.e. one 3D scene seen from S viewpoints, without needing a camera model."""
+    gen = torch.Generator().manual_seed(seed)
+    base = torch.randn(g * g, 3, generator=gen)
+    return torch.stack([base[torch.randperm(g * g, generator=gen)] for _ in range(s)])
+
+
+def test_anchor3d_shared_anchor_per_bundle():
+    """
+    docs/MASKDINO.md §8.3. One 3D anchor per query per BUNDLE, projected per view: the S views
+    must therefore get DIFFERENT references out of the SAME anchor, and the DN queries must keep
+    the 2D DAB path (their slot means a different GT instance in each frame, so they have no
+    anchor).
+    """
+    print("=== Testing 3D anchors: one per bundle, projected per view ===")
+    torch.manual_seed(0)
+    s, b, g, mem, q = 3, 2, 8, 64, 10
+    head = _tiny_head(dec_layers=2, enc_layers=1, dn="no", num_queries=q,
+                      cross_frame_attn=True, anchor_3d=True).eval()
+    tokens = torch.randn(b * s, 5 + g * g, mem)
+    xyz = torch.cat([_plane_token_xyz(s, g, seed=k) for k in range(b)])   # [b*s, g*g, 3]
+
+    out, _ = head(tokens, 5, None, frames_per_sample=s, token_xyz=xyz)
+    assert out["pred_masks"].shape[:2] == (b * s, q)
+
+    # Capture the references the decoder actually used, per layer.
+    seen = []
+    decoder = head.predictor.decoder
+    orig = decoder.forward
+
+    import models.maskdino.decoder_layers as dl
+    real_project = dl.project_anchors
+
+    def spy(anchor, token_xyz, fps, **kw):
+        seen.append((anchor.detach().clone(), real_project(anchor, token_xyz, fps, **kw)))
+        return real_project(anchor, token_xyz, fps, **kw)
+
+    dl.project_anchors = spy
+    try:
+        head(tokens, 5, None, frames_per_sample=s, token_xyz=xyz)
+    finally:
+        dl.project_anchors = real_project
+    assert len(seen) == 2, f"expected one projection per decoder layer, got {len(seen)}"
+
+    anchor0, ref0 = seen[0]
+    assert anchor0.shape == (b, q, 4) and ref0.shape == (b * s, q, 4)
+    # the anchor is one point per bundle ...
+    assert not torch.allclose(anchor0[0], anchor0[1])
+    # ... but its projection differs view to view, which is the point of the mechanism
+    for f in range(1, s):
+        assert not torch.allclose(ref0[f], ref0[0], atol=1e-4), f
+    # every reference is a valid box in (0, 1)
+    assert float(ref0.min()) > 0 and float(ref0.max()) < 1
+
+    # the anchor MOVES between layers (Delta(xyz, log r) is applied, not a no-op after training
+    # starts) — at init the head is zero-initialised, so assert the state is threaded through
+    anchor1, _ = seen[1]
+    assert torch.allclose(anchor0, anchor1), "zero-init must leave the first refinement inert"
+
+    # with denoising on, the DN rows keep 2D boxes: only the trailing num_queries are projected
+    head_dn = _tiny_head(dec_layers=2, enc_layers=1, dn="seg", num_queries=q,
+                         cross_frame_attn=True, anchor_3d=True)
+    frames, _ = _bundle_frame_targets(s=s, n=2, hw=(g, g))
+    seen.clear()
+    dl.project_anchors = spy
+    try:
+        head_dn(tokens[:s], 5, frames, frames_per_sample=s, token_xyz=xyz[:s])
+    finally:
+        dl.project_anchors = real_project
+    assert seen and seen[0][0].shape == (1, q, 4), seen[0][0].shape
+    print("✅ one anchor per bundle, per-view references, DN rows untouched\n")
+
+
+def test_anchor3d_default_path_unchanged():
+    """anchor_3d defaults off and must change nothing — every published number depends on it."""
+    print("=== Testing anchor_3d is inert by default ===")
+    torch.manual_seed(0)
+    s, g, mem, q = 3, 8, 64, 10
+    head = _tiny_head(dec_layers=2, enc_layers=1, dn="no", num_queries=q,
+                      cross_frame_attn=True).eval()
+    tokens = torch.randn(s, 5 + g * g, mem)
+    a, _ = head(tokens, 5, None, frames_per_sample=s)
+    b, _ = head(tokens, 5, None, frames_per_sample=s, token_xyz=torch.randn(s, g * g, 3))
+    for k in ("pred_logits", "pred_masks", "pred_boxes"):
+        assert torch.equal(a[k], b[k]), k
+    assert head.predictor.decoder.anchor_embed is None
+    assert not any("anchor" in k for k in head.state_dict())
+    print("✅ token_xyz is ignored unless the head was built with anchor_3d\n")
+
+
+def test_anchor3d_overfit():
+    """
+    The load-bearing test for the one deviation from the §8.3 sketch: the anchor refinement is
+    NOT detached. The DAB box can be detached because `bbox_embed` learns from the box loss; the
+    3D anchor has no loss of its own, so a detached Delta(xyz, log r) head would receive exactly
+    zero gradient. Assert it is in the graph, and that the whole path still trains.
+    """
+    print("=== Testing 60-step multi-frame overfit with 3D anchors ===")
+    torch.manual_seed(0)
+    s, g, mem, q = 3, 8, 64, 12
+    head = _tiny_head(dec_layers=2, enc_layers=1, dn="seg", num_queries=q,
+                      cross_frame_attn=True, anchor_3d=True)
+    tokens = torch.randn(s, 5 + g * g, mem)
+    xyz = _plane_token_xyz(s, g)
+    frames, _ = _bundle_frame_targets(s=s, n=2, hw=(g, g))
+    bundle = [build_bundle_target(frames)]
+
+    weight_dict = build_weight_dict(dec_layers=2, two_stage=True, dn="seg")
+    criterion = SetCriterion(19, HungarianMatcher(num_points=64), weight_dict,
+                             losses=["labels", "masks", "boxes"], num_points=0,
+                             dn="seg", dn_losses=["labels", "masks", "boxes"],
+                             bundle_matcher=MultiFrameHungarianMatcher(num_points=0))
+    opt = torch.optim.AdamW(head.parameters(), lr=1e-3)
+
+    head.train()
+    first = last = None
+    for step in range(60):
+        opt.zero_grad()
+        out, mask_dict = head(tokens, 5, frames, frames_per_sample=s, token_xyz=xyz)
+        losses = criterion(out, frames, mask_dict, bundle_targets=bundle, frames_per_sample=s)
+        total = sum(losses[k] * weight_dict[k] for k in losses if k in weight_dict)
+        total.backward()
+        torch.nn.utils.clip_grad_norm_(head.parameters(), 1.0)
+        opt.step()
+        if step == 0:
+            first = float(total)
+        last = float(total)
+    print(f"    loss {first:.2f} → {last:.2f}")
+    assert last < 0.6 * first, f"anchor_3d overfit did not converge: {first:.2f} → {last:.2f}"
+
+    grads = [p.grad for p in head.predictor._anchor_embed.parameters()]
+    assert all(gr is not None and torch.isfinite(gr).all() for gr in grads), \
+        "the Delta(xyz, log r) head is not in the graph — the refinement must not be detached"
+    assert any(float(gr.abs().sum()) > 0 for gr in grads)
+    print("✅ 3D-anchor path trains and its refinement head receives gradient\n")
+
+
 def test_bundle_checkpoint_path_requires_multi_frame():
     """Single-frame args must produce no checkpoint_best_bundle.pth path — the bundle_AP50 key
     does not exist in per-frame metrics, so the path has to be gated on args.multi_frame."""
@@ -371,6 +512,9 @@ if __name__ == "__main__":
     test_head_shared_queries()
     test_single_frame_path_unchanged()
     test_multiframe_overfit()
+    test_anchor3d_shared_anchor_per_bundle()
+    test_anchor3d_default_path_unchanged()
+    test_anchor3d_overfit()
     test_bundle_batching_and_eval()
     test_multiframe_visualisation()
     test_update_best_selects_peak_epoch()

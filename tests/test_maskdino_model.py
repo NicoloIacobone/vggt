@@ -8,7 +8,9 @@ MaskDINO model internals (docs/MASKDINO.md). Standalone, CPU-only, no VGGT weigh
     script can produce (two-stage on/off, dn on/off, initialize_box_type, train/eval);
   - box_ops.masks_to_boxes against hand-computed boxes;
   - head_config round-trip: it must cover every constructor argument, and rebuilding from a
-    stored config must reproduce the same state_dict keys.
+    stored config must reproduce the same state_dict keys;
+  - the 3D-anchor geometry of `--anchor_3d` (docs/MASKDINO.md §8.3): the soft-nearest-patch
+    projection, its radius behaviour, the pyramid position gather and the normalisation.
 """
 
 import sys
@@ -22,6 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from maskdino_fixtures import _synthetic_targets, _tiny_head
 from models.maskdino import MaskDINOVGGTHead, build_head_from_config, to_scannet_class_logits
 from models.maskdino import box_ops
+from models.maskdino.anchor3d import (ANCHOR_LOG_R0, normalize_token_xyz, project_anchors,
+                                      pyramid_token_xyz, uv_grid)
 from models.maskdino.ms_deform_attn import MSDeformAttn, ms_deform_attn_core_pytorch
 from models.maskdino.pixel_decoder import VGGTPixelDecoder
 
@@ -207,6 +211,114 @@ def test_head_config_round_trip():
     print("✅ head_config round-trip + ScanNet logit adapter OK\n")
 
 
+def test_anchor3d_geometry():
+    """
+    The geometry of --anchor_3d (docs/MASKDINO.md §8.3). This is the part that would silently
+    produce a plausible-but-wrong number if the grid convention were off by a transpose, so it
+    is asserted against hand-computed values rather than against itself.
+    """
+    print("=== Testing 3D-anchor projection geometry ===")
+    g = 6
+    uv = uv_grid(g, torch.device("cpu"), torch.float32)
+    assert uv.shape == (g * g, 2)
+    for r, c in [(0, 0), (0, g - 1), (g - 1, 2), (3, 4)]:
+        # row-major flattening, u horizontal — the same order `tokens_to_map` reshapes with
+        assert torch.allclose(uv[r * g + c],
+                              torch.tensor([(c + 0.5) / g, (r + 0.5) / g])), (r, c)
+
+    # Patch positions on a plane, one 3D point per patch, deliberately NOT axis-aligned with
+    # (u, v) so that a transposed or flipped mapping cannot pass by symmetry.
+    pos = torch.stack([uv[:, 0] * 3.0 + uv[:, 1], uv[:, 1] * 5.0, torch.zeros(g * g)], dim=-1)
+    token_xyz = pos[None]                                        # [1, g*g, 3]
+
+    # (a) an anchor sitting exactly on a patch, with a small radius, projects to that patch and
+    #     collapses to the one-patch size floor.
+    for p in (0, 7, g * g - 1):
+        anchor = torch.cat([pos[p], torch.tensor([-4.0])])[None, None]   # log r = -4
+        ref = project_anchors(anchor, token_xyz, 1)[0, 0]
+        assert torch.allclose(ref[:2], uv[p], atol=1e-3), (p, ref[:2], uv[p])
+        assert torch.allclose(ref[2:], torch.full((2,), 1.0 / g), atol=1e-3), ref[2:]
+
+    # (b) a huge radius washes the softmax out to uniform: centre → image centre, size → the
+    #     spread of the uniform distribution over the g patch centres, widened by the floor.
+    anchor = torch.cat([pos[0], torch.tensor([6.0])])[None, None]
+    ref = project_anchors(anchor, token_xyz, 1)[0, 0]
+    uniform = 2.0 * ((g * g - 1) / (12 * g * g) + (0.5 / g) ** 2) ** 0.5
+    assert torch.allclose(ref[:2], torch.full((2,), 0.5), atol=1e-3), ref[:2]
+    assert torch.allclose(ref[2:], torch.full((2,), uniform), atol=1e-3), (ref[2:], uniform)
+
+    # (c) ONE anchor, two views whose pointmaps place it on different patches → different
+    #     per-view references. This is the whole mechanism: no intrinsics, no extrinsics.
+    view1 = pos[torch.arange(g * g).flip(0)]                     # same 3D points, reordered
+    two = torch.stack([pos, view1])                              # [2, g*g, 3] = 1 bundle, S=2
+    anchor = torch.cat([pos[0], torch.tensor([-4.0])])[None, None]
+    ref = project_anchors(anchor, two, 2)
+    assert torch.allclose(ref[0, 0, :2], uv[0], atol=1e-3)
+    assert torch.allclose(ref[1, 0, :2], uv[g * g - 1], atol=1e-3)
+
+    # (d) differentiable in the anchor — the reason the Delta(xyz, log r) head can learn at all
+    a = torch.cat([pos[10], torch.tensor([-1.0])])[None, None].requires_grad_(True)
+    project_anchors(a, token_xyz, 1).sum().backward()
+    assert a.grad is not None and torch.isfinite(a.grad).all() and float(a.grad.abs().sum()) > 0
+
+    # (e) the pyramid gather: level 0 is the input verbatim, extra levels are nearest resamples
+    shapes = torch.as_tensor([[g, g], [3, 3], [2, 2]])
+    pyr = pyramid_token_xyz(token_xyz, shapes)
+    assert pyr.shape == (1, g * g + 9 + 4, 3)
+    assert torch.equal(pyr[:, :g * g], token_xyz)
+    lvl1 = pyr[0, g * g:g * g + 9].reshape(3, 3, 3)
+    src = token_xyz[0].reshape(g, g, 3)
+    for r in range(3):
+        for c in range(3):
+            assert (lvl1[r, c] == src.reshape(-1, 3)).all(-1).any(), (r, c)  # a real patch, not a blend
+
+    # (f) normalisation is zero-mean / unit-RMS and ignores the low-confidence tail, which is
+    #     where VGGT's pointmap puts its wild values
+    xyz = torch.randn(2, 16, 3) * 4.0 + 100.0
+    conf = torch.ones(2, 16)
+    conf[0, :8] = 0.0
+    xyz[0, :8] = 1e4                                             # outliers, all low-confidence
+    n = normalize_token_xyz(xyz, conf)
+    sel = torch.cat([n[0, 8:], n[1]]).reshape(-1, 3)
+    assert float(sel.mean(0).abs().max()) < 1e-4
+    assert abs(float((sel - sel.mean(0)).pow(2).sum(-1).mean().sqrt()) - 1.0) < 1e-4
+    print("✅ soft-nearest-patch projection, radius limits, pyramid gather, normalisation OK\n")
+
+
+def test_anchor3d_head_wiring():
+    """The head must refuse to run an anchor_3d model without positions, and must not grow any
+    parameter when the flag is off (every published checkpoint depends on that)."""
+    print("=== Testing anchor_3d head wiring ===")
+    plain = _tiny_head(dn="no", num_queries=8)
+    anch = _tiny_head(dn="no", num_queries=8, anchor_3d=True)
+    assert plain.head_config["anchor_3d"] is False
+    extra = set(anch.state_dict()) - set(plain.state_dict())
+    assert extra and all("anchor_embed" in k for k in extra), extra
+    assert set(plain.state_dict()) - set(anch.state_dict()) == set()
+
+    tokens = torch.randn(2, 5 + 64, 64)
+    try:
+        anch(tokens, 5)
+    except ValueError as e:
+        assert "token_xyz" in str(e)
+    else:
+        raise AssertionError("anchor_3d without token_xyz must raise, not silently fall back")
+
+    # ... and the 2D path must ignore token_xyz entirely
+    a, _ = plain.eval()(tokens, 5)
+    b, _ = plain(tokens, 5, token_xyz=torch.randn(2, 64, 3))
+    assert torch.equal(a["pred_boxes"], b["pred_boxes"])
+
+    # non-two-stage falls back to learned anchors, initialised at the documented radius
+    lt = _tiny_head(dn="no", two_stage=False, learn_tgt=True, initialize_box_type="no",
+                    anchor_3d=True).eval()
+    assert torch.allclose(lt.predictor.anchor_query_embed.weight[:, 3],
+                          torch.full((lt.num_queries,), ANCHOR_LOG_R0))
+    out, _ = lt(tokens, 5, token_xyz=torch.randn(2, 64, 3))
+    assert out["pred_masks"].shape[:2] == (2, lt.num_queries)
+    print("✅ anchor_3d adds only the Delta(xyz, log r) head and demands its positions\n")
+
+
 if __name__ == "__main__":
     test_ms_deform_attn_core()
     test_pixel_decoder()
@@ -214,4 +326,6 @@ if __name__ == "__main__":
     test_unported_box_init_is_rejected()
     test_masks_to_boxes()
     test_head_config_round_trip()
+    test_anchor3d_geometry()
+    test_anchor3d_head_wiring()
     print("All test_maskdino_model tests passed! ✅")

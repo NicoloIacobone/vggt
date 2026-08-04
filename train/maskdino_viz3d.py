@@ -93,6 +93,28 @@ def head_features(aggregator: Callable, images: torch.Tensor, train_args: Dict
     return torch.stack(per_frame), int(psi)
 
 
+@torch.no_grad()
+def head_token_xyz(point_head: Callable, agg_list, images: torch.Tensor,
+                   patch_start_idx: int) -> torch.Tensor:
+    """
+    `--anchor_3d` checkpoints only (docs/MASKDINO.md §8.3): rebuild the per-patch 3D positions
+    the training cache fed the decoder, from the aggregator output the head already consumed.
+
+    `agg_list` / `patch_start_idx` come from the SAME bundle pass as the tokens — an anchor_3d
+    checkpoint is only defined for `--feature_mode bundle`, so there is one coordinate frame for
+    all views. Returns [S, h*w, 3], normalised per bundle.
+    """
+    from train.maskdino_data import patch_token_positions  # local: avoids a viz→data import cycle
+    from models.maskdino.anchor3d import normalize_token_xyz
+
+    if images.dim() == 4:
+        images = images.unsqueeze(0)
+    agg32 = [a.float() if a is not None else None for a in agg_list]
+    pts, conf = point_head(agg32, images=images, patch_start_idx=patch_start_idx)
+    xyz, w = patch_token_positions(pts, conf)
+    return normalize_token_xyz(xyz, w)
+
+
 def select_instances(pred_logits: torch.Tensor, score_threshold: float = 0.25,
                      topk: Optional[int] = 100, drop_stuff: bool = False
                      ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

@@ -132,10 +132,20 @@ In effort order — each step also de-risks the next:
       and bundle AP50 falls 0.525 → 0.389. The block's job is **identity preservation**, not
       recognition — the mechanism claim the metric was built to support, and a core table for
       the paper.
-- [ ] **2d. 3D anchors vs 2D DAB boxes** (docs/MASKDINO.md §8.3 — full design sketch there).
-      Build on `--multi_frame --feature_mode bundle` — settled by §7.4.1, bundle features are
-      the right base. Framed and budgeted as an **ablation** (FAST3DIS owns the mechanism as a
-      contribution), which also closes the arm-E loop.
+- [~] **2d. 3D anchors vs 2D DAB boxes — IMPLEMENTED 2026-08-04, run in flight**
+      (docs/MASKDINO.md §8.3 has the design as built, the three forced deviations from the
+      sketch, and the named confound). `--anchor_3d`, default off: the decoder's 2D DAB anchor
+      box becomes a 3D `(x, y, z, log r)` per query per **bundle**, gathered from the two-stage
+      top-k out of a per-patch-token position cache read off VGGT's frozen point head
+      (**+0.146 % cache**, 65.7 kB/bundle measured, no caching-time cost), soft-projected into
+      each view over the 37×37 grid — no intrinsics/extrinsics — and refined by Δ(xyz, log r).
+      Every loss unchanged; denoising queries stay on the 2D DAB path.
+      Framed and budgeted as an **ablation** (FAST3DIS owns the mechanism as a contribution),
+      which also closes the arm-E loop. Promoted above 5b/5c by §9.10 reading 4.
+      **Job 9634920** (`maskdino_sf_list1201_mf_anchor3d_*`) is the control-matched run:
+      identical to job 9386666 except for the flag, so the anchor is the only variable.
+      Compare per-frame **0.623 / 0.650**, per-bundle **0.529 / 0.525**, consistency 0.717 /
+      id_switch 0.498 (§7.8). 3D ruler only if the 2D result is not negative.
 
 ## 3. Resolution stream — CLOSED 2026-07-30 (docs/MASKDINO.md §7.7)
 
@@ -148,7 +158,8 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 
 ## 4. Watching
 
-(Nothing active — everything submitted on 2026-08-03 has landed.)
+- **Job 9634920** — todo 2d, `--anchor_3d` on the official 1201/312 split (see 2d above).
+  Control: job 9386666. Submitted 2026-08-04.
 
 ## 5. Lifting quality — the new binding constraint (opened 2026-08-03 by §9.6)
 
