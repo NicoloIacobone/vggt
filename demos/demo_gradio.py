@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root
 
 from visual_util import predictions_to_glb, INSTANCE_PALETTE
+from dualview3d import dual_view_html, message_html
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
@@ -34,8 +35,8 @@ from legacy.d4rt.train.postprocess import select_instances, upsample_assignment
 from data.scannet_overfit import IDX_TO_CLASS, ScanNetMultiSceneDataset, decode_checkpoint_images
 from train.common import DEFAULT_SCANS_ROOT
 from train.maskdino_data import DTYPES
-from train.maskdino_viz3d import (head_features, is_maskdino_checkpoint, load_maskdino_seg_head,
-                                  maskdino_seg_colors)
+from train.maskdino_viz3d import (colorize, head_features, is_maskdino_checkpoint,
+                                  load_maskdino_seg_head, maskdino_seg_colors)
 
 # Root for reloading frames from --checkpoint_light checkpoints (no stored pixels) and, for
 # MaskDINO checkpoints, for ALL frames — those checkpoints store no pixels at all.
@@ -96,6 +97,7 @@ SEG = {
     "score_threshold": 0.25,   # MaskDINO: keep queries at or above this class score
     "mask_threshold": 0.5,     # MaskDINO: a pixel joins its argmax query above this prob
     "drop_stuff": False,       # MaskDINO: drop wall/floor (what the 3D benchmark scores)
+    "gt_id_maps": None,        # [S, H, W] GT instance ids of the loaded scene, in gallery order
 }
 
 
@@ -120,6 +122,28 @@ def _find_default_seg_checkpoint():
     pattern = "/cluster/work/igp_psr/niacobone/distillation/output/*/checkpoint.pth"
     candidates = sorted(glob.glob(pattern), key=os.path.getmtime)
     return candidates[-1] if candidates else None
+
+
+def resolve_seg_checkpoint(explicit):
+    """
+    Which checkpoint to load: the explicit one, else the most recent, else None.
+
+    An explicit path that does not exist is **fatal**. Starting anyway produces a viewer with no
+    scene button and no instance colours, which reads as a broken UI rather than as a wrong path
+    — and on a GPU node that mistake costs a backbone load to discover. (A `...` left in a
+    copied command line is the usual cause.)
+    """
+    if explicit:
+        if not os.path.exists(explicit):
+            raise SystemExit(f"--seg_checkpoint does not exist: {explicit}\n"
+                             "Pass the full path (a '...' copied from a command line is the "
+                             "usual cause), or omit the flag to auto-discover the newest run.")
+        return explicit
+    found = _find_default_seg_checkpoint()
+    if not found:
+        print("No segmentation checkpoint found; 3D mask coloring disabled. "
+              "Pass --seg_checkpoint /path/to/checkpoint.pth to enable it.")
+    return found
 
 
 def load_seg_checkpoint(ckpt_path: str):
@@ -366,15 +390,14 @@ if not _cli_args.no_seg:
     SEG["score_threshold"] = _cli_args.seg_score_threshold
     SEG["mask_threshold"] = _cli_args.seg_mask_threshold
     SEG["drop_stuff"] = _cli_args.seg_drop_stuff
-    _seg_ckpt = _cli_args.seg_checkpoint or _find_default_seg_checkpoint()
-    if _seg_ckpt and os.path.exists(_seg_ckpt):
+    _seg_ckpt = resolve_seg_checkpoint(_cli_args.seg_checkpoint)
+    if _seg_ckpt:
         try:
             load_seg_checkpoint(_seg_ckpt)
         except Exception as e:  # pragma: no cover - demo robustness
-            print(f"⚠ Could not load segmentation checkpoint ({_seg_ckpt}): {e}")
-    else:
-        print("No segmentation checkpoint found; 3D mask coloring disabled. "
-              "Pass --seg_checkpoint /path/to/checkpoint.pth to enable it.")
+            if _cli_args.seg_checkpoint:      # asked for by name → do not start half-working
+                raise SystemExit(f"Could not load --seg_checkpoint {_seg_ckpt}: {e!r}")
+            print(f"⚠ Could not load auto-discovered checkpoint ({_seg_ckpt}): {e}")
 
 
 # -------------------------------------------------------------------------
@@ -439,6 +462,21 @@ def run_model(target_dir, model) -> dict:
         predictions["seg_colors"] = seg_colors
         predictions["seg_legend"] = np.array(seg_legend)
         print(seg_legend)
+
+        # GT colours for the side-by-side 3D view: the SAME painting rule and palette as the
+        # prediction, keyed to the GT global instance id instead of the query index. Only
+        # available for a checkpoint scene — uploaded images have no annotation.
+        gt_ids = SEG.get("gt_id_maps")
+        if gt_ids is not None and np.shape(gt_ids) == tuple(images_dev.shape[1:2]) + \
+                tuple(images_dev.shape[3:]):
+            # identity = the GT global instance id itself (0 = background → unpainted), the same
+            # identity space and palette slot the run's 2D GT panels use
+            ids = np.asarray(gt_ids).astype(np.int64)
+            predictions["gt_colors"] = colorize(images_dev[0].cpu(), np.where(ids > 0, ids, -1))
+            print(f"GT instances in these frames: {len(np.unique(ids[ids > 0]))}")
+        elif gt_ids is not None:
+            print(f"⚠ GT id maps {np.shape(gt_ids)} do not match the loaded frames "
+                  f"{tuple(images_dev.shape)} — the GT panel stays empty.")
 
     # Clean up
     torch.cuda.empty_cache()
@@ -523,9 +561,13 @@ def update_gallery_on_upload(input_video, input_images):
     If nothing is uploaded, returns "None" and empty list.
     """
     if not input_video and not input_images:
-        return None, None, None, None
+        return None, None, None, None, message_html("Nothing uploaded yet.")
+    # Uploaded frames carry no annotation: the GT panel must not keep showing the last scene's.
+    SEG["gt_id_maps"] = None
     target_dir, image_paths = handle_uploads(input_video, input_images)
-    return None, target_dir, image_paths, "Upload complete. Click 'Reconstruct' to begin 3D processing."
+    return (None, target_dir, image_paths,
+            "Upload complete. Click 'Reconstruct' to begin 3D processing.",
+            message_html("Click 'Reconstruct' to build the 3D views."))
 
 
 def _maskdino_scene_frames(scene: dict):
@@ -539,7 +581,9 @@ def _maskdino_scene_frames(scene: dict):
         [scene["scene_dir"]], num_frames=train_args.get("num_frames", 8), img_size=518,
         frame_sampling="even", instance_level=not train_args.get("class_level", False))
     sample = ds[0]
-    return sample["images"], sample.get("frame_names")
+    # `masks` is [S, H, W] of GLOBAL instance ids (0 = background), the same identity space the
+    # 2D GT panels colour by — that is what makes the GT side of the 3D comparison meaningful.
+    return sample["images"], sample.get("frame_names"), sample["masks"]
 
 
 def load_checkpoint_scene(scene_label=None):
@@ -554,11 +598,10 @@ def load_checkpoint_scene(scene_label=None):
     which case it also switches the query points / GT used by `compute_seg_colors`).
     """
     if SEG["scenes"] is None:
-        return None, "None", None, (
-            "No checkpoint scene available. Start the demo with "
-            "`--seg_checkpoint /path/to/checkpoint.pth` (and, for a MaskDINO checkpoint, a "
-            "`--seg_scans_root` that holds the run's scenes). You can also just upload images."
-        )
+        msg = ("No checkpoint scene available. Start the demo with "
+               "`--seg_checkpoint /path/to/checkpoint.pth` (and, for a MaskDINO checkpoint, a "
+               "`--seg_scans_root` that holds the run's scenes). You can also upload images.")
+        return None, "None", None, msg, message_html(msg)
 
     idx = SEG["scene_labels"].index(scene_label) if scene_label in SEG["scene_labels"] else 0
     _select_seg_scene(idx)
@@ -570,16 +613,17 @@ def load_checkpoint_scene(scene_label=None):
     target_dir_images = os.path.join(target_dir, "images")
     os.makedirs(target_dir_images, exist_ok=True)
 
+    gt_id_maps = None
     if SEG["kind"] == "maskdino":
         try:
-            imgs, names = _maskdino_scene_frames(SEG["scenes"][idx])
+            imgs, names, gt_id_maps = _maskdino_scene_frames(SEG["scenes"][idx])
         except Exception as e:  # pragma: no cover - demo robustness
-            return None, "None", None, (
-                f"Could not read {SEG['scenes'][idx]['name']} from {SEG_SCANS_ROOT}: {e}")
+            msg = f"Could not read {SEG['scenes'][idx]['name']} from {SEG_SCANS_ROOT}: {e}"
+            return None, "None", None, msg, message_html(msg)
     else:
         imgs = SEG["images"][0]  # [S, 3, H, W] in [0, 1]
         names = SEG["frame_names"]
-    image_paths = []
+    written = []
     for s in range(imgs.shape[0]):
         arr = (imgs[s].permute(1, 2, 0).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)
         name = None
@@ -590,14 +634,20 @@ def load_checkpoint_scene(scene_label=None):
         stem = os.path.splitext(str(name))[0] if name else f"frame_{s:05d}"
         dst = os.path.join(target_dir_images, f"{stem}.png")
         Image.fromarray(arr).save(dst)
-        image_paths.append(dst)
+        written.append((dst, s))
 
-    image_paths = sorted(image_paths)
+    # `run_model` re-reads the folder in sorted order, so the GT maps must be permuted the same
+    # way — otherwise the GT panel would show another frame's annotation on this frame's points.
+    written.sort()
+    image_paths = [dst for dst, _ in written]
+    SEG["gt_id_maps"] = (gt_id_maps[[s for _, s in written]].cpu().numpy()
+                         if gt_id_maps is not None else None)
     msg = (
         f"Loaded {SEG['scenes'][idx]['name']} ({len(image_paths)} frames). Click 'Reconstruct', "
         "then set 'Color By' = 'Predicted Instances' to see the masks in 3D."
     )
-    return None, target_dir, image_paths, msg
+    return None, target_dir, image_paths, msg, message_html(
+        "Click 'Reconstruct' to build the side-by-side view of this scene.")
 
 
 # -------------------------------------------------------------------------
@@ -618,7 +668,8 @@ def gradio_demo(
     Perform reconstruction using the already-created target_dir/images.
     """
     if not os.path.isdir(target_dir) or target_dir == "None":
-        return None, "No valid target directory found. Please upload first.", None, None
+        return (None, "No valid target directory found. Please upload first.", None,
+                message_html("No reconstruction yet."))
 
     start_time = time.time()
     gc.collect()
@@ -666,6 +717,9 @@ def gradio_demo(
     seg_legend = predictions.get("seg_legend")
     seg_legend = str(seg_legend) if seg_legend is not None else None
 
+    dual_html = _dual_view(predictions, conf_thres, frame_filter, mask_black_bg, mask_white_bg,
+                           prediction_mode)
+
     # Cleanup
     del predictions
     gc.collect()
@@ -677,12 +731,31 @@ def gradio_demo(
     if "Instance" in color_mode and seg_legend:
         log_msg += f"  |  {seg_legend}"
 
-    return glbfile, log_msg, gr.Dropdown(choices=frame_filter_choices, value=frame_filter, interactive=True)
+    return (glbfile, log_msg,
+            gr.Dropdown(choices=frame_filter_choices, value=frame_filter, interactive=True),
+            dual_html)
 
 
 # -------------------------------------------------------------------------
 # 5) Helper functions for UI resets + re-visualization
 # -------------------------------------------------------------------------
+def _dual_view(predictions, conf_thres, frame_filter, mask_black_bg, mask_white_bg,
+               prediction_mode):
+    """
+    The synchronised GT|prediction panel, built from the SAME controls as the GLB view.
+
+    Never fails the reconstruction: a viewer that cannot be built is a message, not a traceback.
+    """
+    try:
+        return dual_view_html(
+            predictions, conf_thres=conf_thres, filter_by_frames=frame_filter or "All",
+            mask_black_bg=mask_black_bg, mask_white_bg=mask_white_bg,
+            prediction_mode=prediction_mode)
+    except Exception as e:  # pragma: no cover - demo robustness
+        print(f"⚠ Side-by-side view failed: {e}")
+        return message_html(f"Side-by-side view unavailable: {e}")
+
+
 def clear_fields():
     """
     Clears the 3D viewer, the stored target_dir, and empties the gallery.
@@ -707,15 +780,17 @@ def update_visualization(
     """
 
     # If it's an example click, skip as requested
+    missing = ("No reconstruction available. Please click the Reconstruct button first.")
     if is_example == "True":
-        return None, "No reconstruction available. Please click the Reconstruct button first."
+        return None, missing, message_html(missing)
 
     if not target_dir or target_dir == "None" or not os.path.isdir(target_dir):
-        return None, "No reconstruction available. Please click the Reconstruct button first."
+        return None, missing, message_html(missing)
 
     predictions_path = os.path.join(target_dir, "predictions.npz")
     if not os.path.exists(predictions_path):
-        return None, f"No reconstruction available at {predictions_path}. Please run 'Reconstruct' first."
+        msg = f"No reconstruction available at {predictions_path}. Please run 'Reconstruct' first."
+        return None, msg, message_html(msg)
 
     key_list = [
         "pose_enc",
@@ -731,9 +806,11 @@ def update_visualization(
 
     loaded = np.load(predictions_path, allow_pickle=True)
     predictions = {key: np.array(loaded[key]) for key in key_list if key in loaded.files}
-    # Optional predicted-instance colors (present only when a seg checkpoint was loaded).
-    if "seg_colors" in loaded.files:
-        predictions["seg_colors"] = np.array(loaded["seg_colors"])
+    # Optional predicted-instance colors (present only when a seg checkpoint was loaded) and GT
+    # colors (only for a checkpoint scene) — both feed the side-by-side view.
+    for key in ("seg_colors", "gt_colors"):
+        if key in loaded.files:
+            predictions[key] = np.array(loaded[key])
 
     glbfile = os.path.join(
         target_dir,
@@ -755,7 +832,9 @@ def update_visualization(
         )
         glbscene.export(file_obj=glbfile)
 
-    return glbfile, "Updating Visualization"
+    return (glbfile, "Updating Visualization",
+            _dual_view(predictions, conf_thres, frame_filter, mask_black_bg, mask_white_bg,
+                       prediction_mode))
 
 
 # -------------------------------------------------------------------------
@@ -885,7 +964,19 @@ with gr.Blocks(
                 log_output = gr.Markdown(
                     "Please upload a video or images, then click Reconstruct.", elem_classes=["custom-log"]
                 )
-                reconstruction_output = gr.Model3D(height=520, zoom_speed=0.5, pan_speed=0.5)
+                # Two views of the same reconstruction, driven by the SAME controls below.
+                # The side-by-side tab has one camera for both panels (demos/dualview3d.py), so
+                # orbiting either one moves the other; the single view keeps the GLB/Babylon
+                # viewer, which is the only one that also draws the camera frusta.
+                with gr.Tabs():
+                    with gr.Tab("Single view"):
+                        reconstruction_output = gr.Model3D(height=520, zoom_speed=0.5,
+                                                           pan_speed=0.5)
+                    with gr.Tab("GT vs Prediction (synced)"):
+                        dual_view_output = gr.HTML(
+                            message_html("Reconstruct a scene to see GT and prediction "
+                                         "side by side."),
+                            elem_id="dual_view")
 
             with gr.Row():
                 submit_btn = gr.Button("Reconstruct", scale=1, variant="primary")
@@ -895,12 +986,15 @@ with gr.Blocks(
                     label="Checkpoint Scene (train/val)", scale=1,
                     visible=len(SEG["scene_labels"]) > 1,
                 )
+                # Shown whenever a head is loaded, even with no scenes on disk: clicking it then
+                # explains *why* there is nothing to load, which a missing button cannot.
                 load_ckpt_btn = gr.Button(
                     "Load Checkpoint Scene", scale=1,
-                    variant="secondary", visible=SEG["scenes"] is not None,
+                    variant="secondary", visible=SEG["head"] is not None,
                 )
                 clear_btn = gr.ClearButton(
-                    [input_video, input_images, reconstruction_output, log_output, target_dir_output, image_gallery],
+                    [input_video, input_images, reconstruction_output, log_output,
+                     target_dir_output, image_gallery, dual_view_output],
                     scale=1,
                 )
 
@@ -963,10 +1057,10 @@ with gr.Blocks(
         target_dir, image_paths = handle_uploads(input_video, input_images)
         # Always use "All" for frame_filter in examples
         frame_filter = "All"
-        glbfile, log_msg, dropdown = gradio_demo(
+        glbfile, log_msg, dropdown, dual_html = gradio_demo(
             target_dir, conf_thres, frame_filter, mask_black_bg, mask_white_bg, show_cam, mask_sky, prediction_mode
         )
-        return glbfile, log_msg, target_dir, dropdown, image_paths
+        return glbfile, log_msg, target_dir, dropdown, image_paths, dual_html
 
     gr.Markdown("Click any row to load an example.", elem_classes=["example-log"])
 
@@ -984,7 +1078,8 @@ with gr.Blocks(
             prediction_mode,
             is_example,
         ],
-        outputs=[reconstruction_output, log_output, target_dir_output, frame_filter, image_gallery],
+        outputs=[reconstruction_output, log_output, target_dir_output, frame_filter,
+                 image_gallery, dual_view_output],
         fn=example_pipeline,
         cache_examples=False,
         examples_per_page=50,
@@ -1012,7 +1107,7 @@ with gr.Blocks(
             prediction_mode,
             color_mode,
         ],
-        outputs=[reconstruction_output, log_output, frame_filter],
+        outputs=[reconstruction_output, log_output, frame_filter, dual_view_output],
     ).then(
         fn=lambda: "False", inputs=[], outputs=[is_example]  # set is_example to "False"
     )
@@ -1021,7 +1116,8 @@ with gr.Blocks(
     load_ckpt_btn.click(
         fn=load_checkpoint_scene,
         inputs=[seg_scene_dd],
-        outputs=[reconstruction_output, target_dir_output, image_gallery, log_output],
+        outputs=[reconstruction_output, target_dir_output, image_gallery, log_output,
+                 dual_view_output],
     )
 
     # -------------------------------------------------------------------------
@@ -1041,7 +1137,7 @@ with gr.Blocks(
             color_mode,
             is_example,
         ],
-        [reconstruction_output, log_output],
+        [reconstruction_output, log_output, dual_view_output],
     )
     frame_filter.change(
         update_visualization,
@@ -1057,7 +1153,7 @@ with gr.Blocks(
             color_mode,
             is_example,
         ],
-        [reconstruction_output, log_output],
+        [reconstruction_output, log_output, dual_view_output],
     )
     mask_black_bg.change(
         update_visualization,
@@ -1073,7 +1169,7 @@ with gr.Blocks(
             color_mode,
             is_example,
         ],
-        [reconstruction_output, log_output],
+        [reconstruction_output, log_output, dual_view_output],
     )
     mask_white_bg.change(
         update_visualization,
@@ -1089,7 +1185,7 @@ with gr.Blocks(
             color_mode,
             is_example,
         ],
-        [reconstruction_output, log_output],
+        [reconstruction_output, log_output, dual_view_output],
     )
     show_cam.change(
         update_visualization,
@@ -1105,7 +1201,7 @@ with gr.Blocks(
             color_mode,
             is_example,
         ],
-        [reconstruction_output, log_output],
+        [reconstruction_output, log_output, dual_view_output],
     )
     mask_sky.change(
         update_visualization,
@@ -1121,7 +1217,7 @@ with gr.Blocks(
             color_mode,
             is_example,
         ],
-        [reconstruction_output, log_output],
+        [reconstruction_output, log_output, dual_view_output],
     )
     prediction_mode.change(
         update_visualization,
@@ -1137,7 +1233,7 @@ with gr.Blocks(
             color_mode,
             is_example,
         ],
-        [reconstruction_output, log_output],
+        [reconstruction_output, log_output, dual_view_output],
     )
 
     color_mode.change(
@@ -1154,7 +1250,7 @@ with gr.Blocks(
             color_mode,
             is_example,
         ],
-        [reconstruction_output, log_output],
+        [reconstruction_output, log_output, dual_view_output],
     )
 
     # -------------------------------------------------------------------------
@@ -1163,12 +1259,14 @@ with gr.Blocks(
     input_video.change(
         fn=update_gallery_on_upload,
         inputs=[input_video, input_images],
-        outputs=[reconstruction_output, target_dir_output, image_gallery, log_output],
+        outputs=[reconstruction_output, target_dir_output, image_gallery, log_output,
+                 dual_view_output],
     )
     input_images.change(
         fn=update_gallery_on_upload,
         inputs=[input_video, input_images],
-        outputs=[reconstruction_output, target_dir_output, image_gallery, log_output],
+        outputs=[reconstruction_output, target_dir_output, image_gallery, log_output,
+                 dual_view_output],
     )
 
 

@@ -95,6 +95,28 @@ def test_dispatch_routes_by_checkpoint_family():
     print("✓ MaskDINO vs D4RT routing, dropdown limited to scenes present on disk\n")
 
 
+def test_explicit_checkpoint_path_must_exist():
+    """
+    A wrong --seg_checkpoint used to start a viewer with no scene button and no colours, which
+    looks like a broken UI instead of a wrong path. It must stop instead.
+    """
+    print("=== Testing checkpoint path resolution ===")
+    with tempfile.TemporaryDirectory() as tmp:
+        real = Path(tmp) / "checkpoint_best_bundle.pth"
+        _tiny_checkpoint(real, "scene0011_00")
+        assert dg.resolve_seg_checkpoint(str(real)) == str(real)
+        try:
+            dg.resolve_seg_checkpoint(str(Path(tmp) / ".../checkpoint_best_bundle.pth"))
+        except SystemExit as e:
+            assert "does not exist" in str(e), str(e)
+        else:
+            raise AssertionError("a non-existent explicit checkpoint must be fatal")
+    # no explicit path → auto-discovery is allowed to come back empty without failing
+    dg._find_default_seg_checkpoint = lambda: None
+    assert dg.resolve_seg_checkpoint(None) is None
+    print("✓ explicit path is checked and fatal; auto-discovery stays best-effort\n")
+
+
 def test_scene_button_reports_missing_data_instead_of_crashing():
     """A stale/unstaged scans root is the normal failure mode — it must say so, not traceback."""
     print("=== Testing scene loading with missing data ===")
@@ -102,10 +124,58 @@ def test_scene_button_reports_missing_data_instead_of_crashing():
     dg.SEG["scenes"] = [{"name": "scene0011_00", "split": "val",
                            "scene_dir": "/nonexistent/scene0011_00/raw_data"}]
     dg.SEG["scene_labels"] = ["scene0011_00 (val)"]
-    _, target_dir, paths, msg = dg.load_checkpoint_scene("scene0011_00 (val)")
+    _, target_dir, paths, msg, panel = dg.load_checkpoint_scene("scene0011_00 (val)")
     assert target_dir == "None" and paths is None, (target_dir, paths)
     assert "scene0011_00" in msg and "Could not read" in msg, msg
-    print("✓ missing scene data reported in the log, no crash\n")
+    assert "Could not read" in panel, panel
+    print("✓ missing scene data reported in the log and the panel, no crash\n")
+
+
+def test_gt_maps_follow_the_gallery_order():
+    """
+    THE alignment trap of the side-by-side view. Frames are written as PNGs and re-read by
+    `run_model` in *sorted filename* order, which is not the dataset's order. If the GT id maps
+    are not permuted the same way, the GT panel paints one frame's annotation onto another
+    frame's points — a picture that looks plausible and is wrong.
+    """
+    print("=== Testing GT/frame alignment ===")
+    S, hw = 3, 8
+    images = torch.zeros(S, 3, hw, hw)
+    for s in range(S):
+        images[s] = s / 10.0                       # frame s is a constant image of value s/10
+    gt = torch.zeros(S, hw, hw, dtype=torch.int32)
+    for s in range(S):
+        gt[s] = s + 1                              # ... and its GT map is filled with s + 1
+    names = ["c.jpg", "a.jpg", "b.jpg"]            # dataset order ≠ sorted order
+
+    dg.SEG["kind"] = "maskdino"
+    dg.SEG["scenes"] = [{"name": "scene_x", "split": "val", "scene_dir": "/unused"}]
+    dg.SEG["scene_labels"] = ["scene_x (val)"]
+    original = dg._maskdino_scene_frames
+    dg._maskdino_scene_frames = lambda scene: (images, names, gt)
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            _, target_dir, paths, _, _ = dg.load_checkpoint_scene("scene_x (val)")
+            written = sorted(os.listdir(os.path.join(target_dir, "images")))
+            assert written == ["a.png", "b.png", "c.png"], written
+            assert [os.path.basename(p) for p in paths] == written, "gallery order must be sorted"
+            # a.jpg was dataset frame 1, b.jpg frame 2, c.jpg frame 0
+            assert [int(m[0, 0]) for m in dg.SEG["gt_id_maps"]] == [2, 3, 1], \
+                [int(m[0, 0]) for m in dg.SEG["gt_id_maps"]]
+        finally:
+            os.chdir(cwd)
+            dg._maskdino_scene_frames = original
+    print("✓ GT id maps are permuted into the gallery's sorted order\n")
+
+
+def test_dual_view_degrades_to_a_message():
+    """The side-by-side panel must never take the reconstruction down with it."""
+    print("=== Testing side-by-side fallback ===")
+    html = dg._dual_view({}, 50.0, "All", False, False, "Depthmap and Camera Branch")
+    assert "unavailable" in html, html
+    print("✓ a broken viewer is a message, not a traceback\n")
 
 
 def test_colour_path_runs_through_the_demo():
@@ -146,6 +216,9 @@ def test_colour_path_runs_through_the_demo():
 
 if __name__ == "__main__":
     test_dispatch_routes_by_checkpoint_family()
+    test_explicit_checkpoint_path_must_exist()
     test_scene_button_reports_missing_data_instead_of_crashing()
+    test_gt_maps_follow_the_gallery_order()
+    test_dual_view_degrades_to_a_message()
     test_colour_path_runs_through_the_demo()
     print("✅ All Gradio-glue tests passed")

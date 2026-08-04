@@ -210,8 +210,11 @@ is the last layer only — identical cache footprint to every other arm.
 | `slurm/eval_3d_maskdino.sh` | cluster job: stages the two val-312 tars, runs the 3D eval |
 | `train/maskdino_viz3d.py` | the interactive 3D viewer's colour path (§9.7): checkpoint loading, the 3D ruler's query selection, identity-keyed per-pixel colours |
 | `demos/demo_gradio.py` | the viewer itself — serves MaskDINO **and** the retired D4RT checkpoints (§9.7) |
+| `demos/dualview3d.py` | the synchronised GT\|prediction panels (§9.7): GLB-equivalent filtering, quantised payload, a dependency-free WebGL page with ONE camera |
+| `scripts/view_ply.py` | a `.ply` → one self-contained HTML file, for looking at `--dump_ply` output without MeshLab (§9.7) |
 | `tests/test_maskdino_viz3d.py` | feature-mode fidelity, max-over-views selection, colour survives per-view reordering, end-to-end on a tiny head (§9.7) |
-| `tests/test_demo_gradio_maskdino.py` | the viewer's glue: checkpoint-family routing, scene dropdown vs what is on disk, colouring path (§9.7) |
+| `tests/test_demo_gradio_maskdino.py` | the viewer's glue: checkpoint-family routing, scene dropdown vs what is on disk, GT/frame ordering, colouring path (§9.7) |
+| `tests/test_dualview3d.py` | side-by-side view: vertex-for-vertex agreement with the GLB path, panels sharing points, payload round-trip, `.ply` → page (§9.7) |
 | `tests/test_maskdino_eval3d.py` | the whole §9 stack CPU-only: PLY/GT fixtures, Umeyama/ICP, unprojection round-trip, votes + majority, evaluator vs hand-computed APs, synthetic end-to-end |
 
 The only shared file this track modified is `train/eval_metrics.py`:
@@ -1086,3 +1089,40 @@ All 312 scenes, 0 failures, 18-class metrics:
    §7.2.1 — and still short of FAST3DIS's 0.096. So the remaining gap is **not** a tuning
    artefact, which is the useful negative result here: it has to come from coverage (§todo 5b)
    and registration quality (5c), the two things the plateau in reading 1 points at.
+
+**Looking at a `.ply` without MeshLab.** `scripts/view_ply.py <file>.ply` writes one
+self-contained HTML next to it — points, colours and a small WebGL viewer embedded, no CDN, no
+install. `scp` it and double-click, or `python -m http.server` on the node and open the
+forwarded port. Two files get one shared camera (`scripts/view_ply.py a.ply b.ply`). It also
+prints the grey fraction, which is the coverage number of §9.6 reading 3 in one line:
+`eval3d_scene0011_00.ply: 237,360 vertices, 95,075 (40%) grey/unassigned`.
+
+**Side by side, one camera (added 2026-08-03).** The viewer's second tab, *GT vs Prediction
+(synced)*, shows the SAME reconstructed cloud twice: left coloured by GT instance id, right by
+query id. Every control (confidence threshold, frame filter, background masks, prediction
+branch) drives both panels, and there is literally **one camera object** in the page — each
+panel is a viewport onto it, so orbit/pan/zoom on either side moves both by construction rather
+than by keeping two cameras in sync. This is why `demos/dualview3d.py` renders WebGL directly
+instead of using two `gr.Model3D` components: Gradio 5 draws Model3D through Babylon.js inside a
+compiled Svelte component whose camera is unreachable from outside.
+
+Three things that make the comparison honest, all asserted in `tests/test_dualview3d.py`:
+
+1. **The panels show the same points.** The filtering is a re-implementation of
+   `visual_util.predictions_to_glb`'s and is tested vertex-for-vertex against it, the
+   black/white-background masks are computed from the *image* (never from a panel's own
+   colouring), and the subsample to `--max_points` is a deterministic stride. If the point sets
+   could differ, "only the colour differs" would be false and the picture would mislead.
+2. **The GT panel is the dataset's annotation, not a re-labelling.** `masks` [S, H, W] carries
+   global instance ids; they are painted with the same palette and rule as the 2D GT panel. The
+   frames are written as PNGs and re-read in *sorted* order, so the id maps are permuted to
+   match — otherwise one frame's GT would land on another frame's points, which looks plausible
+   and is wrong (`test_gt_maps_follow_the_gallery_order`).
+3. **The identity spaces still differ** (§6.4): GT ids vs query indices. Colours agree with
+   themselves across views, never between the two panels.
+
+Uploaded images have no annotation, so the left panel falls back to RGB; with no checkpoint
+loaded there is a single RGB panel. **Not executable here:** this environment has no browser, so
+the WebGL/camera/pointer code is checked structurally (one camera object, one canvas per panel,
+decodable payload, escaped srcdoc) but has never been *run*. Everything upstream of the browser
+— filtering, colours, payload, ordering — is tested numerically.

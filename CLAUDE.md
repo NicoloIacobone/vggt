@@ -68,8 +68,12 @@ python tests/test_maskdino_viz3d.py   # 3D viewer colour path (MASKDINO.md §9.7
                                       # fidelity, max-over-views selection, colour stable across
                                       # views, end-to-end on a tiny head
 python tests/test_demo_gradio_maskdino.py  # the Gradio glue: MaskDINO-vs-D4RT checkpoint
-                                      # routing, scene dropdown, colouring path (imports the demo
-                                      # with VGGT_DEMO_SKIP_BACKBONE=1, no weights downloaded)
+                                      # routing, scene dropdown, GT/frame ordering, colouring
+                                      # path (imports the demo with VGGT_DEMO_SKIP_BACKBONE=1,
+                                      # no weights downloaded)
+python tests/test_dualview3d.py       # synced side-by-side 3D (MASKDINO.md §9.7): filtering
+                                      # asserted vertex-for-vertex against the GLB path, panels
+                                      # share points, payload round-trip, .ply → HTML
 python tests/test_coco_maskdino.py    # COCO track: both pixel-decoder pyramid modes, head
                                       # round-trip, GT helpers, instance inference + RLE, overfit
 bash tests/test_train_maskdino_sh_lists.sh  # slurm scene-list logic via DRY_RUN: numeric-range
@@ -116,9 +120,13 @@ sbatch --export=ALL,CHECKPOINT=<run_dir>/checkpoint_best_bundle.pth,\
 EXTRA_ARGS='--dump_ply --scenes scene0011_00 scene0015_00 --vote_radius 0.1 --depth_conf_percentile 25' \
     slurm/eval_3d_maskdino.sh          # → <run_dir>/eval3d_<scene>.ply (MeshLab/CloudCompare)
 #   (b) what the model predicts: VGGT's own point cloud coloured by the head, interactively.
-#       Needs a GPU node. Colours are query ids, identical to the 2D panels' palette.
+#       Needs a GPU node. Colours are query ids, identical to the 2D panels' palette. The
+#       "GT vs Prediction (synced)" tab shows both under ONE camera (demos/dualview3d.py).
 python demos/demo_gradio.py --seg_checkpoint <run_dir>/checkpoint_best_bundle.pth \
     --seg_scans_root /cluster/scratch/niacobone/demo_scans/scans   # 4 val scenes staged there
+# Look at a .ply without MeshLab: one self-contained HTML (WebGL inside), scp it and open it.
+myenv/bin/python scripts/view_ply.py <run_dir>/eval3d_scene0011_00.ply
+myenv/bin/python scripts/view_ply.py a.ply b.ply --out compare.html   # two panels, one camera
 # needs the two val-312 tars on work (built 2026-08-01; rebuild in ~20 min if lost):
 sbatch legacy/dataset_build/slurm/download_3d_gt_val312.sh       # mesh+superpoints+aggregation
 sbatch legacy/dataset_build/slurm/download_frames25k_val312.sh   # whole-scan frames + poses
