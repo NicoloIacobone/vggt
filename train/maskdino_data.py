@@ -216,6 +216,21 @@ def extract_features(model, images: torch.Tensor, args, device: str, need_xyz: b
     return torch.stack(per_frame), int(patch_start_idx), None
 
 
+def bundle_frames_for_split(args, split: str) -> int:
+    """
+    Frames per cached bundle. Val may be narrower (or wider) than train via `--eval_num_frames`.
+
+    The per-bundle metrics score a query against a whole [S, h, w] volume, so S *is* part of the
+    ruler: widening the training bundle would otherwise silently move the ruler the baseline was
+    measured on (docs/MASKDINO.md §8.4). The eval reads S off each cached bundle scene by scene,
+    so the two widths need not agree. Default (`--eval_num_frames` unset) = unchanged behaviour.
+    """
+    eval_frames = getattr(args, "eval_num_frames", None)
+    if split == "train" or not eval_frames:
+        return int(args.num_frames)
+    return int(eval_frames)
+
+
 @torch.no_grad()
 def prepare_scenes(model, scene_dirs: List[str], args, device: str, split: str) -> List[Dict]:
     """
@@ -225,7 +240,8 @@ def prepare_scenes(model, scene_dirs: List[str], args, device: str, split: str) 
     if not scene_dirs:
         return []
     num_bundles = args.bundles_per_scene if split == "train" else 1
-    common = dict(num_frames=args.num_frames, img_size=518, instance_level=not args.class_level)
+    common = dict(num_frames=bundle_frames_for_split(args, split), img_size=518,
+                  instance_level=not args.class_level)
     even = DataLoader(ScanNetMultiSceneDataset(scene_dirs, frame_sampling="even", **common),
                       batch_size=1, shuffle=False, num_workers=0)
     rand_dataset = (ScanNetMultiSceneDataset(scene_dirs, frame_sampling="random", **common)

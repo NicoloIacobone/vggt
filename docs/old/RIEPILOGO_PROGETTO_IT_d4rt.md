@@ -408,9 +408,9 @@ Con GT per-istanza e la val larga (scene0080–0089), protocollo identico, 1000 
 - **D era il braccio più promettente prima di morire**: NaN/inf nella matrice di costo di
   `linear_sum_assignment` ~ep555 (gradienti esplosivi nel percorso misto learned+point).
 
-### 9.4 Arm C scalato a N=200 — il risultato headline (2026-06-22)
+### 9.4 The baseline head scalato a N=200 — il risultato headline (2026-06-22)
 
-| Arm C learned | val mIoU | val[grid] AP50 onesto | train mIoU | gap |
+| The baseline head learned | val mIoU | val[grid] AP50 onesto | train mIoU | gap |
 |---------------|----------|------------------------|------------|-----|
 | N=50 | 0.259 | 0.146 | 0.749 | 0.49 |
 | N=200 best (@ep600) | **0.371** | 0.228 | 0.457 | **0.086** |
@@ -428,38 +428,38 @@ Run: `d4rt_full_inst_learned_20260622_183203`.
   migliorano).
 - Con le query apprese non esistono prompt, quindi prompted == grid: **0.228 è il numero di
   detection onesto e incondizionato del progetto.**
-- **Da qui arm C è la base di default per ogni esperimento successivo**
+- **Da qui the baseline head è la base di default per ogni esperimento successivo**
   (`--query_mode learned --num_learned_queries 64 --instance_level`).
 
 ### 9.5 I fix di B e D e i rerun (fix 2026-07-03, esiti 2026-07-07)
 
-Entrambi i bug sono stati corretti; nessuno dei due bracci batte arm C — chiusi entrambi.
+Entrambi i bug sono stati corretti; nessuno dei due bracci batte the baseline head — chiusi entrambi.
 
 | Rerun (N=50) | best val[grid] AP50 | best val[grid] mIoU | Esito |
 |---|---|---|---|
 | B `_gridq_fix` (`--no_object_norm matched`) | **0.161** @ep700 | 0.284 | collasso risolto (train[grid] mIoU 0.055 → 0.458); supera la soglia di successo ≥0.125 |
-| D `_hybrid_fix` (`--learned_query_lr_scale 0.1`, grad-clip 0.5, matcher protetto) | 0.146 @ep200 | 0.247 @ep250 | NaN sparito (1000 epoche pulite), ma *pareggia* soltanto arm C a N=50 |
+| D `_hybrid_fix` (`--learned_query_lr_scale 0.1`, grad-clip 0.5, matcher protetto) | 0.146 @ep200 | 0.247 @ep250 | NaN sparito (1000 epoche pulite), ma *pareggia* soltanto the baseline head a N=50 |
 
 - Il fix di B (`--no_object_norm matched`) normalizza la no-object loss per termine
   (`matched.mean() + w·unmatched.mean()`) così le query di griglia appese non diluiscono più i
   gradienti delle matchate — esattamente il meccanismo diagnosticato in §9.3. B va giudicato
   solo sulle colonne grid: il suo mIoU prompted resta basso per instradamento delle GT verso
   le query di griglia, non per il vecchio collasso.
-- **B scalato a N=190**: val[grid] mIoU **0.372** @ep1000 (pareggia arm C) ma AP50 onesto max
+- **B scalato a N=190**: val[grid] mIoU **0.372** @ep1000 (pareggia the baseline head) ma AP50 onesto max
   **0.185** e instabile tra le eval (0.071 @ep1000) — ben sotto lo 0.228 di C. Le query di
   griglia allenate recuperano la qualità delle maschere a scala, ma non una detection stabile.
 - **D non NaN-a più ma non vince**: i prompt a centroide reintroducono l'overfitting del
   percorso a punto che le query pure apprese avevano risolto (val decade 0.247 → 0.177 mentre
   il train[grid] sale a 0.75). Per la regola di decisione del progetto ("si scala solo su una
   vittoria"): niente run a N=190.
-- **Verdetto: arm C (query apprese pure) resta la base.**
+- **Verdetto: the baseline head (query apprese pure) resta la base.**
 
 ### 9.6 Fase 5 — Pixel decoder in stile MaskDINO (allenato 2026-06-30 — risultato neutro)
 
 Idea (dal punto 2 del supervisore): la testa di maschere è già il *meccanismo*
 Mask2Former/MaskDINO (embedding di query ⊗ mappa di feature via coseno); il pezzo mancante è
 un pixel decoder che upsampli la mappa 37×37 prima del prodotto. `--mask_upsample 2` (74×74)
-sulla base arm C a N=190:
+sulla base the baseline head a N=190:
 
 | vs baseline us=1 | val[grid] AP50 onesto | val mIoU |
 |------------------|------------------------|----------|
@@ -476,7 +476,7 @@ lo sweep del no-object weight / la soppressione dei duplicati, non maschere più
 ### 9.7 Sweep della soglia di score (2026-07-03 — negativo, si tiene 0.5)
 
 La scoperta storica dell'"under-confidence" (molte predizioni corrette a score 0.28–0.49,
-scartate dalla soglia 0.5) era un fenomeno **dei soli point prompt**: sul checkpoint arm C
+scartate dalla soglia 0.5) era un fenomeno **dei soli point prompt**: sul checkpoint the baseline head
 N=200, abbassare la soglia a 0.3 aggiunge 76 istanze su val di cui solo 2 corrette — puro
 rumore — e il modello già tiene 338 istanze contro 144 GT a soglia 0.5. Con le query apprese
 il problema è l'**over**-prediction (duplicati/falsi positivi) → la leva è lo sweep del
@@ -513,17 +513,17 @@ predizioni NON vengono lisciate bilinearmente per sembrare migliori della loro s
 
 ## 12. Stato attuale e prossimi passi
 
-**Configurazione base attuale:** query apprese (arm C) su GT per-istanza —
+**Configurazione base attuale:** query apprese (the baseline head) su GT per-istanza —
 `--query_mode learned --num_learned_queries 64 --instance_level`, N=190 scene di train, val =
 scene0080–0089. Numeri di riferimento: **val mIoU 0.371, AP50 onesto 0.228**.
 
 **Chiuso:** M1 (prototipo), M2 (training regolarizzato/unprompted), M3 quasi tutto (curva di
-scaling → plateau; arm C → vittoria e nuova base; fix B/D → funzionano ma non vincono, bracci
+scaling → plateau; the baseline head → vittoria e nuova base; fix B/D → funzionano ma non vincono, bracci
 chiusi; pixel decoder → neutro; sweep soglia → negativo).
 
 **Aperto (Fase 6, ablazioni ora sensate con 200 scene e segnale di val > rumore):**
 1. **Sweep del no-object weight (0.05 / 0.1 / 0.4)** — la leva indiziata per
-   l'over-prediction/duplicati di arm C. È il prossimo esperimento in ordine di priorità.
+   l'over-prediction/duplicati di the baseline head. È il prossimo esperimento in ordine di priorità.
 2. Ablation dell'augmentation: `bundles_per_scene` 1 vs 4, `query_jitter` on/off,
    `color_jitter` on/off.
 3. Densità della griglia vs recall unprompted: `--grid_size` 4/6/8.

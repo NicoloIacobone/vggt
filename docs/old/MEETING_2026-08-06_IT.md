@@ -19,6 +19,12 @@ numero è verificabile.*
    un blocco di *cross-frame attention*. Abbiamo costruito una metrica apposta e dimostrato che
    quel blocco serve a **preservare l'identità** dell'oggetto fra le viste, non a riconoscerlo
    meglio (`id_switch` 0.498 → 0.682 se lo si rimuove).
+3-bis. **Il risultato fresco di stanotte (§6.5).** Portare il bundle da **8 a 16 viste** — un
+   solo flag — dà per-bundle AP50 **0.525 → 0.552** sullo *stesso* righello e `id_switch`
+   **0.498 → 0.385**, con il numero di oggetti trovati **invariato**: di nuovo identità, non
+   riconoscimento. Un run di controllo con lo stesso identico budget di frame conferma che è la
+   **larghezza del bundle**, non i dati in più. Il run lungo segna il miglior AP50 per-frame
+   dello split ufficiale (**0.669**) e `id_switch` **0.323**, ancora in discesa.
 4. **Ora abbiamo un numero confrontabile con la letteratura.** Sul **benchmark 3D ufficiale di
    ScanNet**, split ufficiale 1201/312, valutatore ufficiale: **AP 0.023 / AP50 0.067 /
    AP25 0.268**. Siamo nell'ordine di grandezza di **FAST3DIS** (0.038 / 0.096 / 0.316) e di
@@ -353,6 +359,53 @@ istanze accoppiate per bundle — ed entrambe migliorano in modo monotono durant
 > cui la metrica è stata costruita, e sarà una tabella centrale del paper.
 
 *Fonti: `docs/RESULTS.md` §2/§3/§6, `docs/MASKDINO.md` §6.6, §7.4.1, §7.8, §7.8.1.*
+
+### 6.5 Il risultato nuovo (notte del 4–6 agosto): la **larghezza del bundle**
+
+**Da dove nasce.** La misura del "ponte perfetto" (§8.6) ha detto una cosa precisa: con un
+bridge 2D→3D senza errori le nostre maschere valgono 0.156 AP50 mentre lo *stesso* checkpoint
+vale 0.650 per-frame. Quindi non manca il riconoscimento: manca che **una query possieda
+l'oggetto in *tutte* le sue viste**. E c'era un parametro di §5 che non avevamo **mai** mosso:
+`--num_frames 8`, quante viste condividono un set di query. Per giunta il righello 3D fa girare
+la testa a **S ≈ 17.4 viste** mentre la alleniamo a 8 — un disallineamento train/test mai chiuso.
+
+**Il problema di metodo, risolto prima di lanciare.** Allargare il bundle **sposta il righello**:
+`bundle_*` valuta una query contro un volume `[S, h, w]`, e un volume su 16 viste è un oggetto
+*più difficile* di uno su 8. Un run con `--num_frames 16` non sarebbe stato confrontabile con lo
+0.525 di riferimento. Abbiamo quindi aggiunto **`--eval_num_frames`** (default spento = nessun
+cambiamento): il bundle di **validazione** resta a 8 viste mentre il training si allarga.
+
+**Risultato — job 9668639, *un solo flag* di differenza dal controllo:**
+
+| | controllo S=8 (9386666) | **S=16 (9668639)** | Δ |
+|---|---|---|---|
+| per-frame AP50 | 0.650 | **0.662** | +0.012 |
+| per-bundle AP50 (stesso righello a 8 viste) | 0.525 | **0.552** | **+0.027** |
+| `bundle_view_consistency` ↑ | 0.717 | **0.726** | +0.009 |
+| **`bundle_id_switch`** ↓ | 0.498 | **0.385** | **−0.113 (−23 % rel.)** |
+| istanze accoppiate per bundle | 14.1 | 14.0 | ±0 |
+
+> **Stessa firma di §6.4, letta al contrario.** Il numero di oggetti trovati non cambia; cambia
+> **chi li possiede**. Allenare le query condivise su il doppio delle viste simultanee insegna
+> loro a *restare* sul proprio oggetto.
+
+**Il controllo che chiude l'obiezione ovvia.** "S=16 con 2 bundle vede 32 frame per scena per
+epoca contro 16: è solo più dati." No: il job 9668726 gira a `--bundles_per_scene 1`, cioè
+**esattamente il budget di frame del controllo** (16 per scena per epoca), con il color jitter
+*inattivo*, e arriva comunque a 0.544 per-bundle e id_switch **0.345**. È la **larghezza**, non i
+frame in più.
+
+**E continua a scendere.** Il run lungo (9668652, 20 epoche, val lasciato a 16 viste) segna il
+**miglior AP50 per-frame di tutto lo split ufficiale, 0.669**, e porta `id_switch` a **0.323**, in
+discesa monotona da 0.537, senza segni di pavimento. Il suo per-bundle 0.594 è su un righello a
+16 viste — *più severo* — e supera comunque lo 0.525 a 8 viste del controllo.
+
+**Costo:** 11 h 26 contro 5 h 42, ~230 GB di cache di feature, una A100 80 GB. È il primo run
+della linea che non entra in una 4090.
+
+**Cosa NON dice:** se allargare oltre 16 continui a pagare. Non è misurato.
+
+*Fonti: `docs/MASKDINO.md` §8.4, `docs/RESULTS.md` §6, `docs/todo.md` 2e.*
 
 ---
 
@@ -785,16 +838,27 @@ problema di lifting** — che è esattamente la diagnosi numerica del §8.4.
 
 ## 13. Cosa manca — il piano che proporrei al meeting
 
-Ordinato per valore atteso, con la motivazione di ciascuno. **Riordinato il 2026-08-04 dalla
-misura di §8.4(c)/§14**: la decomposizione con pose mette un tetto duro di 0.156 AP50 su copertura
-+ registrazione insieme (al più +0.089 AP50), quindi ora l'anchor 3D viene prima:
+Ordinato per valore atteso. **Riordinato il 2026-08-04** dalla misura di §8.4(c): il ponte con
+pose mette un tetto duro di 0.156 AP50 su copertura + registrazione insieme (al più +0.089 AP50),
+quindi il decoder viene prima. **Aggiornato il 2026-08-06** con i risultati dei due esperimenti
+lanciati su quella base — uno neutro, uno positivo:
 
-1. **Anchor 3D vs box DAB 2D** (`todo 2d`) — ora la voce a valore atteso più alto: sopra il tetto
-   di 0.156 AP50 misurato in §8.4(c), è la completezza/identità multi-view — cioè il decoder — a
-   comandare, non copertura o registrazione. Da fare **sopra** il multi-frame (un anchor 3D ha
-   senso solo se una query è un'istanza attraverso le viste). Da presentare come **ablation**, non
-   come meccanismo nuovo (FAST3DIS lo possiede), e chiude anche il cerchio sul risultato negativo
-   di arm E.
+0-bis. **Fatto: le due voci "decoder" sono state misurate.**
+   - **Anchor 3D vs box DAB 2D** (`todo 2d`, job 9634920) — **neutro sull'AP, positivo
+     sull'identità**: per-bundle AP50 0.525 → 0.527, per-frame 0.650 → 0.641, ma `id_switch`
+     0.498 → **0.409** (meglio in 12 epoche su 12). È una **dissociazione** rispetto al taglio
+     della cross-frame attention, dove identità e AP si muovevano insieme. Resta spento di
+     default; costa +15 % di tempo di training. Da presentare come **ablation**, non come
+     meccanismo nuovo (FAST3DIS lo possiede), e chiude il cerchio su arm E.
+   - **Larghezza del bundle 8 → 16** (`todo 2e`, §6.5) — **il risultato positivo**: +0.027
+     per-bundle AP50, `id_switch` −0.113, con un controllo a parità di frame che esclude
+     l'ipotesi "sono solo più dati". Questa è la voce da portare avanti.
+
+1. **Continuare sulla larghezza del bundle** — la domanda naturale e non ancora misurata: 16 → 24
+   o 32 paga ancora? Il run lungo mostra `id_switch` ancora in discesa a fine training (0.323,
+   monotono), quindi non siamo su un pavimento. Costo: lineare nei frame sulla cache di feature
+   (S=32 × b2 ≈ 460 GB), quindi va pianificato, non improvvisato. **Prima però va misurato sul
+   righello 3D** il checkpoint a 16 viste: è lì che il cambiamento era diretto.
 2. **Copertura del lifting** (`todo 5b`) — solo ~16 % dei vertici riceve un voto e ~65 % dei
    vertici annotati viene assegnato: è un tetto secco sul recall, ma ora sappiamo che vale **al
    più +0.089 AP50** insieme a 5c (§8.4(c)), quindi solo la parte economica. Opzioni: più frame per
@@ -814,7 +878,10 @@ misura di §8.4(c)/§14**: la decomposizione con pose mette un tetto duro di 0.1
   modello sta a 0.69).
 - **Non** scongeliamo il backbone: rinuncerebbe al differenziatore. Se lo faremo, sarà una
   decisione esplicita e motivata, non un default.
-- `--bundles_per_scene 4` è **saturo**: la leva "più viste per scena" è finita.
+- `--bundles_per_scene 4` è **saturo**: più *estrazioni* di viste per scena non pagano più.
+  **Attenzione a non confondere le due leve**: `bundles_per_scene` (quante estrazioni) è satura,
+  `num_frames` (quante viste *dentro* un bundle, cioè quante viste condividono un set di query)
+  **non lo è** — è quella di §6.5, ed è positiva.
 
 ---
 
@@ -937,6 +1004,12 @@ encoding sui frame, quindi è definito per qualunque S. Zero fallimenti su 312 s
 | single-frame, per-frame | 0.624 | 0.662 |
 | multi-frame, per-bundle | 0.529 | 0.525 |
 | consistenza: `view_consistency` 0.717 / `id_switch` 0.498 | | |
+| **bundle a 16 viste**, per-frame (9668639) | 0.627 | **0.662** |
+| **bundle a 16 viste**, per-bundle *(val fissato a 8 viste, stesso righello)* | **0.549** | **0.552** |
+| consistenza: `view_consistency` **0.726** / `id_switch` **0.385** | | |
+| run lungo 20 ep (9668652), per-frame | 0.627 | **0.669** |
+| 〃 per-bundle — righello a **16** viste, non confrontabile con le righe sopra | 0.561 | 0.594 |
+| consistenza: `view_consistency` 0.710 / `id_switch` **0.323** | | |
 
 **Righello 3 — benchmark 3D ufficiale** (val-312, valutatore ufficiale). Due protocolli, §8.6:
 

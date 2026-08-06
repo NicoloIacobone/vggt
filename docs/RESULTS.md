@@ -14,13 +14,13 @@ numbers", not "how good is the ScanNet head".
 | | multi-view (per-bundle) | single-frame (per-frame) |
 |---|---|---|
 | unit scored | one instance vs its 8-frame GT mask, one IoU over the concatenated frames | each frame separately, averaged over frames then over scenes |
-| used by | the D4RT arms A–E (retired) | the MaskDINO track (active) |
+| used by | the retired baseline head | the MaskDINO track (active) |
 | scoring | softmax, "argmax ≠ background" | sigmoid, `max_c sigmoid(logit_c) ≥ 0.25` |
-| bridge | — | `scripts/eval_perframe.py` puts a D4RT checkpoint on this protocol |
+| bridge | — | `scripts/eval_perframe.py` puts a legacy checkpoint on this protocol |
 
 Per-frame scores **higher** than per-bundle for the same checkpoint: an instance only has to
 match in the frames where it is visible, and a prediction that claims no pixels in a frame is
-dropped rather than penalised (`train/perframe.py::drop_empty_masks`). That is why arm C reads
+dropped rather than penalised (`train/perframe.py::drop_empty_masks`). That is why the baseline head reads
 0.451/0.294 per-frame and 0.367/0.199 per-bundle — the same model, two rulers.
 
 All numbers below: official ScanNet GT, per-instance masks, val = scenes 0080–0089, held out of
@@ -29,7 +29,7 @@ every training set.
 ### 1.1 The val split, and why it is not the official one (decided 2026-07-28)
 
 Val = scenes **0080–0089** is a *project convention*, not the official ScanNet v2 val split. It
-stays that way: it is the one ruler every arm and every MaskDINO scale point was measured on, and
+stays that way: it is the one ruler every retired-baseline and every MaskDINO scale point was measured on, and
 switching would break the continuity of the 50 → 190 → 490 scaling curve for zero real gain in
 comparability (§1.2). Alongside it there is now **one comparability read-out**: the official
 ScanNet v2 val list (`data/splits/scannetv2_val.txt`, 312 scenes) intersected with our 500-scene
@@ -74,7 +74,7 @@ the task are all upstream's there. Never quote it next to a ScanNet number.
 
 | Model | Scenes | val mIoU | val AP50 | val AP75 | val mAP |
 |---|---|---|---|---|---|
-| arm C (best D4RT head) — **the bar** | 190 | 0.451 | 0.294 | 0.141 | 0.154 |
+| the retired baseline head — **the bar** | 190 | 0.451 | 0.294 | 0.141 | 0.154 |
 | MaskDINO | 50 | 0.451 | 0.440 | 0.314 | 0.290 |
 | MaskDINO | 190 | 0.594 | 0.624 | 0.440 | 0.418 |
 | MaskDINO | 490 | 0.669 | 0.699 | 0.506 | 0.475 |
@@ -93,7 +93,7 @@ the task are all upstream's there. Never quote it next to a ScanNet number.
 Job ids, caveats (the `--bundles_per_scene 2` job got a 2× step budget through an epoch-clamp
 bug, since fixed) and the reasoning: `docs/MASKDINO.md` §7.4.
 
-**+48 % mIoU, +138 % AP50 over the best D4RT head.** The curve is still rising at 490 scenes —
+**+48 % mIoU, +138 % AP50 over the retired baseline head.** The curve is still rising at 490 scenes —
 all the official-GT tar holds — and overfitting eases with scale (train mIoU 1.000 → 0.994 →
 0.947), so the model is still data-limited.
 
@@ -107,25 +107,25 @@ all the official-GT tar holds — and overfitting eases with scale (train mIoU 1
 | `--dn no` | 0.586 | 0.594 | −0.030 |
 | `--initialize_box_type no` | 0.610 | 0.608 | −0.016 |
 
-Every crippled variant still beats arm C by ~2×. Credit belongs to the architecture *class*, and
+Every crippled variant still beats the baseline head by ~2×. Credit belongs to the architecture *class*, and
 **data scale dominates everything**: +0.26 AP50 from 50→490 scenes vs ≤0.05 from any component.
 Details and job ids: `docs/MASKDINO.md` §7.
 
-## 3. Multi-view protocol — the D4RT arms, and now MaskDINO too
+## 3. Multi-view protocol — the baseline head's own ruler, and now MaskDINO too
 
 Since 2026-07-28 the MaskDINO track can be scored on this ruler as well: with `--multi_frame`
 one query is one instance across all 8 views by construction (docs/MASKDINO.md §8.2), so its
-mask volume can be scored exactly like an arm's.
+mask volume can be scored exactly like the baseline head's.
 
 | Model (N=490) | mIoU | AP50 | AP75 | mAP |
 |---|---|---|---|---|
-| arm C — best D4RT head (N=190) | 0.367 | 0.199 | — | — |
+| the retired baseline head (N=190) | 0.367 | 0.199 | — | — |
 | MaskDINO `--multi_frame` (job 8900100) | 0.535 | 0.494 | 0.279 | 0.272 |
 | … `--no-cross_frame_attn` (job 8950617) | 0.393 | 0.311 | 0.089 | 0.132 |
 | … `--feature_mode single` (per-frame features, job 8950613) | 0.429 | 0.347 | 0.154 | 0.181 |
 | **… + `--bundles_per_scene 2 --color_jitter 0.2`** (job 9071415) | **0.539** | **0.515** | — | — |
 
-**+47 % mIoU, 2.6× AP50 on the arms' own protocol** (the 9071415 row, the current multi-view
+**+47 % mIoU, 2.6× AP50 on the baseline head's own protocol** (the 9071415 row, the current multi-view
 best; its per-frame numbers also rise to 0.643 / 0.667), with no post-hoc matching or fusion.
 
 The two ablation rows (2026-07-29, docs/MASKDINO.md §7.4.1) localise the result: **cross-frame
@@ -134,32 +134,18 @@ in this track — and **bundle features are worth 0.147**. The same bundle featu
 for per-frame accuracy (§2), so multi-view consistency has a measured price: 0.729 single-frame
 best vs 0.630 per-frame for the best multi-view model.
 
-### 3.1 The retired D4RT arms
+### 3.1 The retired baseline head
 
-Query-initialisation strategies on the same frozen backbone and multi-view supervision. Full
-per-arm narrative and verdicts: `docs/ARMS_SUMMARY.md`.
+The bar row above (0.367 / 0.199 at N=190; 0.451 / 0.294 per-frame) is the best of a retired
+family of hand-rolled DETR-style heads — a query-initialisation study on the same frozen backbone
+and the same multi-view supervision. It is kept as the **single historical bar** and nothing else;
+the per-variant narrative, tables and verdicts are archived in `docs/old/ARMS_SUMMARY.md` and are
+not part of the current story.
 
-All official GT (`(S)` marks the one SAM3-GT number kept for context — a different ruler, see §4).
-Only arm C was run at N=190 on official GT; the other arms were scaled straight to N=490 in the
-2026-07-21/22 sweep, all with `--bundles_per_scene 1`.
-
-| Arm | Queries | N=190 mIoU / AP50 | N=490 mIoU / AP50 | Verdict |
-|---|---|---|---|---|
-| A | point prompts (D4RT style) | 0.216 / 0.105 (S) | 0.264 / 0.102 | superseded by C — plateaued past N=50 |
-| B | trained grid queries | — | 0.110 / 0.172 [grid] | closed — AP50 never stable, prompted path regresses |
-| **C** | **learned DETR object queries** | **0.367 / 0.199** | 0.350 / 0.177 | **best D4RT arm** |
-| D | hybrid (C's slots + A's prompts) | — | NaN @ ep110 (best-before 0.295 / 0.174) | closed — instability recurs at scale |
-| E | 3D-anchored (FPS over the point cloud) | — | 0.248 / 0.139 | closed — best E variant (v1 hybrid), still below C |
-
-**Arm C wins at every scale tested**, and the ranking C > E > B ≈ D > A holds at N=490 too, so
-data scale does not change the query-strategy verdict. The keeper from arm E is the ablation
-story plus a calibration finding (E keeps 0.59–0.86× as many predictions as there are GT
-instances, vs C's 1.23× — the 3D-spread prior suppresses duplicates as designed).
-
-**Arm C got *worse* with more data** (0.367@190 → 0.350@490), which at the time read as "the
-dataset is not the bottleneck". The MaskDINO scaling curve inverts that conclusion: the D4RT
-head was **architecture-limited, not data-limited**. The old scaling result was a property of
-that head, not of the task.
+One conclusion from it still matters, because MaskDINO **inverts** it: that head got *worse* with
+more data (0.367@190 → 0.350@490), which at the time read as "the dataset is not the bottleneck".
+The MaskDINO scaling curve says otherwise — the old head was **architecture-limited, not
+data-limited**, and the old scaling result was a property of that head, not of the task.
 
 ## 4. Ground-truth quality — why the older numbers do not transfer
 
@@ -208,6 +194,7 @@ are not comparable to them, we are behind).
 |---|---|---|---|---|
 | **multi-frame, official split (job 9386666 `checkpoint_best_bundle`), defaults — job 9503137** | **1201 official train (leak-free)** | **0.023 / 0.067 / 0.268** | 0.024 / 0.071 / 0.284 | **REPORTABLE** |
 | **same, `--vote_radius 0.1 --depth_conf_percentile 25` — job 9503139** | 〃 | **0.029 / 0.083 / 0.305** | 0.030 / 0.088 / 0.323 | **REPORTABLE**, knobs tuned on the diagnostic run below |
+| **`--anchor_3d` multi-frame (job 9634920 `checkpoint_best_bundle`), defaults — job 9670882** | **1201 official train (leak-free)** | **0.038 / 0.112 / 0.360** | 0.040 / 0.119 / 0.381 | **REPORTABLE — the best row in this table**, untuned |
 | best multi-frame (job 9071415, ep-17 ckpt), defaults — job 9327269 | 0000–0489 (**overlaps val-312!**) | 0.013 / 0.041 / 0.223 | 0.014 / 0.044 / 0.236 | DIAGNOSTIC ONLY — leakage, §9.4 |
 | same, `--vote_radius 0.1 --depth_conf_percentile 25` — job 9327271 | 〃 | 0.016 / 0.052 / 0.238 | 0.016 / 0.055 / 0.253 | 〃 |
 | FAST3DIS (published; LoRA-adapted DA3) | official split | 0.038 / 0.096 / 0.316 | — | literature anchor, **same protocol** (unposed) |
@@ -216,7 +203,16 @@ are not comparable to them, we are behind).
 
 **Among the methods that share our protocol, the reportable rows land in FAST3DIS's ballpark:
 AP25 0.305 vs its 0.316, AP50 0.083 vs 0.096, AP 0.029 vs 0.038** — with a *strictly frozen*
-backbone against its LoRA-adapted DA3, and comparably to IGGT. SegVGGT's much higher number is
+backbone against its LoRA-adapted DA3, and comparably to IGGT.
+
+**Updated 2026-08-04 by todo 2d.** The `--anchor_3d` row is no longer "in the ballpark" — at
+**0.038 / 0.112 / 0.360 it matches FAST3DIS on AP (0.038) and exceeds it on AP50 (0.112 vs 0.096)
+and AP25 (0.360 vs 0.316)**, and exceeds IGGT on AP and AP25 while matching its AP50 — still on a
+strictly frozen backbone, and *untuned* (all lifting knobs at their defaults, so the §9.8 sweep's
+headroom is unexplored on it). Two honesty notes that must travel with that sentence: it is a
+**single run against a single control**, and the structural handicaps above (`otherfurniture`,
+~17 frames/scene against SegVGGT's 75–100) still apply. The comparison to SegVGGT below is
+unchanged, because its protocol difference is unaffected by which checkpoint we bring. SegVGGT's much higher number is
 **not a like-for-like gap**: it is scored under posed transfer, where GT poses, intrinsics and
 sensor depth carry the masks onto the point cloud with no geometry error at all, so it measures
 2D mask quality alone while ours measures 2D mask quality times feed-forward geometry quality.
@@ -264,6 +260,8 @@ exactly as the Sim(3)+ICP does in the unposed block.
 |---|---|---|---|---|
 | **unposed** (§5 headline, job 9503137/9532181) | 1201-train, leak-free | **0.023 / 0.067 / 0.268** | 0.024 / 0.071 / 0.284 | 0.153 / 0.635 |
 | **posed** (job 9607206) | 〃 (identical file) | **0.060 / 0.156 / 0.408** | 0.064 / 0.166 / 0.432 | **0.342 / 0.791** |
+| unposed, `--anchor_3d` (job 9670882) | 1201-train + 3D anchors | **0.038 / 0.112 / 0.360** | 0.040 / 0.119 / 0.381 | 0.177 / 0.666 |
+| posed, `--anchor_3d` (job 9670883) | 〃 (identical file) | **0.104 / 0.257 / 0.504** | 0.110 / 0.273 / 0.534 | 0.404 / 0.821 |
 | — *oracle ceiling of the posed row* (job 9607210) | GT rendered back through the bridge | 0.828 / 0.948 / 0.974 | — | — / 0.906 |
 | SegVGGT (published) | 1201-train, LoRA-adapted VGGT | 0.504 / 0.717 / 0.870 | — | — |
 
@@ -285,6 +283,15 @@ Three things to carry when quoting this block:
    instance (`scripts/eval3d_projection_oracle.py`, all 312 scenes) — a wrong pixel mapping
    collapses that number. Its 0.948 AP50 is the ceiling the ~17-frame budget imposes on the
    posed protocol, which also says **view count is not what binds us at 0.156**.
+4. **`--anchor_3d` moves BOTH blocks by ~+66 % AP50** (todo 2d, docs/MASKDINO.md §8.3), from an
+   ablation that is *flat* on both 2D rulers (per-bundle AP50 0.525 → 0.527). Same 17.42
+   frames/scene, same defaults, 0 failures; it keeps 9 % **fewer** queries and covers 16 % **more**
+   vertices. Two consequences worth carrying: (a) the unposed row **0.038 / 0.112 / 0.360** now
+   sits inside the published unposed cluster (FAST3DIS 0.038 / 0.096 / 0.316, IGGT
+   0.028 / 0.112 / 0.287) on a **frozen** backbone; (b) **`bundle_AP50` at S = 8 is a poor proxy
+   for this ruler** — score any cross-view-identity mechanism here before judging it. Because both
+   blocks move by the same factor, the 2.3× bridge cost of reading 1 is unchanged, and so is the
+   ceiling it puts on todo 5b/5c (now ~0.257 rather than 0.156).
 
 ## 6. Official 1201/312 split — first runs (2026-08-02)
 
@@ -308,6 +315,42 @@ steps (~ the N=490 recipe budget of 29.4k), warmup 2, eval every epoch on all 31
 | 〃 | **per-bundle (multi-view)** | **0.529** | **0.525** | 0.312 | 0.311 |
 | … `--no-cross_frame_attn` (9503176) | per-frame | 0.576 | 0.588 | — | — |
 | 〃 | per-bundle | 0.471 | 0.389 | 0.220 | — |
+| … `--anchor_3d` (9634920, todo 2d) | per-frame | 0.611 | 0.641 | 0.462 | 0.436 |
+| 〃 | per-bundle | 0.524 | 0.527 | 0.305 | 0.306 |
+| … **`--num_frames 16`** (9668639, todo 2e) | per-frame | 0.627 | **0.662** | 0.475 | 0.450 |
+| 〃 | **per-bundle** (val pinned to 8 views) | **0.549** | **0.552** | 0.339 | 0.332 |
+| … S=16, b1, 24 ep, no jitter (9668726) | per-frame | 0.609 | 0.641 | 0.459 | 0.435 |
+| 〃 | per-bundle (val pinned to 8 views) | 0.541 | 0.544 | 0.331 | 0.324 |
+| … S=16, b2, 20 ep (9668652) | per-frame | 0.627 | **0.669** | 0.476 | 0.453 |
+| 〃 | per-bundle — **16-view ruler, not comparable** | 0.561 | 0.594 | 0.356 | 0.351 |
+
+**Bundle width 8 → 16 (todo 2e, docs/MASKDINO.md §8.4).** `--num_frames` is how many views share
+one query set, and it had never moved off 8 while the 3D ruler runs the head at S ≈ 17.4. New
+flag `--eval_num_frames` pins the **val** width so `bundle_*` keeps measuring an 8-view volume
+while training widens — without it the metric's object changes and the row is uncomparable
+(the 9668652 row above is exactly that case, and is marked).
+
+| | control S=8 (9386666) | **S=16 (9668639)** | Δ |
+|---|---|---|---|
+| per-frame AP50 | 0.650 | **0.662** | +0.012 |
+| per-bundle AP50 | 0.525 | **0.552** | **+0.027** |
+| `bundle_view_consistency` ↑ | 0.717 | **0.726** | +0.009 |
+| `bundle_id_switch` ↓ | 0.498 | **0.385** | **−0.113 (−23 % rel.)** |
+| `bundle_num_matched` | 14.1 | 14.0 | ±0 |
+
+One flag different. **Recognition flat, identity improved** — the same dissociation as the
+`--no-cross_frame_attn` cut read forwards. And it is the *width*, not the extra frames: job
+9668726 runs `--bundles_per_scene 1` at S=16, i.e. **the control's exact frame budget** (16
+frames/scene/epoch) with `--color_jitter` inert, and still lands 0.544 per-bundle / 0.345
+id_switch. Cost: 2× wall clock (11 h 26 vs 5 h 42), ~230 GB feature cache, A100 80 GB.
+
+**The `--anchor_3d` ablation (todo 2d, docs/MASKDINO.md §8.3).** 3D anchors vs 2D DAB boxes,
+`config.json` differing in exactly that one key. **AP-neutral, identity-positive**: per-bundle
+AP50 0.525 → 0.527 and consistency 0.717 → 0.723 are flat, per-frame is mildly negative
+(0.650 → 0.641), and the one systematic move is **`bundle_id_switch` 0.498 → 0.409** (−18 % rel.,
+better in **12/12 epochs**). This is a **dissociation** from the `--no-cross_frame_attn` row above,
+where identity and bundle AP50 moved together — so the two are not one axis, and `bundle_AP50`
+alone cannot see what a 3D anchor does. Off by default; costs +15 % training time.
 
 - **Scale holds up on the honest split**: 0.662 per-frame AP50 vs 8900194's 0.604 (+0.058, with
   ~3× the training scenes; 77-vs-312-scene val caveat above). The train/val gap at epoch 12

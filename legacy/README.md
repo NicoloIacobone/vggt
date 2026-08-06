@@ -21,7 +21,7 @@ count and peaked at **val mIoU 0.350 / honest AP50 0.177** at N=490 on official 
 per-frame protocol that makes the two families comparable, arm C scores **0.451 / 0.294** —
 which the MaskDINO track beats with 0.669 / 0.699.
 
-Full narrative: `docs/old/MILESTONES.md`; the arm-by-arm verdict table: `docs/ARMS_SUMMARY.md`.
+Full narrative: `docs/old/MILESTONES.md`; the arm-by-arm verdict table: `docs/old/ARMS_SUMMARY.md`.
 
     models/    d4rt_decoder.py (QueryGenerator + InstanceDecoder + mask head),
                anchor_queries.py (arm E 3D anchors), mask_upsampler.py

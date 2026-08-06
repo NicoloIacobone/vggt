@@ -2,7 +2,7 @@
 
 Open work only. Everything closed up to 2026-07-28 is in
 `docs/old/todo_archive_20260728.md`; the reasoning behind each closed item is in
-`docs/old/MILESTONES.md` (D4RT arms) and `docs/MASKDINO.md` §7 (MaskDINO).
+`docs/old/MILESTONES.md` (the retired head) and `docs/RESULTS.md` (MaskDINO).
 
 **Goal restated (2026-07-30).** A 3D-consistent multi-view instance segmentation model on a
 **strictly frozen** VGGT backbone, written up as a controlled decoder study for a top-tier venue
@@ -132,7 +132,7 @@ In effort order — each step also de-risks the next:
       and bundle AP50 falls 0.525 → 0.389. The block's job is **identity preservation**, not
       recognition — the mechanism claim the metric was built to support, and a core table for
       the paper.
-- [~] **2d. 3D anchors vs 2D DAB boxes — IMPLEMENTED 2026-08-04, run in flight**
+- [x] **2d. 3D anchors vs 2D DAB boxes — DONE 2026-08-04. Flat in 2D, +67 % AP50 in 3D.**
       (docs/MASKDINO.md §8.3 has the design as built, the three forced deviations from the
       sketch, and the named confound). `--anchor_3d`, default off: the decoder's 2D DAB anchor
       box becomes a 3D `(x, y, z, log r)` per query per **bundle**, gathered from the two-stage
@@ -141,11 +141,53 @@ In effort order — each step also de-risks the next:
       each view over the 37×37 grid — no intrinsics/extrinsics — and refined by Δ(xyz, log r).
       Every loss unchanged; denoising queries stay on the 2D DAB path.
       Framed and budgeted as an **ablation** (FAST3DIS owns the mechanism as a contribution),
-      which also closes the arm-E loop. Promoted above 5b/5c by §9.10 reading 4.
-      **Job 9634920** (`maskdino_sf_list1201_mf_anchor3d_*`) is the control-matched run:
-      identical to job 9386666 except for the flag, so the anchor is the only variable.
-      Compare per-frame **0.623 / 0.650**, per-bundle **0.529 / 0.525**, consistency 0.717 /
-      id_switch 0.498 (§7.8). 3D ruler only if the 2D result is not negative.
+      which also closes the archived 3D-anchor loop. Promoted above 5b/5c by §9.10 reading 4.
+      **2D RESULT IN (job 9634920 vs control 9386666; `config.json` differs in exactly the one
+      key): AP-neutral, identity-positive.** Per-bundle 0.529 / 0.525 → 0.524 / **0.527** and
+      consistency 0.717 → 0.723 are flat; per-frame 0.623 / 0.650 → 0.611 / 0.641 is mildly
+      negative; and the single systematic move is **`bundle_id_switch` 0.498 → 0.409**
+      (−18 % rel., better in **12/12 epochs**, mean −0.084). That **dissociates** identity from
+      bundle AP50, which §7.8.1 had found moving together — so they are not one axis, and the
+      §9.10 "multi-view completeness *and* identity" residual is not one quantity either: this
+      bought the identity half only. Not a default (+15 % training time, −0.009 per-frame AP50).
+      **3D RESULT IN (jobs 9670882 / 9670883) — and it overturns the "not a default" reading.**
+      Same 312 scenes, same **17.42 frames/scene**, all knobs default, 0 failures:
+      unposed **0.023 / 0.067 / 0.268 → 0.038 / 0.112 / 0.360 (+67 % AP50)** and posed
+      **0.060 / 0.156 / 0.408 → 0.104 / 0.257 / 0.504 (+65 %)**. The unposed row now **matches
+      FAST3DIS on AP (0.038) and beats it on AP50 (0.112 vs 0.096) and AP25 (0.360 vs 0.316)**,
+      on a strictly frozen backbone and *untuned*. Signature: 9 % **fewer** kept queries, 16 %
+      **more** voted vertices — fewer, cleaner, view-consistent instances is exactly what a
+      per-vertex vote rewards, and `id_switch` is the failure mode the vote integrates over.
+      **Two lessons.** (i) `bundle_AP50` at S=8 is a **poor proxy for the 3D ruler** — a mechanism
+      can be flat on it and worth +67 % in 3D, so score identity mechanisms on the 3D ruler before
+      judging them. (ii) This document's own prediction ("bought identity, not completeness, so
+      expect little 3D movement") was **wrong and was falsified**: of §9.10 reading 4's two
+      residuals it is *identity* the 3D ruler is most sensitive to. Keep the dissociation, discard
+      the prediction. **Drift ruled out from the diff, not a re-run**: the only commit between the
+      control rows and these is `7c4e890`, which touches no file in `train/eval3d_*` /
+      `benchmark3d` / `scannet3d` and adds one `anchor_3d`-guarded branch to
+      `scripts/eval_3d_maskdino.py` that is inert for a 2D-box checkpoint; the posed control also
+      post-dates the `--transfer_mode` refactor, so it is same-code by construction. Both blocks
+      move ~+66 % independently.
+      **Recommended for any 3D-benchmark run; still off by default.** Converges with 2e: both
+      winners moved `id_switch` and little else.
+
+- [x] **2e. Bundle width: 8 → 16 views per bundle — DONE 2026-08-06, POSITIVE**
+      (docs/MASKDINO.md §8.4, RESULTS.md §6). One flag (`--num_frames 16`, job 9668639 vs control
+      9386666): per-frame AP50 0.650 → **0.662**, per-bundle AP50 0.525 → **0.552** on the same
+      pinned 8-view ruler, `bundle_id_switch` 0.498 → **0.385** (−23 % rel.) with
+      `bundle_num_matched` flat at 14.0. **Recognition unchanged, identity improved** — the
+      §7.8.1 signature read forwards. Job 9668726 rules out the data confound: `--bundles_per_scene
+      1` at S=16 is *frame-matched to the control* with jitter inert and still gets 0.544 /
+      0.345, so it is the **width**, not the extra frames. Job 9668652 (20 ep, val at 16) posts
+      the best per-frame AP50 on the official split anywhere (**0.669**) and id_switch **0.323**,
+      still falling. Costs 2× wall clock and ~230 GB of cache (A100 80 GB).
+      Open: does width keep paying past 16? Not answered.
+      Why it was tried: §9.10 reading 4 (multi-view completeness/identity binds the posed
+      column) plus a standing train/test mismatch — the 3D ruler runs the head at S ≈ 17.4 and
+      it was trained at S = 8. New flag **`--eval_num_frames`** (default unset = unchanged) pins
+      the VAL bundle width so `bundle_*` stays on the 8-view ruler the 0.525 baseline was
+      measured on; without it, widening training silently changes what the metric measures.
 
 ## 3. Resolution stream — CLOSED 2026-07-30 (docs/MASKDINO.md §7.7)
 
@@ -158,8 +200,18 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 
 ## 4. Watching
 
-- **Job 9634920** — todo 2d, `--anchor_3d` on the official 1201/312 split (see 2d above).
-  Control: job 9386666. Submitted 2026-08-04.
+- (todo 2d fully landed — jobs 9634920 / 9670882 / 9670883. A regression re-run of the control
+  under current code was submitted as 9848637 and **cancelled**; it is not needed, because the
+  drift question is closed from the commit diff instead — see 2d.)
+- **Next, cheap and now well-motivated:** `--anchor_3d` and 2e's `--num_frames 16` both act on
+  `id_switch` and both pay on the 3D ruler. **Combine them** — neither has been run with the
+  other, and the 3D ruler has never been run on 2e's winner (job 9668639/9668652). Also: the
+  §9.8 lifting-knob sweep has never been applied to an anchor_3d checkpoint, and it was worth
+  +0.016 AP50 on the old one.
+- **Jobs 9668639 / 9668652 / 9668726** — todo 2e, bundle width 8 → 16 (see 2e above).
+  Control: job 9386666. Submitted 2026-08-04. When the winner lands, run the 3D ruler on its
+  `checkpoint_best_bundle.pth` in **both** transfer modes (§9.10) — that is the ruler the change
+  is aimed at.
 
 ## 5. Lifting quality — the new binding constraint (opened 2026-08-03 by §9.6)
 

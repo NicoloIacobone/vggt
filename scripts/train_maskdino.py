@@ -96,6 +96,12 @@ def build_argparser():
     p.add_argument("--val_scenes", type=str, default="scene0080_00")
     p.add_argument("--scans_root", type=str, default=DEFAULT_SCANS_ROOT)
     p.add_argument("--num_frames", type=int, default=8, help="Cached frames per scene")
+    p.add_argument("--eval_num_frames", type=int, default=None,
+                   help="Frames per VAL bundle, if different from --num_frames (default: same). "
+                        "Training at a wider bundle silently moves the per-bundle ruler — a "
+                        "volume over 16 views is a harder object than one over 8 — so pin this "
+                        "to the baseline's width to keep bundle_* comparable "
+                        "(docs/MASKDINO.md §8.4). Train scenes always use --num_frames.")
     p.add_argument("--class_level", action="store_true",
                    help="Use per-class masks instead of the default per-instance GT "
                         "(masks_instance/); per-instance is what an instance-segmentation "
@@ -267,6 +273,10 @@ def main():
         step_size = args.batch_bundles
         print(f"Training samples (bundles with >=1 instance): {len(train_samples)} "
               f"x {args.num_frames} frames")
+        if args.eval_num_frames and args.eval_num_frames != args.num_frames:
+            print(f"  val bundles pinned to {args.eval_num_frames} frames "
+                  f"(--eval_num_frames): bundle_* stays on the {args.eval_num_frames}-view "
+                  f"ruler while training sees {args.num_frames}")
     else:
         train_samples = frame_index(train_scenes)
         step_size = args.batch_frames

@@ -1,7 +1,7 @@
 # Dataset, ground truth, and storage
 
 The supervision, the on-disk conventions, and how a job gets the data. This applies to both the
-active MaskDINO track and the retired D4RT arms — they read the same trees through the same
+active MaskDINO track and the retired retired baseline heads — they read the same trees through the same
 loader (`data/scannet_overfit.py`).
 
 ## 1. Ground truth: official ScanNet v2 2D instance annotations
@@ -18,7 +18,7 @@ curtain↔shower_curtain, chair↔sofa, …), **15.9 % of foreground pixels mult
 effect: the matcher demands two predictions for one object (built-in honest-AP50 false
 positives) and the class head gets contradictory supervision.
 
-**What it cost to switch** (arm C, N=190, learned queries, per-instance GT, val scenes
+**What it cost to switch** (the baseline head, N=190, learned queries, per-instance GT, val scenes
 0080–0089):
 
 | | val mIoU | honest val[grid] AP50 |
@@ -66,7 +66,7 @@ Specs on group storage: `OFFICIAL_GT_README.md`, `INSTANCE_MASKS_README.md` (+ `
 - `<k>` in `masks_instance/<class>_<k>/` is zero-based per class, in order of first appearance.
 - Directory names use underscores: `shower_curtain_3`.
 - The union of a class's instance masks equals its `masks/<class>/` mask.
-- The loader defaults to per-class `masks/`; `--instance_level` (D4RT) / the default in the
+- The loader defaults to per-class `masks/`; `--instance_level` (legacy) / the default in the
   MaskDINO trainer (`--class_level` to opt out) reads `masks_instance/`.
 - ScanNet class indices are `1..19`, with `0` = background everywhere. In official GT, NYU40
   classes outside the 19 trainable (including `otherfurniture`) are background — see

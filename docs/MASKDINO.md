@@ -1,12 +1,12 @@
 # MaskDINO on frozen VGGT — the active model track
 
 **Status:** single-frame question answered and won (2026-07-27). At 490 scenes this head scores
-**val mIoU 0.669 / AP50 0.699** against the best D4RT arm's **0.451 / 0.294** on the identical
+**val mIoU 0.669 / AP50 0.699** against the retired baseline head's **0.451 / 0.294** on the identical
 per-frame protocol — +48 % mIoU, +138 % AP50; **0.694 / 0.729 with `--bundles_per_scene 2`**
 (§7.4; 4 draws/scene saturates, §7.4.1). The multi-frame extension (§8) is implemented through
 step 2 (shared queries across the frames of a bundle, `--multi_frame`, 2026-07-28): per-frame it
-is neutral against its control, and on the arms' own multi-view ruler the best run scores
-**0.539 mIoU / 0.515 AP50 vs arm C's 0.367 / 0.199** (`--bundles_per_scene 2 --color_jitter
+is neutral against its control, and on the baseline head's own multi-view ruler the best run scores
+**0.539 mIoU / 0.515 AP50 vs the baseline's 0.367 / 0.199** (`--bundles_per_scene 2 --color_jitter
 0.2`, job 9071415, §8.2; 0.535 / 0.494 without the data recipe). The 2026-07-29 ablations
 (§7.4.1) show that result rests on two ingredients: removing cross-frame attention costs
 **−0.18 bundle AP50** and swapping the bundle features for per-frame ones costs **−0.15**, so
@@ -37,23 +37,23 @@ table before assuming this covers the training path — it does not.
 
 **Origin:** supervisor request (2026-07-27) — replicate the MaskDINO decoder on top of the frozen
 VGGT backbone and see whether a state-of-the-art detection-style decoder breaks the ceiling the
-hand-rolled D4RT head hit (arm C: val mIoU 0.367 / honest val[grid] AP50 0.199). Constraint:
+hand-rolled baseline head hit (val mIoU 0.367 / honest val[grid] AP50 0.199). Constraint:
 **single-frame only** for now.
 
 Reference implementation read for the port: `/cluster/scratch/niacobone/MaskDINO`
 (IDEA-Research MaskDINO, `maskdino/modeling/{transformer_decoder,pixel_decoder,criterion,matcher}`).
 
-The D4RT arms A–E it replaced are retired to `legacy/d4rt/` but stay runnable — they are the
-baseline every number here is measured against. See `legacy/README.md` and `docs/ARMS_SUMMARY.md`.
+The head it replaced is retired to `legacy/` but stays runnable — it is the baseline every number
+here is measured against. See `legacy/README.md`; its own story is archived in `docs/old/`.
 
 ---
 
-## 1. What MaskDINO is (and what the D4RT head was missing)
+## 1. What MaskDINO is (and what the retired baseline head was missing)
 
 MaskDINO = Mask2Former's mask branch grafted onto DINO's detection decoder. The pieces that
-matter, and how the retired D4RT head compares:
+matter, and how the retired baseline head compares:
 
-| MaskDINO component | D4RT head (arms A–E) | Kept here |
+| MaskDINO component | the retired baseline head | Kept here |
 |---|---|---|
 | **Pixel decoder**: 6-layer MSDeformAttn encoder over 3 feature scales, produces enhanced multi-scale memory + a high-res `mask_features` map | none — raw VGGT tokens are linearly projected and LayerNormed once, single scale | ✅ ported (scales synthesised from VGGT tokens, §3) |
 | **Deformable cross-attention** in the decoder (4 sampling points/head/level around a reference box) | dense `nn.TransformerDecoder` cross-attention over all tokens | ✅ ported (pure-PyTorch MSDeformAttn, §2) |
@@ -65,7 +65,7 @@ matter, and how the retired D4RT head compares:
 | **Losses**: sigmoid-focal class + point-sampled BCE/Dice masks + L1/GIoU boxes | softmax-CE-ish focal class + Dice + fg-weighted BCE, no boxes | ✅ ported |
 | Hungarian matcher over class+mask+dice+**box+giou** | matcher over class+mask+dice+coord-prompt | ✅ ported |
 
-The hypothesis that motivated it: the D4RT arms plateaued at ~0.2 honest AP50 mainly on
+The hypothesis that motivated it: the retired baseline head plateaued at ~0.2 honest AP50 mainly on
 **detection** (finding and separating objects), not on mask quality. Anchor boxes + iterative
 refinement + DN + deep supervision are exactly the machinery that fixes DETR-style detection.
 §7.2.2 shows the hypothesis was right about the *class* of architecture but wrong about any
@@ -86,18 +86,18 @@ Everything here is a deliberate, documented deviation — the decoder logic itse
      and `models/maskdino/box_ops.py`.
    - `Conv2d(norm=…)` + `c2_xavier_fill` → plain `nn.Conv2d` + `nn.init.xavier_uniform_`.
 2. **Backbone**: frozen VGGT-1B aggregator instead of ResNet-50/Swin. Only the pixel decoder +
-   transformer decoder train — **20.5 M** params at the full recipe, vs ~6.5 M for the D4RT head.
-   VGGT is never touched, exactly as in every other arm.
+   transformer decoder train — **20.5 M** params at the full recipe, vs ~6.5 M for the retired baseline head.
+   VGGT is never touched, exactly as in every other run.
 3. **Single scale in, three scales out** (§3) — VGGT is a plain ViT-style aggregator with one
    token resolution, so the res3/res4/res5 pyramid is synthesised ViTDet-style.
 4. **19 classes, sigmoid-focal, no background column.** MaskDINO/DINO classify with `num_classes`
-   sigmoid logits and represent "no object" as *all logits low*, whereas the D4RT arms used 20
+   sigmoid logits and represent "no object" as *all logits low*, whereas the retired baseline head used 20
    softmax logits with background at index 0. Ported faithfully → the eval protocol needs the
    `score_mode="sigmoid"` switch (§6). The width comes from `models/maskdino/head.py::
    NUM_SCANNET_CLASSES`; instances of the 20th `SCANNET_CLASSES` name (`otherfurniture`) are
    dropped rather than crashing the matcher — see §4.
 5. **Mask resolution** is the VGGT patch grid (37×37) by default, so the mask metrics are computed
-   on exactly the same grid as arms A–E. `--mask_upsample 2` gives 74×74 (a transposed-conv step
+   on exactly the same grid as the retired baseline head. `--mask_upsample 2` gives 74×74 (a transposed-conv step
    in the pixel decoder, GT rebuilt to match) — a separate run, not the headline number.
 6. **No LSJ / crop / flip augmentation**: the images are VGGT-preprocessed 518×518 square resizes
    of ScanNet frames; the only augmentation is the project's existing photometric jitter.
@@ -130,7 +130,7 @@ VGGT tokens [B,2048,37,37]
 
 `--feature_layers` optionally concatenates several aggregator layers (e.g. `4,11,17,23`, the
 layers VGGT's own DPT heads read) before the 1×1 projection, at 4× the feature-cache cost. Default
-is the last layer only — identical cache footprint to every other arm.
+is the last layer only — identical cache footprint to every other run.
 
 ## 4. Single-frame protocol
 
@@ -166,7 +166,7 @@ is the last layer only — identical cache footprint to every other arm.
   `SetCriterion.forward`) turns an out-of-range or negative label from any *other* caller into a
   named `AssertionError` instead of an opaque `IndexError`.
 - **Cross-view instance identity is not used and not required.** That is the whole point of the
-  single-frame restriction — and the reason the numbers are not directly comparable to arms A–E
+  single-frame restriction — and the reason the numbers are not directly comparable to the retired baseline head
   (§6).
 
 ## 5. Files
@@ -196,7 +196,7 @@ is the last layer only — identical cache footprint to every other arm.
 | `train/maskdino_eval.py` | per-frame scoring over cached scenes + the RGB\|GT\|pred figures |
 | `train/perframe.py` | the protocol itself — `drop_empty_masks`, `topk_predictions`, `perframe_metrics`. Shared with `eval_perframe.py`, which is what makes the two families comparable |
 | `train/common.py` | scene-path resolution, photometric jitter, LR schedule, `metrics.jsonl` append |
-| `scripts/eval_perframe.py` | scores an existing **D4RT** checkpoint under this protocol (the apples-to-apples baseline) |
+| `scripts/eval_perframe.py` | scores an existing **legacy** checkpoint under this protocol (the apples-to-apples baseline) |
 | `scripts/visualize_maskdino.py` | re-renders a finished run's figures from its checkpoint, without retraining (§6.4) |
 | `slurm/train_maskdino.sh` | cluster job (stages the 500-scene official-GT tar; logs → `slurm/logs/`) |
 | `slurm/visualize_maskdino.sh` | the same, for the re-rendering script over one or more run dirs |
@@ -214,7 +214,7 @@ is the last layer only — identical cache footprint to every other arm.
 | `train/eval3d_geometry.py` | eval-time Sim(3) registration (Umeyama + similarity ICP), pixel→query assignment, vertex votes, superpoint majority (§9) |
 | `slurm/eval_3d_maskdino.sh` | cluster job: stages the two val-312 tars, runs the 3D eval |
 | `train/maskdino_viz3d.py` | the interactive 3D viewer's colour path (§9.7): checkpoint loading, the 3D ruler's query selection, identity-keyed per-pixel colours |
-| `demos/demo_gradio.py` | the viewer itself — serves MaskDINO **and** the retired D4RT checkpoints (§9.7) |
+| `demos/demo_gradio.py` | the viewer itself — serves MaskDINO **and** the retired baseline-head checkpoints (§9.7) |
 | `demos/dualview3d.py` | the synchronised GT\|prediction panels (§9.7): GLB-equivalent filtering, quantised payload, a dependency-free WebGL page with ONE camera |
 | `scripts/view_ply.py` | a `.ply` → one self-contained HTML file, for looking at `--dump_ply` output without MeshLab (§9.7) |
 | `tests/test_maskdino_viz3d.py` | feature-mode fidelity, max-over-views selection, colour survives per-view reordering, end-to-end on a tiny head (§9.7) |
@@ -233,21 +233,21 @@ The only shared file this track modified is `train/eval_metrics.py`:
 
 ## 6. Evaluation protocol — read this before comparing numbers
 
-Metrics come from the *same* function as every D4RT arm
+Metrics come from the *same* function as every retired baseline head
 (`train/eval_metrics.py::compute_instance_segmentation_metrics`). Three things differ:
 
 **6.1 Per-frame, not per-bundle.** Arms A–E score one 8-frame multi-view instance against its
 8-frame GT mask (one IoU over the concatenated frames). This track scores each frame separately
 and averages over frames, then over scenes. Frames with no GT instance are skipped. Different
-task, different denominator → **the headline numbers are not interchangeable with arm C's
-0.367 / 0.199.** Use `scripts/eval_perframe.py` to put an arm-C checkpoint on this protocol.
+task, different denominator → **the headline numbers are not interchangeable with the baseline head's
+0.367 / 0.199.** Use `scripts/eval_perframe.py` to put a legacy checkpoint on this protocol.
 
 **6.2 Sigmoid scoring, and two operating points.** With no background class, "is this query an
 object?" is `max_c sigmoid(logit_c) ≥ threshold`. Every eval therefore reports two variants:
 
 | variant | threshold | meaning |
 |---|---|---|
-| headline (`mIoU`, `AP50`, …) | `--score_threshold`, default **0.25** (MaskDINO's `OBJECT_MASK_THRESHOLD`) | closest analogue of the D4RT arms' "argmax ≠ background" filter |
+| headline (`mIoU`, `AP50`, …) | `--score_threshold`, default **0.25** (MaskDINO's `OBJECT_MASK_THRESHOLD`) | closest analogue of the retired baseline head' "argmax ≠ background" filter |
 | `*_all` | 0.0 — every query kept and ranked by score | the standard COCO detection protocol; also the only signal that moves early in training, because focal-trained sigmoid scores start near zero |
 
 `mIoU_all` (best IoU over *all* queries) is a mask-quality ceiling, not a detection number —
@@ -255,7 +255,7 @@ read it next to `AP50_all`, never on its own.
 
 **6.3 A prediction that claims no pixels in a frame is dropped, not counted as a false
 positive** (`train/perframe.py::drop_empty_masks`, applied by both scorers). Without this rule
-the protocol is unfair to the multi-view arms: a D4RT query is *supposed* to be empty in the
+the protocol is unfair to the retired baseline head: a baseline-head query is *supposed* to be empty in the
 frames where its object is not visible. Mask2Former/MaskDINO get the same effect by folding the
 mask's mean foreground probability into the score. In the tests, the rule turns a spurious AP50
 of 0.5 into the correct 1.0 on a planted-perfect example.
@@ -353,195 +353,41 @@ block is what carries cross-view identity.
 
 ## 7. Results
 
-### 7.1 Machinery check (2026-07-27)
+**Every number lives in `docs/RESULTS.md`** — one home per fact. This section keeps only the two
+measurements whose *method* belongs next to the architecture (§7.6, §7.7) plus one engineering
+note. The run-by-run narrative that used to sit here — job ids, dated readings, the machinery
+check — is archived verbatim in `docs/old/MASKDINO_RESULTS_HISTORY.md`.
 
-CPU test suite green: the pure-PyTorch deformable attention matches a naive explicit-loop
-reference to 1e-5; the decoder produces the right shapes for every two-stage × DN × box-init
-combination; the matcher recovers a planted assignment; perfect predictions drive every loss
-term to ~0.
+Subsection numbers are kept stable because the rest of the repo cites them.
 
-GPU smoke test — 4 train scenes / 2 val scenes, 32 training frames, full recipe (300 queries,
-6 encoder + 9 decoder layers, two-stage, DN "seg", mask-enhanced box init), 200 epochs in
-**6.1 min** on one RTX 4090 (0.46 s/step, 24 M trainable params, backbone cached in 12 s):
+| was here | what it measured | now read |
+|---|---|---|
+| §7.1 | machinery / GPU smoke test | archive |
+| §7.2, §7.2.1 | data scaling 50→190→490, single-frame ablations | `RESULTS.md` §2 |
+| §7.3 | the retired baseline head on this protocol | `RESULTS.md` §1, §2 |
+| §7.4, §7.4.1 | bundle features, mask upsample, view draws, multi-frame ablations | `RESULTS.md` §2, §3 |
+| §7.5 | 77-scene official-val read-out | `RESULTS.md` §1.1 |
+| §7.8, §7.8.1 | official 1201/312 runs; what cross-frame attention buys | `RESULTS.md` §6 |
 
-| | mIoU | AP50 | AP75 | class_acc |
-|---|---|---|---|---|
-| train (memorised) | **0.969** | **0.992** | 0.982 | 1.000 |
-| val (2 unseen scenes) | 0.095 | 0.095 | 0.059 | 0.29 |
+Four standing conclusions from that body of runs, kept here because the rest of this document
+argues against them:
 
-The train row is a *sanity check, not a result*: 32 frames are trivially memorisable. What it
-proves is that gradient flow, Hungarian matching, DN, box refinement and the metric path all
-work end to end.
-
-### 7.2 Data scaling (jobs 8748952 / 8754527 / 8774050)
-
-All runs: official 500-scene GT, per-instance masks, val = scenes 0080-0089, identical recipe
-(300 queries, 6 encoder + 9 decoder layers, two-stage, DN "seg", mask-enhanced box init),
-epochs auto-scaled to hold the ~20-29 k gradient-step budget. All COMPLETED cleanly.
-
-| Run | Scenes | val mIoU | val AP50 | val AP75 | val mAP | peak @ | train mIoU |
-|---|---|---|---|---|---|---|---|
-| **arm C — the bar** | 190 | 0.451 | 0.294 | 0.141 | 0.154 | converged | — |
-| job 8748952 | 50 | 0.451 | 0.440 | 0.314 | 0.290 | ep 150/400 | 1.000 |
-| job 8754527 | 190 | 0.594 | 0.624 | 0.440 | 0.418 | ep 38/100 | 0.994 |
-| **job 8774050** | **490** | **0.669** | **0.699** | **0.506** | **0.475** | ep 31/60 | 0.947 |
-
-**At 490 scenes this head beats arm C by +48 % mIoU, +138 % AP50, 3.6x AP75, 3.1x mAP.** The
-curve is still rising at the largest scale available (0.440 -> 0.624 -> 0.699 AP50 for
-50 -> 190 -> 490 scenes) and the overfitting eases as data grows (train mIoU 1.000 -> 0.994 ->
-0.947), so the model remains data-limited even at 490 scenes. Every run still peaks around
-half-way through its schedule; `checkpoint_best.pth` captures it.
-
-**This inverts the project's data-scaling conclusion.** Arm C got *worse* with more data
-(0.367@190 -> 0.350@490, `docs/ARMS_SUMMARY.md`), which read as "the dataset is not the
-bottleneck". On the same data MaskDINO gains +0.26 AP50 going 50 -> 490. The D4RT head was
-**architecture-limited, not data-limited**; the old scaling result was a property of that head,
-not of the task.
-
-### 7.2.1 Ablations — no single ingredient carries the win
-
-Each removes ONE MaskDINO component at N=190, everything else identical (jobs 8774052 /
-8778736 / 8774056 / 8774065, all COMPLETED). Sorted by cost of removal:
-
-| Config | val mIoU | val AP50 | ΔAP50 vs full | train mIoU |
-|---|---|---|---|---|
-| full recipe | 0.594 | 0.624 | — | 0.994 |
-| `--no-two_stage` (no query selection) | 0.592 | 0.578 | −0.046 | 0.995 |
-| `--enc_layers 0` (no deformable encoder) | 0.551 | 0.580 | −0.044 | 0.871 |
-| `--dn no` (no denoising) | 0.586 | 0.594 | −0.030 | 0.986 |
-| `--initialize_box_type no` (no mask-enhanced box init) | 0.610 | 0.608 | −0.016 | 0.993 |
-
-Two honest readings:
-
-1. **No component is decisive.** Each is worth 0.02-0.05 AP50, and box-init is within the
-   ±0.04 eval-to-eval noise (its mIoU is actually *higher* than the full recipe's). The full
-   recipe is still the best AP50 of the five, so the pieces are additive rather than redundant —
-   but nobody should claim "denoising is what made this work".
-2. **Every crippled variant still beats arm C by ~2x on AP50** (0.578-0.608 vs 0.294). The credit
-   belongs to the architecture *class* — deformable attention over a multi-scale pyramid,
-   per-layer anchor-box refinement, deep supervision, 20.5 M params — not to any one trick.
-   And **data scale dominates all of it**: +0.26 AP50 from 50->490 scenes, versus ≤0.05 from any
-   single component.
-
-`--enc_layers 0` is the only ablation that also drops train mIoU (0.871 vs ~0.99), i.e. it
-removes real capacity rather than just a training aid.
+1. **Data scale dominates every component.** +0.26 AP50 from 50→490 scenes, versus ≤0.05 from
+   removing any single MaskDINO ingredient. No component is individually decisive on the
+   single-frame ruler.
+2. **Cross-frame attention is the one exception** — the only individually decisive component this
+   track has found, and its job is *identity*, not recognition (§8.2, `RESULTS.md` §3, §6).
+3. **Multi-view consistency has a measured price** in per-frame accuracy: bundle features cost
+   ~0.05 AP50 per frame and buy the multi-view metric.
+4. **Recognition binds, not resolution** (§7.7).
 
 ### 7.2.2 Cost note — eval must not scale with the training set
 
-The first N=200 submission (job 8748972) reached only epoch 2 in 30 minutes and was cancelled:
-it scored **all 190 train scenes** at every eval, and `_average_precision` loops over every kept
-prediction at 10 IoU thresholds, so ~1600 frames x ~180 ms = ~5 min per eval, every 2 epochs.
-Two fixes: `--eval_topk 100` (COCO's `test_topk_per_image` — protocol-correct *and* 3x faster per
-frame) and `--eval_train_scenes 10` (the train metric is only an overfit read-out). Eval went
-~180 s -> ~6 s.
-
-### 7.3 The baseline these beat (measured 2026-07-27)
-
-Arm C (learned object queries, the best D4RT head) scored under **this per-frame protocol** via
-`scripts/eval_perframe.py` on `d4rt_full_inst_learned_officialgt_20260708_124452` (the run whose
-multi-view numbers are the quotable 0.367 / 0.199), all 10 val scenes (0080–0089), unprompted
-learned queries:
-
-| | mIoU | AP50 | AP75 | mAP |
-|---|---|---|---|---|
-| **arm C, per-frame — the bar** | **0.451** | **0.294** | 0.141 | 0.154 |
-| arm C, per-bundle (reference only, NOT comparable) | 0.367 | 0.199 | — | — |
-
-Per-scene spread: mIoU 0.34–0.61, AP50 0.18–0.43. Full JSON:
-`<run_dir>/perframe_eval_checkpoint_best.json`.
-
-Per-frame scores *higher* than per-bundle for the same checkpoint, which is expected and worth
-stating explicitly: an instance only has to match in the frames where it is visible, and an
-empty prediction in a frame where the object is absent is dropped rather than penalised (§6.3).
-**This is exactly why the MaskDINO numbers must be read against 0.451 / 0.294 and never against
-0.367 / 0.199.**
-
-### 7.4 Multi-view features, mask resolution, view draws, multi-frame (2026-07-28)
-
-Five runs, all at N=490 against the **0.669 / 0.699** single-frame bar, identical recipe
-otherwise, official 500-scene GT, peak (`checkpoint_best*`) numbers:
-
-| Job | Change | val mIoU | val AP50 | ΔAP50 | train mIoU @peak |
-|---|---|---|---|---|---|
-| 8774050 | — (the bar) | 0.669 | 0.699 | — | 0.947 |
-| 8895540 | `--feature_mode bundle` | 0.622 | 0.651 | **−0.048** | 0.872 |
-| 8895551 | `--mask_upsample 2` | 0.662 | 0.677 | −0.022 | 0.812 |
-| **8895565** | **`--bundles_per_scene 2 --color_jitter 0.2`** | **0.694** | **0.729** | **+0.030** | 0.816 |
-| 8900100 | `--multi_frame --feature_mode bundle` | 0.621 | 0.630 | −0.069 | 0.867 |
-
-1. **Multi-view-aware tokens are not free — they cost 0.048 AP50** (§8.1). Running the aggregator
-   over the bundle mixes the views inside the frozen features, and per-frame segmentation gets
-   *worse*, not better. So §8.1 is a **negative result**, and it is the correct control for the
-   multi-frame decoder (below), not the bar.
-2. **`--mask_upsample 2` is neutral** (−0.022, inside the ±0.04 eval-to-eval noise) — the same
-   verdict the D4RT arms reached on a different head. Masks stay on the 37×37 patch grid.
-3. **More view draws per scene is the best lever left**: +0.030 AP50 and a *new best* 0.729, with
-   train mIoU dropping 0.947 → 0.816 (less memorisation). The model is still data-limited, and
-   since the tar holds no more scenes, views-per-scene is the cheapest remaining data. **Honest
-   caveat:** the `EPOCHS=30` this job was submitted with was silently clamped back to 60 by
-   `slurm/train_maskdino.sh` (fixed 2026-07-28), so it had a 2× larger step budget available;
-   it nevertheless *peaked* at epoch 19 = 18.6 k steps, against the bar's peak at 15.2 k, so the
-   gain is not simply "trained longer". `--bundles_per_scene 4` **saturates** (§7.4.1).
-4. **Multi-frame** (§8.2) costs 0.069 AP50 against the bar — but 0.048 of that is the bundle
-   features it is built on. Against its proper control (8895540, 0.651) the shared-query decoder
-   is **−0.021 AP50 per frame, i.e. neutral inside the noise band**, and in exchange it produces
-   a genuine multi-view result (below). The 2026-07-29 ablations decouple the ingredients
-   (§7.4.1).
-
-**The per-bundle number is back.** Job 8900100 scores, on the multi-view protocol of arms A–E:
-
-| | mIoU | AP50 | AP75 | mAP |
-|---|---|---|---|---|
-| arm C (best D4RT head), per-bundle | 0.367 | 0.199 | — | — |
-| **MaskDINO `--multi_frame`, per-bundle** | **0.535** | **0.494** | 0.279 | 0.272 |
-
-**+46 % mIoU and 2.5× AP50 over the best D4RT arm on the arms' own ruler** — one query is one
-instance across all 8 views, no post-hoc matching. Read it *only* against 0.367 / 0.199, never
-against the per-frame 0.699 (docs/RESULTS.md §1).
-
-### 7.4.1 Multi-frame ablations + bundle saturation (jobs 8950610 / 8950613 / 8950617, 2026-07-29)
-
-All at N=490, otherwise the full recipe. Peak numbers per metric family (the per-frame and
-per-bundle peaks can fall on different epochs; `checkpoint_best.pth` / `checkpoint_best_ap50.pth`
-select on the *per-frame* metrics — `checkpoint_best_bundle.pth` (§8.2, docs/todo.md 2b) selects
-on `bundle_AP50` and is what these runs would have used had it existed at the time):
-
-| Job | Config | per-frame mIoU / AP50 | bundle mIoU / AP50 | Δbundle AP50 |
-|---|---|---|---|---|
-| 8900100 | `--multi_frame --feature_mode bundle` (full) | 0.621 / 0.630 | **0.535 / 0.494** | — |
-| 8950617 | … `--no-cross_frame_attn` | 0.530 / 0.524 | 0.393 / 0.311 | **−0.183** |
-| 8950613 | … `--feature_mode single` (per-frame features) | 0.631 / 0.627 | 0.429 / 0.347 | **−0.147** |
-
-Two findings, both load-bearing for the multi-frame story:
-
-1. **Cross-frame attention is the main carrier of the multi-view result** — the single decisive
-   component this track has found (the single-frame ablations in §7.2.1 found none). Removing it
-   costs −0.183 bundle AP50 *and* −0.106 per-frame AP50: with shared queries but no cross-frame
-   communication, the per-frame task gets harder too (one content vector must serve S views it
-   can no longer reconcile).
-2. **Bundle features are required for multi-view consistency.** §8.1 measured them as a *negative*
-   for per-frame accuracy (−0.048 AP50), but swapping them out of the multi-frame model costs
-   −0.147 bundle AP50 while leaving per-frame intact (0.627 ≈ the bundle-features control 0.651
-   region). Read together: VGGT's global attention writes cross-view correspondence into the
-   frozen tokens, the decoder's cross-frame attention consumes it, and the price is per-frame
-   accuracy — **consistency is not free, and it is now quantified** (0.729 single-frame best vs
-   0.630 per-frame for the best multi-view model).
-
-**Bundle saturation** (job 8950610, `--bundles_per_scene 4 --color_jitter 0.2`, `EPOCHS=15`):
-**0.699 mIoU / 0.722 AP50** — mIoU a hair above the b2 run (0.694), AP50 a hair below (0.729),
-i.e. inside the noise band. The views-per-scene lever saturates at 2 draws; the remaining data
-lever is **more scenes** (the tar holds 500; ScanNet v2 has 1201 official train scenes).
-
-### 7.5 Official-split read-out (job 8900194)
-
-Same recipe, but val = the 77 official ScanNet v2 val scenes inside our tar and train = the other
-413 (docs/RESULTS.md §1.1). Peak **val mIoU 0.589 / AP50 0.604** (epoch 27; the job hit its 12 h
-wall clock at epoch 39/60, past its peak, so the number stands).
-
-**Our convention split is ~0.10 AP50 "easier" than the official val scenes** — with 67 fewer
-training scenes as a partial explanation. Quote 0.699 as *our* split's number and mention 0.604
-whenever comparability to the ScanNet literature comes up (it is still a per-view 2D-mask number,
-so it is not a leaderboard-comparable figure either — docs/RELATED_WORK.md).
+The first N=200 submission (job 8748972) reached only epoch 2 in 30 minutes: it scored **all 190
+train scenes** at every eval, and `_average_precision` loops over every kept prediction at 10 IoU
+thresholds (~1600 frames × ~180 ms ≈ 5 min per eval). Two fixes: `--eval_topk 100` (COCO's
+`test_topk_per_image` — protocol-correct *and* 3× faster per frame) and `--eval_train_scenes 10`
+(the train metric is only an overfit read-out). Eval went ~180 s → ~6 s.
 
 ### 7.6 Upstream-equivalence check on COCO (job 8967932, 2026-07-29)
 
@@ -657,69 +503,6 @@ lever for boundary quality would be the token grid (docs/MASKDINO_COCO.md §1.3,
 input resolution), and even that is bounded by the 0.956→0.99 ceiling gap. Quote §7.7 whenever
 resolution comes up.
 
-### 7.8 Official 1201/312 split — first runs (jobs 9329716 / 9386666, 2026-08-01/02)
-
-The full official protocol (todo 1c's last step): train = all 1201 official train scenes
-(`scannet_official_gt_1201.tar.zst`), val = all 312 official val scenes
-(`scannet_official_gt_val312.tar.zst`), staged into one tree (`DATA_TAR` takes a list;
-`TRAIN_LIST`/`VAL_LIST` feed the split files — plumbing covered by
-`tests/test_train_maskdino_sh_lists.sh`). Best recipe (`--bundles_per_scene 2 --color_jitter
-0.2`), 12 epochs × ~2402 steps/epoch ≈ 28.8k steps ≈ the N=490 recipe budget (29.4k), warmup 2.
-12 CPU × 14 GB (fp16 cache ~110 GB at 1201×2 bundles), `--tmp=90000`, 8h16 (SF, incl.
-`--eval_full_res`) / 5h42 (MF) on one rtx_4090.
-
-**This is a new ruler** — numbers live in docs/RESULTS.md §6, never next to the 0080–0089-val
-tables. Headlines:
-
-- **Single-frame** (job 9329716, `maskdino_sf_list1201_20260801_132724`): val **0.624 mIoU /
-  0.662 AP50** (AP75 0.487, mAP 0.459); full-res ruler 0.611 / 0.651 (−0.011 AP50, same gap as
-  §7.7 found — recognition still binds). Against the only prior official-val point, job
-  8900194's 0.589 / 0.604 (§7.5, val = the 77-scene subset): +0.058 AP50 at ~3× train scenes.
-  Train AP50 0.878 vs val 0.662 at epoch 12 — still data-limited.
-- **Multi-frame** (job 9386666, `--multi_frame --feature_mode bundle`,
-  `maskdino_sf_list1201_mf_20260802_133826`): per-frame 0.623 / 0.650 (peak ep 10); per-bundle
-  **0.529 mIoU / 0.525 AP50** (AP75 0.312, mAP 0.311, peak ep 12 — per-frame and per-bundle
-  peaks diverge again, vindicating `checkpoint_best_bundle.pth`, §8.2). The multi-view result
-  transfers to the honest split (old ruler: 0.539 / 0.515).
-- **First cross-view consistency numbers** (§6.6): `bundle_view_consistency` 0.679 → **0.717**
-  and `bundle_id_switch` 0.607 → **0.498** over epochs 6→12, ~14.1 matched instances/bundle.
-  Roughly: a matched instance is explained by its own query in ~72 % of its visible views, and
-  in ~50 % of views some other query still fits better — the headroom the §7.4.1 ablations
-  (cross-frame attention) act on.
-- Its `checkpoint_best_bundle.pth` is the first checkpoint allowed to quote a reportable 3D
-  number (§9.4 — no train/val leakage).
-
-### 7.8.1 What cross-frame attention actually buys: identity (job 9503176, 2026-08-03)
-
-`--no-cross_frame_attn` on the same official split, otherwise identical to 9386666. This is the
-cut todo 2c was waiting for — the consistency metrics (§6.6) let it be read as a *mechanism*
-claim rather than only as a score drop.
-
-| | with cross-frame attn (9386666) | without (9503176) | Δ |
-|---|---|---|---|
-| per-frame mIoU / AP50 | 0.623 / 0.650 | 0.576 / 0.588 | −0.062 AP50 |
-| per-bundle mIoU / AP50 | 0.529 / 0.525 | 0.471 / 0.389 | **−0.136 AP50** |
-| `bundle_view_consistency` ↑ | **0.717** | 0.692 | −0.025 |
-| `bundle_id_switch` ↓ | **0.498** | 0.682 | **+0.184** |
-| `bundle_num_matched` | 14.1 | 14.0 | ±0 |
-
-**The block's job is identity preservation, and the metrics separate that from recognition.**
-The model finds the same number of instances either way (14.0 vs 14.1 matched per bundle) and
-its own query still covers most views at IoU ≥ 0.5 (0.692 vs 0.717, a small drop) — but
-**`id_switch` jumps from 0.498 to 0.682**: without the block, in 68 % of views some *other*
-query fits the object better than the one that owns it. Identity degrades far more than
-coverage does, which is precisely what a cross-view communication mechanism is supposed to
-prevent, and the −0.136 bundle AP50 follows from it (the multi-view protocol scores one query
-against the whole volume, so a switched view is lost mask).
-
-The two metrics differ in strictness by construction: `view_consistency` asks "does my query
-explain this view at all (IoU ≥ 0.5)?", `id_switch` asks "is some other query *better*?" — a
-view can pass the first and fail the second, which is why the second is the sensitive one and
-the one to quote for this mechanism.
-
-This reproduces the N=490 finding (−0.183 bundle AP50, §7.4.1) on the honest split at
-−0.136, and closes docs/todo.md 2c.
-
 ## 8. The multi-frame extension
 
 Ordered by cost, each step reusing everything above.
@@ -756,7 +539,7 @@ mask *volume* rather than S unrelated 2D masks. Three changes, all off by defaul
    them would leak and confuse); DN therefore stays exactly the per-frame recipe of §1.
 3. **Bundle-level matching** (`MultiFrameHungarianMatcher` + `expand_bundle_indices`). The
    Hungarian assignment is made **once per bundle** — class cost on the mean sigmoid score over
-   views, mask BCE+Dice over the concatenated `[S·h·w]` volume (the D4RT arms' multi-view mask
+   views, mask BCE+Dice over the concatenated `[S·h·w]` volume (the retired baseline head' multi-view mask
    cost), box L1+GIoU averaged over the views where the instance is visible. The assignment is
    then projected back onto the frames where the matched instance is actually visible, and
    **every loss stays the per-frame loss it already was**. In a view where its instance is not
@@ -769,8 +552,8 @@ instance id per frame target, which is the cross-view link the single-frame prot
 
 **Both metrics are reported** (`train/maskdino_eval.py::eval_scenes_multiframe`): the per-frame
 numbers, directly comparable to the 0.669 / 0.699 single-frame bar, **and** `bundle_*` — the
-multi-view protocol of arms A–E (one IoU over the concatenated volume, one class score per query
-= max over views), which was meaningless while queries were per-frame and is comparable to arm
+multi-view protocol of the retired baseline head (one IoU over the concatenated volume, one class score per query
+= max over views), which was meaningless while queries were per-frame and is comparable to the baseline
 C's 0.367 / 0.199. Never mix the two (docs/RESULTS.md §1). Since 2026-08-01 that same eval also
 reports **`bundle_view_consistency` / `bundle_id_switch`** (§6.6): whether one query really owns
 an instance in *every* view, which is the property this whole section claims and which
@@ -782,8 +565,8 @@ Flags: `--multi_frame` (sample = a bundle of `--num_frames` frames), `--batch_bu
 runs), `--no-cross_frame_attn` (ablate the block, keeping shared init + bundle matching).
 
 **Results (2026-07-28/30).** Per frame the full multi-frame model is neutral against its
-bundle-features control (−0.021 AP50, §7.4); on the arms' multi-view ruler it scores
-**0.535 mIoU / 0.494 bundle AP50** vs arm C's 0.367 / 0.199. The two ablations (§7.4.1) localise
+bundle-features control (−0.021 AP50, §7.4); on the baseline head's multi-view ruler it scores
+**0.535 mIoU / 0.494 bundle AP50** vs the baseline head's 0.367 / 0.199. The two ablations (§7.4.1) localise
 the result: cross-frame attention is worth 0.183 bundle AP50 and bundle features 0.147 — the
 former is the only individually-decisive component found anywhere in this track.
 
@@ -799,15 +582,15 @@ two when present.
 
 ### 8.3 3D anchors instead of 2D boxes — `--anchor_3d` (todo 2d, implemented 2026-08-04)
 
-Replace the DAB 4-d box with a 3D anchor read off VGGT's own point head. Arm E showed 3D anchors
-alone don't beat 2D queries, but arm E had no box refinement, no DN and no deep supervision — the
+Replace the DAB 4-d box with a 3D anchor read off VGGT's own point head. The archived 3D-anchored query experiment showed 3D anchors
+alone don't beat 2D queries, but the archived 3D-anchored query experiment had no box refinement, no DN and no deep supervision — the
 ingredients that make anchors work in DINO.
 
 **Framing (settled 2026-07-28, docs/RELATED_WORK.md).** FAST3DIS (arXiv 2603.25993) already
 publishes exactly this mechanism — a learned 3D anchor generator plus project-and-sample
 cross-attention — on a LoRA-adapted Depth-Anything-V3. So this step is an **ablation inside our
 own controlled study** ("3D anchors vs 2D DAB boxes, same frozen backbone, same data, same
-protocol", which nobody has run and which re-tests the arm-E negative result), **not** a new
+protocol", which nobody has run and which re-tests the archived 3D-anchor negative result), **not** a new
 mechanism. Budget it accordingly.
 
 **Why it was promoted above the lifting workstream (2026-08-04).** §9.10 measured what our masks
@@ -831,7 +614,7 @@ an anchor shared across views has no meaning. Without `--multi_frame` it warns.
    45.02 MB of tokens — +0.146 %** (~178 MB over the whole 1201×2 + 312 official-split cache),
    and no measurable caching-time cost. The ~26 MB pointmap it comes from is never stored. The
    pooling is re-implemented here rather than imported from frozen
-   `legacy/d4rt/models/anchor_queries.py`, so arm E's published numbers cannot move.
+   `legacy/d4rt/models/anchor_queries.py`, so the archived 3D-anchored query experiment's published numbers cannot move.
    Positions are normalised **per bundle** to zero mean / unit RMS radius
    (`models/maskdino/anchor3d.py::normalize_token_xyz`) — the softmax temperature below is one
    learned scalar per query and only means something in a comparable coordinate frame. The
@@ -906,13 +689,193 @@ on the 37×37 patch grid) and `--bundles_per_scene 2 --color_jitter 0.2` (more f
 new scenes; costs cache memory). Both answered at N=490 (§7.4: upsample neutral, extra draws
 +0.030 AP50 and saturating at 2 per §7.4.1).
 
-#### Result
+#### Result (job 9634920, 2026-08-04) — **neutral on AP, real on identity**
 
-<!-- RESULT-2D: filled in when job 9634920 lands -->
-Run submitted 2026-08-04 as job **9634920** — identical to the control (job 9386666,
-`maskdino_sf_list1201_mf_20260802_133826`: official 1201/312 split, `--multi_frame
---feature_mode bundle --bundles_per_scene 2 --color_jitter 0.2`, 12 epochs, warmup 2) except for
-`--anchor_3d`. Numbers land here and in docs/RESULTS.md §6.
+Control: job 9386666 (`maskdino_sf_list1201_mf_20260802_133826`, §7.8). A `config.json` diff of
+the two runs returns **exactly one key — `anchor_3d`** — and the train/val scene lists are
+byte-identical, so the anchor is the only variable. 233.3 min of training against the control's
+203.6 (+15 %, all of it the per-layer projection; the feature cache cost +0.146 %).
+
+| | control (2D DAB box) | `--anchor_3d` | Δ |
+|---|---|---|---|
+| per-frame mIoU / AP50 *(each run's own per-frame peak)* | **0.623 / 0.650** | 0.611 / 0.641 | −0.012 / −0.009 |
+| per-bundle mIoU / AP50 *(each run's `checkpoint_best_bundle`)* | **0.529 / 0.525** | 0.524 / **0.527** | −0.005 / **+0.002** |
+| `bundle_view_consistency` | 0.717 | **0.723** | +0.006 |
+| **`bundle_id_switch`** (lower is better) | 0.498 | **0.409** | **−0.089 (−18 % rel.)** |
+| `bundle_num_matched` | 14.08 | 14.05 | −0.03 |
+
+**The 2D verdict: the 3D anchor does not buy 2D AP. It buys identity stability.** Read on before
+concluding it is not worth having — on the 3D ruler that identity is worth **+67 % AP50**.
+
+- Per-bundle AP50 +0.002 and consistency +0.006 are flat — well inside the run-to-run wobble the
+  control itself shows across its last three epochs (0.514 → 0.516 → 0.525).
+- Per-frame is **mildly negative**, −0.009 AP50, and the anchor run trailed the control on the
+  per-frame ruler at *every* epoch. Consistent with §8.1's precedent: consistency machinery has a
+  per-frame price. Part of it is likely the named confound above — the 9 decoder layers no longer
+  get the mask-enhanced box init.
+- **`id_switch` is the one thing that moved, and it is not noise: the anchor run is better in
+  12/12 epochs**, by a mean of 0.084 (range 0.052–0.111), with the gap present from epoch 1 and
+  stable to the end. At epoch 7 it had already reached the control's *final* value.
+
+**Why this is worth reporting even though AP did not move.** §7.8.1 found that removing
+cross-frame attention moved `id_switch` 0.498 → 0.682 **and** bundle AP50 0.525 → 0.389 — the two
+travelled together, which is what let us claim the block's job is identity. Here they
+**dissociate**: identity improves 18 % relative while AP50 sits still. So the two are not the same
+axis, and `bundle_AP50` alone cannot see what the 3D anchor does — precisely the situation §6.6
+built the consistency metrics for. It also means the residual §9.10 reading 4 identified
+("multi-view completeness *and* identity") is not one quantity: this run bought the identity half
+and left the completeness half untouched, and the AP50 that the 3D-instance criterion rewards
+followed the half that did not move.
+
+**The archived 3D-anchored query experiment, re-tested.** The archived 3D-anchored query experiment's negative result was "3D anchors alone don't beat 2D queries", on a
+decoder with no box refinement, no DN and no deep supervision. With all three present the answer
+is not a reversal but a sharpening: 3D anchors are **not worse** here (unlike the archived 3D-anchored query experiment, which lost
+outright), they are **AP-neutral**, and they are **better on the one property a 3D anchor should
+plausibly help** — the same query staying on the same object as the viewpoint changes.
+
+#### The 3D result — the identity gain is worth +67 % AP50 (jobs 9670882 / 9670883, 2026-08-04)
+
+The 2D read-out above says "AP-neutral". **On the 3D ruler that is emphatically not what happens.**
+Same script, same 312 val scenes, **17.42 frames/scene in both runs**, every knob at its default,
+0 failed scenes — only the checkpoint differs.
+
+| transfer mode | control (2D box) | `--anchor_3d` | Δ AP50 |
+|---|---|---|---|
+| `unproject` (**the headline protocol**) | 0.023 / 0.067 / 0.268 | **0.038 / 0.112 / 0.360** | **+67 %** |
+| `gt_projection` (posed, §9.10) | 0.060 / 0.156 / 0.408 | **0.104 / 0.257 / 0.504** | **+65 %** |
+| — 17-class diagnostic, unposed | 0.024 / 0.071 / 0.284 | 0.040 / 0.119 / 0.381 | +67 % |
+| — coverage, unposed (voted / annotated-assigned) | 0.153 / 0.635 | 0.177 / 0.666 | +16 % / +5 % |
+| — kept queries per scene | 97.6 | **89.0** | −9 % |
+
+**This makes the unposed row competitive with the published unposed cluster** — FAST3DIS
+0.038 / 0.096 / 0.316 and IGGT 0.028 / 0.112 / 0.287 — reached on a **strictly frozen** backbone
+where both of theirs are LoRA-adapted. See docs/RESULTS.md §5 before quoting it anywhere.
+
+**Why the 2D rulers could not see this, and the 3D one could.** The per-frame ruler scores each
+view independently, so identity is worth nothing to it. The per-bundle ruler scores a mask volume
+over the **8** training views, so identity is worth something but is diluted. The 3D ruler runs
+the head at **S ≈ 17.4** and then *votes per vertex*: if a different query wins the object in each
+view, the votes for that vertex split and the superpoint majority becomes noise. `id_switch` is
+therefore not a cosmetic property here — it is the exact failure mode the lifting step integrates
+over, and it compounds with view count. The supporting signature is in the table: the anchor model
+keeps **9 % fewer** queries yet covers **16 % more** vertices. Fewer, cleaner, more view-consistent
+instances — precisely what a per-vertex vote rewards.
+
+**A correction to this document's own reasoning.** The first draft of the 2D verdict inferred from
+the dissociation that "the 3D-instance criterion follows completeness, and this run bought
+identity, so expect little 3D movement". That inference was **wrong, and the measurement
+falsified it**: of §9.10 reading 4's two named residuals — multi-view *completeness* and
+*identity* — it is **identity** that the 3D ruler is most sensitive to. Keep the dissociation
+finding (identity and `bundle_AP50` really are separate axes); discard the prediction that came
+with it.
+
+**Consequence for the protocol set.** `bundle_AP50` at S = 8 is a **poor proxy for the 3D ruler**.
+A mechanism can be flat on it and worth +67 % AP50 in 3D. Anything that touches cross-view
+identity must be scored on the 3D ruler before it is judged — the 2D per-bundle number alone will
+under-report it. That also raises the value of todo 2e (bundle width), since the effect is
+view-count-dependent by construction.
+
+**Why the controls cannot have drifted — established from the diff, not from a re-run.** Only two
+commits separate the control rows from these: `8ad9aab` (the `--transfer_mode` split, whose
+no-op-ness on the unposed path §9.10 verified by re-running job 9607208 to a byte-exact
+0.084 / 0.236 / 0.375) and `7c4e890` (this work). `7c4e890` **does not touch
+`train/eval3d_geometry.py`, `train/benchmark3d.py` or `train/scannet3d.py` at all**, and its only
+change to `scripts/eval_3d_maskdino.py` is the anchor branch guarded by
+`if model.head.head_config.get("anchor_3d", False)` — provably inert for a 2D-box checkpoint. The
+posed control (job 9607206) additionally post-dates `8ad9aab`, so **that comparison is same-code
+by construction**. Both comparisons independently show ~+66 %, which is the stronger evidence:
+they share no code path between the mesh and the mask.
+
+#### Should it be the default?
+
+On the 2D rulers, no (+15 % training time, −0.009 per-frame AP50). On the 3D ruler — the only
+protocol that is placeable next to published work — it is the largest single-flag gain in the
+track. **Recommended for any run whose target is the 3D benchmark; still off by default**, so no
+completed 2D number moves.
+
+### 8.4 Bundle width — views per bundle (`--num_frames`, todo 2e, opened 2026-08-04)
+
+**Why now.** §9.10 reading 4 put the decoder back in play on the 3D ruler: with a *perfect*
+2D↔3D bridge our masks score 0.156 AP50 while the same checkpoint scores 0.650 per frame, so
+what is missing is **multi-view completeness and identity** — one query owning an object across
+*all* its views. That is exactly what §8.2's shared queries are for, and the one parameter of
+§8.2 that has never moved is how many views a bundle has: `--num_frames 8`, in every multi-frame
+run ever.
+
+Two independent reasons to widen it:
+
+1. **A train/test mismatch nobody had closed.** `scripts/eval_3d_maskdino.py` runs the head with
+   `frames_per_sample=S` where S is the *whole* frame set of the scene — **17.4 frames on
+   average** (§9.10). The head is trained at S=8 and scored at S≈17. `CrossFrameAttention` is
+   permutation-equivariant and carries no frame positional encoding (§8.2), so it *runs* at any
+   S, but 300 shared queries have never been asked to own a 17-view volume during training.
+2. **View count is a named, real residual difference** against SegVGGT (§9.9: "~75–100 views to
+   our 17"), not a protocol artefact — §9.10 reading 3.
+
+**`--eval_num_frames`** (default unset = unchanged). Widening the training bundle silently moves
+the per-bundle ruler: `bundle_*` scores one query against a whole `[S, h, w]` volume, and a
+volume over 16 views is a strictly harder object than one over 8, so a bare `--num_frames 16` run
+cannot be laid next to the 0.529 / 0.525 baseline. This flag pins the **val** bundle width while
+train widens (`train/maskdino_data.py::bundle_frames_for_split`); the eval reads S off each
+cached bundle scene by scene, so the two widths coexist inside one run. Covered by
+`tests/test_maskdino_multiframe.py::test_eval_num_frames_pins_the_bundle_ruler`. Train scenes
+always use `--num_frames` — the diagnostic train metric is therefore on the wide ruler and is not
+comparable to the val row, as usual.
+
+Cost: the feature cache is linear in frames, so S=16 at `--bundles_per_scene 2` is ~230 GB
+(1201 × 2 × 16 × 5.63 MB + val), i.e. ~26 CPU × 13 GB and a GPU with headroom — this is the
+first run in the track that needs an A100 80 GB rather than a 4090.
+
+#### Runs (2026-08-04)
+
+| job | config | vs | reads |
+|---|---|---|---|
+| **9668639** `_mf_s16` | `--num_frames 16 --eval_num_frames 8`, b2, jitter 0.2, 12 ep | job 9386666, **one flag different** | does bundle width alone move per-frame / per-bundle / consistency? |
+| **9668652** `_mf_s16_long` | same but 20 ep, val also at 16 | — | the intensive model; its own (16-view) bundle ruler, and the checkpoint for the 3D ruler |
+| **9668726** `_mf_s16_b1` | `--num_frames 16`, b1, 24 ep, `--eval_num_frames 8` | insurance | 168 GB / any 24 GB GPU, so it schedules when the A100s are full. `--bundles_per_scene 1` makes `--color_jitter` inert (only extra bundles are jittered); step-matched at 28.8 k |
+
+#### Result — widening the bundle helps on every axis (2026-08-06)
+
+All rows on the official 1201/312 split, **val pinned to 8-view bundles** except where noted, so
+every `bundle_*` figure below is on the same ruler as the 0.525 baseline.
+
+| run | per-frame mIoU / AP50 | per-bundle mIoU / AP50 | `view_consistency` ↑ | `id_switch` ↓ | `num_matched` |
+|---|---|---|---|---|---|
+| **control** S=8, b2, 12 ep (9386666) | 0.623 / 0.650 | 0.529 / 0.525 | 0.717 | 0.498 | 14.1 |
+| **S=16**, b2, 12 ep (**9668639**) | **0.627 / 0.662** | **0.549 / 0.552** | **0.726** | **0.385** | 14.0 |
+| S=16, **b1**, 24 ep, no jitter (9668726) | 0.609 / 0.641 | 0.541 / 0.544 | 0.712 | 0.345 | 14.0 |
+| S=16, b2, 20 ep, **val at 16** (9668652) | 0.627 / **0.669** | 0.561 / 0.594 † | 0.710 | **0.323** | 14.4 |
+
+† **different ruler** — a 16-view volume, strictly harder than the 8-view one every other row is
+scored on. It is *above* the control's 8-view 0.525 anyway, but it is not a like-for-like cell.
+
+**Reading 1 — one flag, +0.027 bundle AP50, and identity is where it comes from.** Job 9668639
+differs from the control by `--num_frames 16` alone. Per-frame moves +0.012 (0.650 → 0.662),
+per-bundle moves **+0.027** (0.525 → 0.552, +5 % rel.), and `bundle_id_switch` falls
+**0.498 → 0.385** (−23 % rel.) while `bundle_num_matched` is flat at 14.0–14.1. Same signature
+as §7.8.1's cross-frame-attention cut, read forwards instead of backwards: **recognition
+unchanged, identity improved.** Training the shared queries on twice as many simultaneous views
+teaches them to *stay* on their object, which is precisely the property §9.10 reading 4 said was
+binding.
+
+**Reading 2 — it is the width, not the extra frames.** The obvious objection to 9668639 is that
+S=16 × b2 shows the model 32 frames per scene per epoch against the control's 16, so the gain
+could be data. Job 9668726 rules that out: `--bundles_per_scene 1` at S=16 shows **16 frames per
+scene per epoch — exactly the control's frame budget** — with `--color_jitter` inert and no extra
+draws, and it still reaches per-bundle 0.544 (vs 0.525) and `id_switch` 0.345 (vs 0.498). A run
+that is *frame-matched and augmentation-poorer* than the control keeps almost all of the
+identity gain. The wide bundle is doing the work; the extra frames add the per-frame AP50 on top
+(0.641 vs 0.662).
+
+**Reading 3 — the effect keeps going, and the harder ruler agrees.** Job 9668652 (20 epochs, val
+left at 16 views) posts the best per-frame AP50 anywhere on the official split (**0.669**) and
+drives `id_switch` to **0.323**, monotonically, with no sign of a floor: 0.537 → 0.323 over
+epochs 1–19. Its per-bundle 0.594 is measured over 16-view volumes, so it clears the control's
+8-view 0.525 on a strictly harder object. Whether width keeps paying past 16 is the obvious next
+question and is *not* answered here.
+
+**Cost.** 11 h 26 (9668639) vs 5 h 42 for the control, ~230 GB of feature cache, A100 80 GB.
+Roughly 2× the wall clock and 2× the host RAM for +0.027 bundle AP50 and −0.113 id_switch.
 
 ## 9. The 3D ruler — official ScanNet 3D instance benchmark (docs/todo.md 1d, 2026-08-01)
 
@@ -1013,88 +976,53 @@ checkpoint (`maskdino_sf_n490_mf_b2jit_20260730_105117/checkpoint_best.pth`): it
 mIoU-selected checkpoint — the epoch-19 AP50-selected one that carried the 0.515 bundle headline
 did not survive the 2026-07-30 output cleanup (bundle AP50 0.461 at epoch 17).
 
-### 9.5 Results — full val-312 DIAGNOSTIC runs (2026-08-01, jobs 9327269 / 9327271)
+### 9.5 Diagnostic runs on the leaked checkpoint (2026-08-01, jobs 9327269 / 9327271)
 
-Checkpoint: `maskdino_sf_n490_mf_b2jit_20260730_105117/checkpoint_best.pth` (9.4's caveats
-apply: **train/val leakage → diagnostic only**, and it is the epoch-17 not the epoch-19
-checkpoint). 312/312 scenes, 0 failures, ~45 min/run, ~7.6 s/scene.
+Numbers: `docs/RESULTS.md` §5. Full narrative and per-scene readings:
+`docs/old/MASKDINO_RESULTS_HISTORY.md`. Kept here because two of its findings are structural and
+the rest of §9 argues from them:
 
-| Run | AP / AP50 / AP25 (18-class) | 17-class diagnostic |
-|---|---|---|
-| defaults (radius 5 cm, no conf filter), job 9327269 | 0.013 / 0.041 / 0.223 | 0.014 / 0.044 / 0.236 |
-| `--vote_radius 0.1 --depth_conf_percentile 25`, job 9327271 | **0.016 / 0.052 / 0.238** | 0.016 / 0.055 / 0.253 |
-
-Context (published full-split numbers, all on adapted backbones): under **our** protocol
-(unposed transfer, §9.9) FAST3DIS scores 0.038 / 0.096 / 0.316 and IGGT 0.028 / 0.112 / 0.287 —
-the same order of magnitude as us. SegVGGT's 0.504 / 0.717 / 0.870 is far above, but under the
-**posed-transfer** protocol, so it is not a like-for-like comparison. Per class, `toilet` leads
-(AP50 0.28–0.33); `otherfurniture` is 0 by construction (§9.2).
-
-**Reading (from the per-scene diagnostics in the json):**
-
-1. **Geometry binds, not recognition.** AP25 (0.24) is ~5× AP50 (0.05): objects are found and
-   coarsely localised, but the lifted masks miss the >0.5-IoU bar. That is what the registration
-   numbers predict — median camera-center RMS after Sim(3) is **0.14 m** and ICP point RMS
-   **~0.10 m**, the same order as the vote radius (5–10 cm) — VGGT's own depth/pose drift over a
-   whole-scan S≈17 bundle, not a 2D mask-quality problem (the same model scores 0.667 per-frame
-   AP50). The 2D→3D chain is the price of the "no GT geometry at inference" claim.
-2. **Coverage is the second cap:** ~15 % of mesh vertices receive any vote; ~63 % of annotated
-   vertices get assigned to some instance. Every unassigned GT instance is a hard FN.
-3. Knobs move it a little, in the expected direction (bigger radius + conf filter: +0.011 AP50),
-   so the defaults are not at an optimum — but knob-tuning is secondary to geometry quality.
-4. **The leakage barely matters at this operating point** — the binding constraints are
-   geometric, so the honest 1201-trained number (9.4) will likely land nearby; it is still the
-   only quotable one. *(§9.6 shows this prediction was wrong in the useful direction: the
-   leak-free checkpoint scores ~1.6× higher.)*
-
-S-generalisation worked as designed: bundles of 3–55 frames (median 15) through a model trained
-at S=8, no failures — `CrossFrameAttention` has no frame positional encoding, and the two-stage
-top-k just unions over more frames.
+1. **Geometry binds, not recognition.** AP25 ≈ 4–5× AP50: objects are found and coarsely
+   localised, but the lifted masks miss the >0.5-IoU bar. Median camera-centre RMS after Sim(3) is
+   **0.14 m** and ICP point RMS **~0.10 m** — the same order as the vote radius, and VGGT's own
+   depth/pose drift over a whole-scan S≈17 bundle, not a 2D mask-quality problem (the same model
+   scores 0.65–0.67 per-frame AP50). This is the price of "no GT geometry at inference".
+2. **Coverage is the second cap:** ~15 % of mesh vertices receive any vote, ~63 % of annotated
+   vertices get assigned. Every unassigned GT instance is a hard FN.
+3. **S-generalisation works as designed:** bundles of 3–55 frames (median 15) through a model
+   trained at S=8, no failures — `CrossFrameAttention` has no frame positional encoding, and the
+   two-stage top-k just unions over more frames.
 
 ### 9.6 The REPORTABLE number (2026-08-03, jobs 9503137 / 9503139)
 
-Checkpoint: `maskdino_sf_list1201_mf_20260802_133826/checkpoint_best_bundle.pth` — trained on
-the official 1201-scene train split, **val-312 never seen** (§9.4 satisfied), bundle-selected
-(todo 2b). 312/312 scenes, 0 failures, ~46 min/run.
+Checkpoint `maskdino_sf_list1201_mf_20260802_133826/checkpoint_best_bundle.pth` — official
+1201-scene train split, **val-312 never seen** (§9.4 satisfied), bundle-selected (todo 2b).
+312/312 scenes, 0 failures, ~46 min/run. Numbers: `docs/RESULTS.md` §5.
 
-| Run | AP / AP50 / AP25 (18-class) | 17-class diagnostic |
-|---|---|---|
-| defaults (radius 5 cm, no conf filter), job 9503137 | 0.023 / 0.067 / 0.268 | 0.024 / 0.071 / 0.284 |
-| `--vote_radius 0.1 --depth_conf_percentile 25`, job 9503139 | **0.029 / 0.083 / 0.305** | 0.030 / 0.088 / 0.323 |
+**Quote the defaults row as the headline.** The tuned row's knobs were chosen on §9.5's leaked
+runs, so it is mildly tuned on data that includes val scenes; both rows are otherwise honest.
 
-**Quote the defaults row as the headline** — the second row's knobs were chosen on the leaked
-diagnostic runs of §9.5, so it is mildly tuned on data that includes val scenes. Both rows are
-otherwise honest.
+Three readings that the rest of §9 builds on:
 
-Three readings:
-
-1. **We land in FAST3DIS's ballpark on a frozen backbone.** AP25 0.305 vs its 0.316, AP50 0.083
-   vs 0.096, AP 0.029 vs 0.038 — against a *LoRA-adapted* DA3, while we never touch VGGT. IGGT
-   (0.028 / 0.112 / 0.287) sits in the same cluster. SegVGGT (0.504 / 0.717 / 0.870, also
-   LoRA-adapted) is **far above but in the other protocol** (§9.9): its masks are transferred
-   with ScanNet's GT poses and sensor depth, so its number carries no geometry error, while every
-   number in this cluster is 2D mask quality *times* predicted-geometry quality. State the
-   protocol difference plainly — and state just as plainly that it is a legitimate evaluation
-   choice on their part, not a trick, since their model is as unposed as ours.
-2. **The leak-free checkpoint BEATS the leaked one** — 0.083 vs 0.052 AP50 at identical knobs,
-   ~1.6×. §9.5's reading 4 predicted "roughly nearby"; the truth is that 1201 official train
-   scenes outweigh *having seen the val scenes*. This is the 3D ruler independently reproducing
-   §7.2's 2D conclusion: **the track is data-limited, not architecture-limited.** It also means
-   every §9.5 number was a pessimistic proxy.
+1. **We land in the unposed published cluster on a frozen backbone** — FAST3DIS and IGGT, against
+   their LoRA-adapted backbones. SegVGGT is far above but in the **other** protocol (§9.9); state
+   that plainly, and state just as plainly that it is a legitimate evaluation choice on their
+   part, not a trick, since their model is as unposed as ours.
+2. **The leak-free checkpoint BEATS the leaked one** (~1.6× AP50 at identical knobs). §9.5
+   predicted "roughly nearby"; the truth is that 1201 official train scenes outweigh *having seen
+   the val scenes*. The 3D ruler independently reproduces the 2D conclusion: **data-limited, not
+   architecture-limited** — and every §9.5 number was a pessimistic proxy.
 3. **The lifting step is now the binding constraint, not the decoder.** Geometry diagnostics are
-   unchanged from §9.5 (median camera-center RMS 0.14 m, ~16 % of vertices voted, ~65 % of
-   annotated vertices assigned) and AP25 is still ~4× AP50. Two *lifting* knobs alone bought
-   +0.016 AP50 — more than most decoder ablations in §7.2.1 are worth. The next lever on this
-   ruler is registration quality / coverage / voting, not query design.
+   unchanged from §9.5 and AP25 is still ~4× AP50. Two *lifting* knobs alone bought +0.016 AP50 —
+   more than most single-frame decoder ablations are worth. The next lever on this ruler is
+   registration quality / coverage / voting, not query design.
 
-Reproduce: `sbatch --export=ALL,CHECKPOINT=<mf_run_dir>/checkpoint_best_bundle.pth
-slurm/eval_3d_maskdino.sh`. Output files now name any non-default result-affecting knob
-(`eval3d_<stem>__vote_radius0.1_depth_conf_percentile25.0.json`) — before 2026-08-03 both knob
+**Filename discipline.** Output files name any non-default result-affecting knob
+(`eval3d_<stem>__vote_radius0.1_depth_conf_percentile25.0.json`). Before 2026-08-03 both knob
 settings wrote to the same path and the second silently overwrote the first, which is how job
-9503137's JSON was lost (its numbers survive only in `slurm/logs/eval3d_9503137.log`; the
-defaults run was repeated as job 9532181 and reproduced it exactly — 0.0228 / 0.0672 / 0.2680 —
-so the pipeline is deterministic and the headline now has a JSON behind it).
-Guarded by `tests/test_maskdino_eval3d.py::test_out_path_names_the_knobs`.
+9503137's JSON was lost (the defaults run was repeated as job 9532181 and reproduced it exactly —
+0.0228 / 0.0672 / 0.2680 — so the pipeline is deterministic and the headline has a JSON behind
+it). Guarded by `tests/test_maskdino_eval3d.py::test_out_path_names_the_knobs`.
 
 ### 9.7 Looking at the predictions in 3D (qualitative, 2026-08-03)
 
@@ -1121,7 +1049,7 @@ overwrite a full-val result. A handful of scenes is a *picture*, never a number:
 scenes scored 0.084 / 0.236 / 0.375, ~3× the 312-scene averages of §9.6.
 
 **(b) What the model predicts — the Gradio viewer.** `demos/demo_gradio.py` now accepts MaskDINO
-checkpoints alongside the retired D4RT ones (it dispatches on the checkpoint's keys) and colours
+checkpoints alongside the retired baseline-head ones (it dispatches on the checkpoint's keys) and colours
 **VGGT's own predicted point cloud** by the head's per-view instance assignment. No mesh, no
 registration, no superpoint vote, no GT of any kind — it is the raw 2D→3D product, seen
 interactively.

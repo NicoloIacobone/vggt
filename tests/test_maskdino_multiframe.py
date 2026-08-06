@@ -505,6 +505,49 @@ def test_bundle_checkpoint_path_requires_multi_frame():
     print("✅ bundle checkpoint path exists only when --multi_frame is set\n")
 
 
+def test_eval_num_frames_pins_the_bundle_ruler():
+    """`--eval_num_frames` (docs/MASKDINO.md §8.4): train may widen its bundles while val stays
+    on the baseline's width, so bundle_* keeps measuring the same object. Two halves:
+    the width choice itself, and that scoring really is width-agnostic per scene."""
+    print("=== Testing --eval_num_frames pins the per-bundle ruler ===")
+    from argparse import Namespace
+
+    from train.maskdino_data import bundle_frames_for_split
+    from train.maskdino_eval import eval_scenes
+
+    # 1. the width choice. Unset => unchanged behaviour on BOTH splits; set => val only.
+    unset = Namespace(num_frames=16, eval_num_frames=None)
+    for split in ("train", "val"):
+        assert bundle_frames_for_split(unset, split) == 16, split
+    assert bundle_frames_for_split(Namespace(num_frames=16), "val") == 16   # older args objects
+    pinned = Namespace(num_frames=16, eval_num_frames=8)
+    assert bundle_frames_for_split(pinned, "train") == 16
+    assert bundle_frames_for_split(pinned, "val") == 8
+
+    # 2. a val cache narrower than the train cache must still score: the eval reads S off each
+    #    cached bundle, so the two widths coexist inside one run.
+    torch.manual_seed(0)
+    hh, mem, q = 8, 64, 10
+    head = _tiny_head(dec_layers=2, enc_layers=1, dn="no", num_queries=q, cross_frame_attn=True)
+    model = torch.nn.Module()
+    model.head = head
+
+    def _scene(name, s, split):
+        frames, _ = _bundle_frame_targets(s=s, n=2, hw=(hh, hh))
+        return {"name": name, "split": split, "bundles": [
+            {"features": torch.randn(s, 5 + hh * hh, mem), "patch_start_idx": 5,
+             "targets": frames, "images": None}]}
+
+    args = Namespace(multi_frame=True, eval_topk=100, score_threshold=0.25, eval_batch_frames=8)
+    wide = eval_scenes(model, [_scene("trainA", 6, "train")], args, "cpu")
+    narrow = eval_scenes(model, [_scene("valA", 3, "val")], args, "cpu")
+    for got, s in ((wide, 6), (narrow, 3)):
+        m = next(iter(got.values()))
+        assert "bundle_AP50" in m and 0.0 <= m["bundle_AP50"] <= 1.0, (s, m)
+        assert m["bundle_num_gt_all"] == 2, (s, m)
+    print("✅ val width is pinnable and scoring is width-agnostic per scene\n")
+
+
 if __name__ == "__main__":
     test_cross_frame_attention()
     test_bundle_targets_and_index_expansion()
@@ -519,4 +562,5 @@ if __name__ == "__main__":
     test_multiframe_visualisation()
     test_update_best_selects_peak_epoch()
     test_bundle_checkpoint_path_requires_multi_frame()
+    test_eval_num_frames_pins_the_bundle_ruler()
     print("All test_maskdino_multiframe tests passed! ✅")

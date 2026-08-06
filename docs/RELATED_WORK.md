@@ -16,9 +16,9 @@ training signal.
 
 **Update 2026-07-28 (read this before the older framing below).** Two things changed:
 
-1. The MaskDINO result (docs/MASKDINO.md §7) says the D4RT plateau was **architectural, not
-   data**: the same data that made arm C *worse* (0.367@190 → 0.350@490) makes a DINO-family
-   decoder gain +0.26 AP50 from 50 → 490 scenes. The query-initialisation study (arms A–E) is
+1. The MaskDINO result (docs/MASKDINO.md §7) says the retired head’s plateau was **architectural, not
+   data**: the same data that made the baseline head *worse* (0.367@190 → 0.350@490) makes a DINO-family
+   decoder gain +0.26 AP50 from 50 → 490 scenes. The query-initialisation study is
    therefore the **negative half** of the story — "no initialisation strategy rescues an
    under-powered decoder" — and the positive half is "a faithful DINO-family decoder on a
    **strictly frozen** 3D backbone, measured against that study on one protocol".
@@ -126,29 +126,26 @@ competitor adapts its backbone with LoRA.
 | Mechanism | Owned by | What is left for us |
 |---|---|---|
 | Object queries shared across views on a VGGT-family backbone | SegVGGT (400 queries in all 24 aggregator layers) | our `--multi_frame` (§8.2) is the same *class* of idea — report it as a controlled comparison against our own single-frame model, not as a new mechanism |
-| **3D-anchored queries** (learned 3D anchor generator + project-and-sample cross-attention) | **FAST3DIS** | our §8.3 is therefore an **ablation, not a contribution**: 3D anchors vs 2D DAB boxes *inside the same DINO-family decoder, same frozen backbone, same data, same protocol* — which nobody has run, and which directly re-tests the arm-E negative result |
+| **3D-anchored queries** (learned 3D anchor generator + project-and-sample cross-attention) | **FAST3DIS** | our §8.3 is therefore an **ablation, not a contribution**: 3D anchors vs 2D DAB boxes *inside the same DINO-family decoder, same frozen backbone, same data, same protocol* — which nobody has run, and which directly re-tests the archived 3D-anchor negative result |
 | Attention-dispersion fix for queries over many global tokens | SegVGGT (FADA, training-time only) | we get part of this for free from deformable attention (sampling 4 points/level around an anchor instead of dense attention); worth one sentence contrasting the two remedies |
 | Single-pass multi-view panoptic prediction (no test-time optimisation) | PanSt3R | keep as the "why not splat / why not fuse" comparison point |
-| Anti-duplicate regularisation for queries | FAST3DIS (contrastive + spatial-overlap penalty) | our over-prediction problem (arm B/C duplicate FPs) is handled instead by DINO's one-to-one Hungarian matching + DN; that contrast is a legitimate discussion point |
+| Anti-duplicate regularisation for queries | FAST3DIS (contrastive + spatial-overlap penalty) | our over-prediction problem (duplicate FPs on the retired head) is handled instead by DINO's one-to-one Hungarian matching + DN; that contrast is a legitimate discussion point |
 
 ## The four open gaps, mapped to this project
 
 > **Superseded by the 2026-07-28 update above for gap 1 and gap 3.** Gap 1 stands as a *gap in
 > the literature* (nobody ablates query initialisation), but our answer to it is negative, and
 > the thesis's strongest card is now the frozen-backbone decoder study of docs/MASKDINO.md.
-> "Missing arm E" below has since been run (see docs/ARMS_SUMMARY.md) and lost.
+> The query-initialisation study it refers to has since been completed and retired; its tables are
+> archived in `docs/old/ARMS_SUMMARY.md` and are not part of the current story.
 
 1. **Query strategy is unsettled — nobody has ablated it (our study, now the negative half).**
-   No published work resolves how
-   object queries should be initialized / made view-consistent for feed-forward 3D. We
-   already have: point prompts plateau (arm A), trained grid queries peak at their training
-   density and die by duplicate FPs (arm B + grid-density ablation → gap is architectural),
-   hybrid fails (arm D), learned queries scale (arm C, honest AP50 0.228 vs 0.185 best-grid).
-   **Missing arm: E — 3D-anchored queries**, seeded from VGGT's *own predicted pointmap
-   geometry* instead of image-space (u,v). `QueryGenerator` is currently purely 2D
-   (Fourier(u,v) + view embedding + RGB patch). A 3D anchor also gives a natural
-   one-query-per-object dedup mechanism, attacking our known over-prediction failure
-   (338 kept vs 144 GT; duplicate FPs are the identified lever).
+   No published work resolves how object queries should be initialized / made view-consistent for
+   feed-forward 3D. Our own study of that question is closed and its answer was negative: no query
+   initialisation on the retired head reached the bar that a DINO-family decoder clears on the same
+   frozen backbone and the same data. The live version of the question is `--anchor_3d`
+   (docs/MASKDINO.md §8.3) — 3D anchors vs 2D DAB boxes inside the *current* decoder, which is an
+   ablation against FAST3DIS's mechanism, not a contribution.
 2. **Consistency intrinsic to the query, not post-hoc — we already have it; claim it.**
    Our decoder produces `pred_masks [B, N, S, h, w]`: one query = one instance across all
    views by construction, vs the PanSt3R/MV3DIS paradigm of fusing/matching per-view 2D

@@ -6,7 +6,7 @@ annotations (19 classes). Nothing in VGGT is modified or finetuned.
 
 **Two things are reported below**, and they answer two different questions:
 
-1. **MaskDINO vs arm C** — does the new head beat the best of the previous (hand-rolled DETR-style)
+1. **MaskDINO vs the baseline head** — does the new head beat the best of the previous (hand-rolled DETR-style)
    heads on our ScanNet task? *This is the project result.*
 2. **Our MaskDINO vs official MaskDINO on COCO** — is our re-implementation of MaskDINO faithful to
    upstream? *This is a correctness proof for the port, not a project result.*
@@ -15,7 +15,7 @@ annotations (19 classes). Nothing in VGGT is modified or finetuned.
 
 ## 1. Headline
 
-| | previous best (arm C) | MaskDINO (best) | gain |
+| | previous best (the baseline head) | MaskDINO (best) | gain |
 |---|---|---|---|
 | single-frame mIoU | 0.451 | **0.694** | +54 % |
 | single-frame AP50 | 0.294 | **0.729** | +148 % |
@@ -29,14 +29,21 @@ split** (a separate, harder ruler — do not mix with the table above): single-f
 / 0.662 AP50** per-frame, multi-frame **0.529 / 0.525** per-bundle, plus the first cross-view
 consistency read-out (0.717). Details: `docs/RESULTS.md` §6, `docs/MASKDINO.md` §7.8.
 
+**Best on that split since 2026-08-06: widening the bundle from 8 to 16 views** (one flag,
+`--num_frames 16`; `docs/MASKDINO.md` §8.4). Per-bundle AP50 **0.525 → 0.552** on the same pinned
+8-view ruler, per-frame 0.650 → 0.662, and `bundle_id_switch` **0.498 → 0.385** with the number
+of matched instances flat — identity, not recognition, exactly as the cross-frame-attention
+ablation predicted. A frame-matched control run (`--bundles_per_scene 1`) rules out "it is just
+more data". A 20-epoch run reaches per-frame **0.669**, the best on the official split.
+
 **And since 2026-08-03 there is a number that IS comparable to the literature** — see §5.
 
 ---
 
-## 2. MaskDINO vs arm C
+## 2. MaskDINO vs the baseline head
 
-Arm C = learned DETR object queries, the best of the five previous query-initialisation variants
-(A–E), now retired. Same frozen backbone, same data, same metric code.
+The baseline head = the best of a retired family of hand-rolled DETR-style heads (learned DETR
+object queries). Same frozen backbone, same data, same metric code.
 
 ### 2.1 Single-frame protocol (the primary comparison)
 
@@ -45,7 +52,7 @@ All runs: official ScanNet GT, val = scenes 0080–0089, held out of every train
 
 | Model | Train scenes | mIoU | AP50 | AP75 | mAP |
 |---|---|---|---|---|---|
-| **arm C — the bar** | 190 | 0.451 | 0.294 | 0.141 | 0.154 |
+| **the baseline head — the bar** | 190 | 0.451 | 0.294 | 0.141 | 0.154 |
 | MaskDINO | 50 | 0.451 | 0.440 | 0.314 | 0.290 |
 | MaskDINO | 190 | 0.594 | 0.624 | 0.440 | 0.418 |
 | MaskDINO | 490 | 0.669 | 0.699 | 0.506 | 0.475 |
@@ -53,21 +60,21 @@ All runs: official ScanNet GT, val = scenes 0080–0089, held out of every train
 
 Notes worth stating:
 
-- Arm C's per-frame numbers were obtained by re-scoring its released checkpoint through the
+- The baseline head's per-frame numbers were obtained by re-scoring its released checkpoint through the
   *identical* protocol (`scripts/eval_perframe.py`), not by quoting its old numbers on a
   different ruler.
 - **Data scale dominates every architectural ingredient.** Going 50 → 490 scenes is worth
   +0.26 AP50; removing any single MaskDINO component (two-stage query selection, deformable
   encoder, denoising, mask-enhanced box init) costs only 0.02–0.05 AP50 — and every crippled
-  variant still beats arm C by ≈2×. The win belongs to the architecture *class*, not to one trick.
+  variant still beats the baseline head by ≈2×. The win belongs to the architecture *class*, not to one trick.
 - The curve is **still rising at 490 scenes** (all the data we currently have packed) and
   overfitting eases with scale (train mIoU 1.000 → 0.994 → 0.947), i.e. the model is still
   data-limited.
-- This **inverts an earlier conclusion**: arm C got *worse* with more data (0.367@190 →
+- This **inverts an earlier conclusion**: the baseline head got *worse* with more data (0.367@190 →
   0.350@490), which read as "the dataset is not the bottleneck". On the same data MaskDINO gains
   +0.26 AP50. The old head was architecture-limited, not data-limited.
 
-### 2.2 Multi-view protocol (arm C's own ruler)
+### 2.2 Multi-view protocol (the baseline head's own ruler)
 
 One instance is scored once against its 8-frame ground-truth mask volume — a single IoU over the
 concatenated frames, so a prediction is only correct if it is consistent across views. With
@@ -76,7 +83,7 @@ be scored on exactly this ruler.
 
 | Model | Train scenes | mIoU | AP50 | AP75 | mAP |
 |---|---|---|---|---|---|
-| arm C — best previous head | 190 | 0.367 | 0.199 | — | — |
+| the baseline head — best previous head | 190 | 0.367 | 0.199 | — | — |
 | MaskDINO `--multi_frame` | 490 | 0.535 | 0.494 | 0.279 | 0.272 |
 | **… + 2 view-draws/scene + colour jitter** | 490 | **0.539** | **0.515** | — | — |
 
@@ -100,7 +107,7 @@ a standalone change, so multi-view consistency has a measured price in per-frame
 
 ### 2.3 The one caveat when reading §2.1 against §2.2
 
-The two tables are **two rulers, not two results** — never mix them. The same arm-C checkpoint
+The two tables are **two rulers, not two results** — never mix them. The same baseline checkpoint
 reads 0.451 / 0.294 per-frame and 0.367 / 0.199 per-bundle. Per-frame always scores higher,
 because an instance only has to match in the frames where it is actually visible, and a
 prediction that claims no pixels in a frame is dropped rather than penalised (§4.3).
@@ -203,7 +210,7 @@ skipped rather than counted as zeros.
   benchmark and is the only section that may sit next to published numbers, subject to the
   two-protocol rule stated there.
 - **The official ScanNet v2 val split.** Our val = scenes 0080–0089 is a project convention, kept
-  because it is the one ruler every arm and every scale point was measured on. A separate
+  because it is the one ruler every retired-baseline and every scale point was measured on. A separate
   comparability read-out on the official val list (77 scenes present in our data, 413 train / 77
   val) is run separately rather than by re-scoring existing checkpoints.
 - **Anything dated before 2026-07-08**, which used SAM3-generated pseudo-GT instead of official
@@ -288,6 +295,5 @@ Details, per-class tables and reproduction: `docs/MASKDINO.md` §9, `docs/RESULT
 
 ---
 
-*Sources in the repo: `docs/RESULTS.md` (all numbers, split by protocol), `docs/MASKDINO.md`
-(architecture, §6 protocol, §7 results, §7.6 COCO equivalence check, §9 the 3D ruler),
-`docs/ARMS_SUMMARY.md` (the retired arms A–E).*
+*Sources in the repo: `docs/RESULTS.md` (all numbers, split by protocol) and `docs/MASKDINO.md`
+(architecture, §6 protocol, §7.6 COCO equivalence check, §9 the 3D ruler).*
