@@ -28,7 +28,9 @@ Per scene (official val split, scannet_frames_25k frames — whole-scan coverage
   5. The vendored official evaluator (train/benchmark3d.py) scores AP / AP50 / AP25 over
      the benchmark's 18 classes. `otherfurniture` is not predictable by our 19-class head
      (it is background in our 2D GT), so a 17-common-class average is reported as a
-     diagnostic next to the official 18-class headline.
+     diagnostic next to the official 18-class headline. A CLASS-AGNOSTIC average (labels
+     ignored — the setting FAST3DIS and IGGT report, docs/RELATED_WORK.md) is printed
+     beside them: same predictions, same logic, one merged class. It is never the headline.
 
 In BOTH modes the model still sees only images: GT poses / intrinsics / sensor depth are
 eval-time transfer machinery applied after the head has produced its masks.
@@ -60,6 +62,8 @@ from models.maskdino.head import MaskDINOVGGTHead, to_scannet_class_logits
 from models.maskdino.anchor3d import normalize_token_xyz
 from models.maskdino.model import MaskDINOVGGTModel
 from train.benchmark3d import (BENCHMARK_CLASS_NAMES, assign_instances_for_scan,
+                               collapse_gt_to_class_agnostic,
+                               collapse_preds_to_class_agnostic,
                                compute_averages, evaluate_matches, format_results,
                                MIN_REGION_SIZE, OVERLAPS)
 from train.eval3d_geometry import (accumulate_votes, apply_sim3, assign_pixels_to_queries,
@@ -383,7 +387,7 @@ def main():
                   f"affect unprojection); they still tag the output filename")
 
     out_path = Path(args.out) if args.out else default_out_path(ckpt_path, args, parser)
-    matches, per_scene, failed = {}, {}, []
+    matches, matches_ca, per_scene, failed = {}, {}, {}, []
     for i, scene in enumerate(scenes):
         gt3d = load_scene_3d_gt(gt_root, scene, args.tsv)
         preds: List[Dict] = []
@@ -401,16 +405,28 @@ def main():
         gt2pred, pred2gt = assign_instances_for_scan(scene, preds, gt3d["gt_ids"],
                                                      MIN_REGION_SIZE)
         matches[scene] = {"gt": gt2pred, "pred": pred2gt}
+        # same predictions, same official logic, semantic labels ignored — FAST3DIS's and
+        # IGGT's setting (train/benchmark3d.py). Reported BESIDE the class-aware headline.
+        ca_gt, ca_pred = assign_instances_for_scan(
+            scene, collapse_preds_to_class_agnostic(preds),
+            collapse_gt_to_class_agnostic(gt3d["gt_ids"]), MIN_REGION_SIZE)
+        matches_ca[scene] = {"gt": ca_gt, "pred": ca_pred}
 
     aps = evaluate_matches(matches, OVERLAPS, MIN_REGION_SIZE)
     avgs = compute_averages(aps, OVERLAPS)
     diag17 = seventeen_class_mean(avgs)
+    avgs_ca = compute_averages(evaluate_matches(matches_ca, OVERLAPS, MIN_REGION_SIZE),
+                               OVERLAPS)
+    agnostic = {k: float(avgs_ca[k]) for k in ("all_ap", "all_ap_50%", "all_ap_25%")}
 
     print("\nOfficial 18-class ScanNet 3D instance benchmark (the headline):")
     print(format_results(avgs))
     print(f"\n17-common-class diagnostic (our head cannot predict otherfurniture): "
           f"AP {diag17['all_ap']:.3f}  AP50 {diag17['all_ap_50%']:.3f}  "
           f"AP25 {diag17['all_ap_25%']:.3f}")
+    print(f"class-agnostic (labels ignored — FAST3DIS's / IGGT's setting, NOT the headline): "
+          f"AP {agnostic['all_ap']:.3f}  AP50 {agnostic['all_ap_50%']:.3f}  "
+          f"AP25 {agnostic['all_ap_25%']:.3f}")
     if failed:
         print(f"⚠ {len(failed)} scene(s) failed (their GT counted as misses): "
               + ", ".join(failed))
@@ -431,6 +447,7 @@ def main():
         "results_18class": {k: (None if isinstance(v, float) and np.isnan(v) else v)
                             for k, v in avgs.items() if k != "classes"},
         "results_17class_diagnostic": diag17,
+        "results_class_agnostic": agnostic,
         "per_class": {n: {k: (None if np.isnan(v) else float(v))
                           for k, v in c.items()} for n, c in avgs["classes"].items()},
         "per_scene": per_scene,

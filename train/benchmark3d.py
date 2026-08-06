@@ -20,7 +20,9 @@ minimum region, void/ignore handling, greedy confidence matching, the duplicate-
 false-positive rule, and the exact precision-recall integration (including the artificial
 first curve point and the convolution step widths) — is line-for-line the official logic.
 
-The 18 evaluated classes live in `train/scannet3d.py` (BENCHMARK_CLASS_IDS/NAMES).
+The 18 evaluated classes live in `train/scannet3d.py` (BENCHMARK_CLASS_IDS/NAMES). The same
+logic also produces the CLASS-AGNOSTIC number FAST3DIS and IGGT report, via the label
+collapse below — see `collapse_gt_to_class_agnostic`.
 """
 
 from copy import deepcopy
@@ -31,6 +33,42 @@ import numpy as np
 from train.scannet3d import BENCHMARK_CLASS_IDS, BENCHMARK_CLASS_NAMES
 
 ID_TO_LABEL = dict(zip(BENCHMARK_CLASS_IDS, BENCHMARK_CLASS_NAMES))
+
+# ---------- Class-agnostic view of the same evaluator (FAST3DIS's setting) ---------- #
+# FAST3DIS and IGGT report ScanNetv2 AP with the semantic labels IGNORED ("in the
+# class-agnostic setting, we ignore the semantic class labels in the annotations and focus
+# purely on object localization and boundary quality", arXiv:2603.25993 §4.4), while SegVGGT
+# and our headline are class-aware. Collapsing every benchmark class onto ONE label id makes
+# the official logic above compute exactly that number: the 17 unused classes end up with no
+# GT and no predictions, score NaN, and `compute_averages`' nanmean ignores them.
+#
+# Only the label is collapsed. The prediction SET is unchanged — predictions carrying a
+# non-benchmark label (our head's wall/floor) are dropped here exactly as
+# `assign_instances_for_scan` drops them — so class-agnostic vs class-aware is a
+# single-variable comparison: "is getting the class wrong still penalised?".
+AGNOSTIC_LABEL_ID = BENCHMARK_CLASS_IDS[0]
+AGNOSTIC_CLASS_NAME = ID_TO_LABEL[AGNOSTIC_LABEL_ID]
+
+
+def collapse_gt_to_class_agnostic(gt_ids: np.ndarray) -> np.ndarray:
+    """Per-vertex GT ids with every benchmark class relabelled to `AGNOSTIC_LABEL_ID`.
+
+    The instance component (`objectId + 1`, `train/scannet3d.py::build_gt_ids`) is
+    scene-unique across classes, so the collapse cannot merge two GT instances into one.
+    Vertices of non-benchmark classes stay untouched and keep counting as void.
+    """
+    gt = np.asarray(gt_ids)
+    valid = np.isin(gt // 1000, BENCHMARK_CLASS_IDS)
+    out = gt.copy()
+    out[valid] = 1000 * AGNOSTIC_LABEL_ID + (gt[valid] % 1000)
+    return out
+
+
+def collapse_preds_to_class_agnostic(preds: List[dict]) -> List[dict]:
+    """The same predictions with the label replaced; non-benchmark labels dropped."""
+    return [{**p, "label_id": AGNOSTIC_LABEL_ID} for p in preds
+            if int(p["label_id"]) in ID_TO_LABEL]
+
 
 # ---------- Evaluation params (official values; overridable only in tests) ---------- #
 OVERLAPS = np.append(np.arange(0.5, 0.95, 0.05), 0.25)
@@ -273,8 +311,8 @@ def compute_averages(aps: np.ndarray, overlaps: np.ndarray) -> dict:
 
 
 def evaluate(preds_by_scene: Dict[str, List[dict]], gt_by_scene: Dict[str, np.ndarray],
-             overlaps: np.ndarray = OVERLAPS, min_region_size: int = MIN_REGION_SIZE
-             ) -> dict:
+             overlaps: np.ndarray = OVERLAPS, min_region_size: int = MIN_REGION_SIZE,
+             class_agnostic: bool = False) -> dict:
     """
     The official evaluation over a set of scenes.
 
@@ -285,11 +323,18 @@ def evaluate(preds_by_scene: Dict[str, List[dict]], gt_by_scene: Dict[str, np.nd
     "ap25%"}}} — per-class values are NaN where the class has no GT in any scene.
     `overlaps` / `min_region_size` exist for unit tests only; results quoted anywhere must
     use the defaults.
+
+    `class_agnostic=True` scores FAST3DIS's setting instead (labels ignored, everything on
+    one merged class); the headline stays the default class-aware evaluation.
     """
     matches = {}
     for scene, gt_ids in gt_by_scene.items():
+        preds, gt_ids = preds_by_scene.get(scene, []), np.asarray(gt_ids)
+        if class_agnostic:
+            preds = collapse_preds_to_class_agnostic(preds)
+            gt_ids = collapse_gt_to_class_agnostic(gt_ids)
         gt2pred, pred2gt = assign_instances_for_scan(
-            scene, preds_by_scene.get(scene, []), np.asarray(gt_ids), min_region_size)
+            scene, preds, gt_ids, min_region_size)
         matches[scene] = {"gt": gt2pred, "pred": pred2gt}
     aps = evaluate_matches(matches, overlaps, min_region_size)
     return compute_averages(aps, overlaps)

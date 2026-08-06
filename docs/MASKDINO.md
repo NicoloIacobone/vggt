@@ -20,7 +20,10 @@ and `--mask_upsample 2` stays neutral even on that ruler — recognition binds, 
 split and scored by the vendored official evaluator on val-312, the multi-frame model reaches
 **AP 0.023 / AP50 0.067 / AP25 0.268** (0.029 / 0.083 / 0.305 with tuned lifting knobs) —
 **FAST3DIS's ballpark (0.038 / 0.096 / 0.316) on a strictly frozen backbone**, alongside IGGT
-(0.028 / 0.112 / 0.287). SegVGGT's 0.504 / 0.717 / 0.870 is **a different protocol** (§9.9): its
+(0.028 / 0.112 / 0.287 — FAST3DIS's re-evaluation of it, not IGGT's own paper). **Both of those
+columns are class-agnostic and ours is class-aware; scored their way we are 0.017 / 0.060 /
+0.334, i.e. ahead on AP25 and ~1.6–2.2× behind on AP50/AP** (§9.11 — read it before quoting
+"ballpark"). SegVGGT's 0.504 / 0.717 / 0.870 is **a different protocol** (§9.9): its
 evaluator transfers masks with ScanNet's GT poses and sensor depth, so it measures 2D mask
 quality alone where ours measures 2D mask quality times predicted geometry. **Measured, that
 protocol is worth 2.3× of the gap and no more** (§9.10): run on our own masks it takes us to
@@ -1109,7 +1112,7 @@ All 312 scenes, 0 failures, 18-class metrics:
    radius 0.10): filtering half the depth throws away usable geometry. It also trades the two
    IoU regimes against each other — no filtering gives the best AP25 (0.321) while 25 % gives
    the best AP50 at the same radius, i.e. it buys boundary precision with coverage.
-3. **Knobs cap out below FAST3DIS.** The whole grid spans 0.067 → 0.091 AP50: lifting
+3. **Knobs cap out below FAST3DIS** (whose column is class-agnostic, §9.11). The whole grid spans 0.067 → 0.091 AP50: lifting
    hyper-parameters are worth up to +0.024 (+36 % relative) — more than any decoder ablation in
    §7.2.1 — and still short of FAST3DIS's 0.096. So the remaining gap is **not** a tuning
    artefact, which is the useful negative result here: it has to come from coverage (§todo 5b)
@@ -1202,7 +1205,7 @@ the literature inside one table without the distinction, and SegVGGT and FAST3DI
 contemporaneous preprints (2603.19926, 2603.25993) so neither could have cited the other.
 
 **What follows for us.** The right comparison for §9.6 is the unposed cluster, where we sit with
-FAST3DIS and IGGT on a strictly frozen backbone. Separately, running the posed protocol on our
+FAST3DIS and IGGT on a strictly frozen backbone — with the label-setting caveat of §9.11. Separately, running the posed protocol on our
 *own* masks isolates our 2D mask quality from our lifting error and bounds what fixing §9.6
 reading 3 could ever buy — the same decomposition SegVGGT's number already enjoys. That is
 docs/todo.md 5e; the mechanism exists as `--transfer_mode gt_projection`, and its number is a
@@ -1326,3 +1329,70 @@ tag the output (`eval3d_<stem>__transfer_modegt_projection.json`) and can never 
 unposed headline's file; `tests/test_maskdino_eval3d.py::test_out_path_names_the_knobs` asserts
 it. `--vote_radius`, `--depth_conf_percentile` and `--icp` are **inert** in `gt_projection` mode
 and the script says so at startup if they are set.
+
+### 9.11 Class-aware vs class-agnostic — the second axis of the comparison (2026-08-06)
+
+§9.9 split the published numbers by their 2D→3D **bridge**. Re-reading the two papers for the
+supervisor meeting turned up a *second* axis, which had been silently ignored:
+
+| | SegVGGT | FAST3DIS / IGGT | us |
+|---|---|---|---|
+| bridge | posed (GT depth + poses) | unposed (predicted geometry) | unposed |
+| **labels** | **class-aware**, 18 classes, per-class mean | **class-agnostic** — labels ignored | **class-aware**, 18 classes |
+| AP definition | IoU 0.50:0.05:0.95; AP50 / AP25 fixed | identical | identical |
+| views / scene | every 20th frame (~75–100) | 50 | ~17 |
+
+**`mAP` (SegVGGT's column header) and `AP` (FAST3DIS's) are the same quantity** — in the ScanNet
+3D instance literature AP is already a mean over classes. The header difference means nothing;
+the *setting* difference does. FAST3DIS §4.4: *"In the class-agnostic setting, we ignore the
+semantic class labels in the annotations and focus purely on object localization and boundary
+quality"*, and it publishes no class-aware ScanNet number. IGGT's row in that table inherits the
+setting — and is **FAST3DIS's re-evaluation**: IGGT's own paper (arXiv 2510.22706) reports no
+ScanNet AP at all, only tracking (T-mIoU 69.41), reconstruction (Abs.Rel 1.90) and
+open-vocabulary semantics (3D mIoU 39.68) over 10 scenes × 8–10 images.
+
+**Measured, and it reverses the obvious guess** (jobs 9861563 / 9861564, val-312, 0 failures; the
+18-class columns reproduced §9.6 exactly, so the collapse perturbs nothing). Class-agnostic looks
+like the *permissive* setting — a wrong label costs nothing — and for our system it is not:
+
+| unposed, val-312 | class-aware (18) | class-agnostic |
+|---|---|---|
+| defaults (§9.6) | 0.023 / 0.067 / 0.268 | **0.013 / 0.050 / 0.320** |
+| `--vote_radius 0.1 --depth_conf_percentile 25` | 0.029 / 0.083 / 0.305 | **0.017 / 0.060 / 0.334** |
+| FAST3DIS (published) | — | 0.038 / 0.096 / 0.316 |
+| IGGT (via FAST3DIS) | — | 0.028 / 0.112 / 0.287 |
+
+**AP25 goes up and crosses both published rows (0.334 vs 0.316 / 0.287); AP50 and AP go down and
+land ~1.6–2.2× behind.** That is the honest like-for-like statement, and it replaces §9.6's "in
+FAST3DIS's ballpark", which was comparing across settings.
+
+*Why the collapse costs us.* It swaps a mean over 18 classes for one instance-pooled ranking. Our
+per-class table (tuned row) is carried by rare distinctive classes — toilet **0.508** AP50 at
+1/18 of the mean, sink and refrigerator 0.173 — while the numerous ones are weak (chair 0.053,
+cabinet 0.040, bookshelf 0.001) and `otherfurniture` is **0.000**, unpredictable for a 19-class
+head. Pooling deletes the rare-class leverage and pours every unmatched `otherfurniture` instance
+into a single recall curve. The mechanism is structural, not a bug: masks here are disjoint by
+construction (`assign == q`, one class per query via argmax), so no cross-class duplicate can be
+inflating either column.
+
+*What it means.* At loose IoU our instance discovery is already competitive with the published
+unposed cluster; at strict IoU boundary quality and lifting are not. Same conclusion as §9.8 —
+lifting binds — now visible in the competitors' own setting.
+
+**The evaluator produces both.** `train/benchmark3d.py::collapse_gt_to_class_agnostic` /
+`collapse_preds_to_class_agnostic` relabel every benchmark class onto one id, which makes the
+vendored official logic compute exactly FAST3DIS's number: the 17 unused classes get neither GT
+nor predictions, score NaN, and `compute_averages`' nanmean drops them. Only the **label** is
+collapsed — the prediction set is unchanged, and predictions carrying a non-benchmark label (our
+head's wall/floor) are dropped in both settings — so class-aware vs class-agnostic is a
+single-variable comparison. Every `scripts/eval_3d_maskdino.py` run now prints it and writes
+`results_class_agnostic` into the JSON, beside (never instead of) the 18-class headline.
+`tests/test_maskdino_eval3d.py::test_evaluator_class_agnostic` pins the semantics: masks right
+and labels rotated scores AP50 0.0 class-aware and 1.0 class-agnostic; with correct labels the
+two agree.
+
+**One more row worth carrying to any "why is your AP so low" question.** SegVGGT's Table 1 also
+lists the point-cloud / RGB-D family — Mask3D 55.2 / 73.7 / 85.3, Relation3D 62.5 / 80.2 / 87.0,
+SegDINO3D 64.0 / 81.5 / 88.9, ODIN 50.0 / 71.0 / 83.6 — and exactly one image-only baseline,
+OneFormer3D†, at **5.4 / 10.2 / 17.4**. The high numbers everyone remembers come from a different
+input modality; the image-only entry is below us even in the posed protocol.

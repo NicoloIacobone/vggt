@@ -64,15 +64,63 @@ reaches the benchmark point cloud*, and that step dominates the score:
 
 | | **posed transfer** | **unposed / predicted-geometry transfer** |
 |---|---|---|
-| who | **SegVGGT** (0.504 / 0.717 / 0.870) | **FAST3DIS** (0.038 / 0.096 / 0.316), **IGGT** (0.028 / 0.112 / 0.287), **this project** (0.023 / 0.067 / 0.268) |
+| who | **SegVGGT** (0.504 / 0.717 / 0.870) | **FAST3DIS** (0.038 / 0.096 / 0.316), **IGGT** (0.028 / 0.112 / 0.287 — *not* its own paper's number, see below), **this project** (0.023 / 0.067 / 0.268) |
 | how masks reach the cloud | the GT benchmark cloud is **projected into each view** with ScanNet's GT poses + intrinsics; occlusion resolved by the ScanNet **sensor depth** map | per-view pixels are **unprojected** with the model's own predicted depth + cameras, then Sim(3)+ICP-registered into the mesh frame for scoring |
 | geometry error in the bridge | **none** — the 3D↔2D correspondence is exact by construction | the full feed-forward reconstruction error (ours: median camera-centre RMS 0.14 m) |
 | what the number therefore measures | 2D mask quality alone | 2D mask quality **×** feed-forward geometry quality |
 | evaluator | official ScanNet, same options | official ScanNet, same options |
+| **class-aware?** | **yes** (18 classes, per-class mean) — and **so are we** | **no**: FAST3DIS/IGGT score **class-agnostic**; our own class-agnostic column is 0.017 / 0.060 / 0.334 (§ below) |
+| views per scene | every 20th frame (~75–100) | FAST3DIS 50; ours ~17 |
 
 **The evaluator is not the difference — the 2D→3D bridge is.** This is why FAST3DIS (0.038) and
 IGGT (0.028) cluster with us (0.023) while SegVGGT sits far above all three. Any table mixing
 the two must say which protocol each row is in.
+
+### Two provenance facts to state whenever these numbers are quoted (verified 2026-08-06)
+
+**1. IGGT's 0.028 / 0.112 / 0.287 is not from the IGGT paper.** IGGT (arXiv 2510.22706, clone at
+`/cluster/scratch/niacobone/IGGT_official`) reports **no ScanNet AP/AP50/AP25 at all**: its
+ScanNet table gives spatial tracking (T-mIoU 69.41 / T-SR 98.66), reconstruction (Abs.Rel 1.90),
+and open-vocabulary semantic segmentation (2D mIoU 60.46, **3D mIoU 39.68**), over **10 scenes ×
+8–10 images**. The AP triple is **FAST3DIS's re-evaluation of IGGT** (50 sampled views, unposed,
+Sim(3)+ICP). Label it *"IGGT, as re-evaluated by FAST3DIS"* — never *"IGGT (published)"*.
+
+**2. FAST3DIS and IGGT are scored CLASS-AGNOSTIC; SegVGGT and we are class-aware.** FAST3DIS
+§4.4: *"In the class-agnostic setting, we ignore the semantic class labels in the annotations and
+focus purely on object localization and boundary quality"*, and the paper reports no class-aware
+ScanNet numbers. The AP definition itself is identical everywhere (IoU 0.5:0.05:0.95 for AP,
+fixed 0.5 / 0.25 for AP50 / AP25) — **`mAP` and `AP` in this literature are the same metric**, so
+the naming difference between the SegVGGT and FAST3DIS tables means nothing. The *setting* does.
+
+**We measured our own class-agnostic column rather than reasoning about it** (jobs 9861563 /
+9861564, 312 scenes, 0 failures; docs/MASKDINO.md §9.11, RESULTS.md §5). The result **reverses
+the intuition** that class-agnostic is simply the easier setting:
+
+| our checkpoint (unposed) | class-aware (18) | class-agnostic |
+|---|---|---|
+| defaults | 0.023 / 0.067 / 0.268 | **0.013 / 0.050 / 0.320** |
+| tuned lifting knobs | 0.029 / 0.083 / 0.305 | **0.017 / 0.060 / 0.334** |
+| FAST3DIS (published) | — | 0.038 / 0.096 / 0.316 |
+| IGGT (via FAST3DIS) | — | 0.028 / 0.112 / 0.287 |
+
+**The like-for-like verdict: we lead the published cluster on AP25 (0.334 vs 0.316 and 0.287) and
+trail it ~1.6–2.2× on AP50 and AP.** Say exactly that. The class-aware "in FAST3DIS's ballpark"
+line was flattering us on AP/AP50 through a metric difference, and must not be repeated.
+
+*Why the drop.* Class-agnostic replaces a per-class mean with one instance-pooled ranking. Our
+class-aware mean is carried by rare, distinctive classes — toilet alone scores 0.508 AP50 for
+1/18 of the mean, sink and refrigerator 0.173 — while the numerous classes are weak (chair 0.053,
+cabinet 0.040, bookshelf 0.001) and `otherfurniture`, which our 19-class head cannot predict at
+all, scores 0.000. Pooling deletes the rare-class leverage and drops every unmatched
+`otherfurniture` instance into one recall curve. Nothing about the collapse is unfair — it is
+simply the setting our competitors report in, and it is harsher on a class-conditioned head.
+
+**3. The high ScanNet numbers people remember are a different input modality.** SegVGGT's own
+Table 1 places point-cloud-input methods at Mask3D 55.2 / 73.7 / 85.3, Relation3D 62.5 / 80.2 /
+87.0, SegDINO3D (P+I+D+C) 64.0 / 81.5 / 88.9, ODIN (I+D+C) 50.0 / 71.0 / 83.6. Those consume a
+reconstructed cloud or RGB-**D**; they are not in our lane. The only *image-only* baseline in
+that table, OneFormer3D†, scores **5.4 / 10.2 / 17.4** — under our AP50 even though it is scored
+in the posed protocol. Keep this row handy: it is the honest anchor for "image-only is hard".
 
 **How much of the gap is protocol — MEASURED 2026-08-04, do not guess at this**
 (docs/MASKDINO.md §9.10, RESULTS.md §5.1). We implemented SegVGGT's bridge on our own masks
@@ -84,8 +132,15 @@ against our 100. An earlier draft of this section said the outlier "is the proto
 model"; that overstated it and is struck. **Write it as: the two numbers are not comparable
 as printed, and when made comparable a substantial genuine gap remains.**
 
-**Evidence** (clone at `/cluster/scratch/niacobone/SegVGGT`, read 2026-08-04). Their released
-evaluator does **not unproject** anything:
+**Evidence.** The paper says so in as many words (§ implementation details, verified 2026-08-06):
+*"For the predicted mask associated with the object query, we project each 3D point from the
+ground-truth point cloud onto all sampled views. We then compute its visibility and determine
+whether the projected pixel falls within the predicted mask. **We utilize the ground-truth depth
+maps and camera poses during this mapping stage for fair comparison.**"* Quote this rather than
+our code reading — it is their own sentence, so the point cannot be argued.
+
+The released code (clone at `/cluster/scratch/niacobone/SegVGGT`, read 2026-08-04) matches it —
+their evaluator does **not unproject** anything:
 
 - `eval/eval_instance_seg.py:243-336` (`map_pred_inst_to_gt_pointcloud`) projects the GT point
   cloud into each view and reads the predicted 2D mask at the landing pixel.

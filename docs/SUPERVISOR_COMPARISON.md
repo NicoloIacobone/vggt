@@ -231,7 +231,8 @@ protocols, not one**, split by how a finished 2D mask reaches the benchmark poin
 
 - **Unposed / predicted-geometry transfer** — masks are unprojected with the model's *own*
   predicted depth and cameras. FAST3DIS, IGGT and **we** are here. The score is 2D mask quality
-  **×** feed-forward geometry quality.
+  **×** feed-forward geometry quality. (Their two rows are also **class-agnostic** — second axis,
+  below the table.)
 - **Posed transfer** — **SegVGGT** is here. Its released evaluator never unprojects: it projects
   the GT benchmark cloud into each view using ScanNet's **GT poses and intrinsics**, resolving
   occlusion with the **ScanNet sensor depth** map, so there is no Sim(3), no ICP and no geometry
@@ -244,14 +245,15 @@ legitimate way to isolate segmentation quality from reconstruction quality. It s
 two rows below are answering different questions. (Evidence, with file:line references into their
 released code: `docs/RELATED_WORK.md`, "Two 3D protocols"; `docs/MASKDINO.md` §9.9.)
 
-| Method | backbone | protocol | AP | AP50 | AP25 |
-|---|---|---|---|---|---|
-| FAST3DIS (published) | Depth-Anything-V3, **LoRA-adapted** | unposed | 0.038 | 0.096 | 0.316 |
-| IGGT (published) | — | unposed | 0.028 | 0.112 | 0.287 |
-| **ours** | **VGGT, strictly frozen** | **unposed** | **0.023** | **0.067** | **0.268** |
-| ours, tuned lifting knobs | 〃 | unposed | 0.029 | 0.083 | 0.305 |
-| **ours, run under SegVGGT's own protocol** | **VGGT, strictly frozen** | **posed** | **0.060** | **0.156** | **0.408** |
-| SegVGGT (published) | VGGT, **LoRA-adapted** | **posed** | 0.504 | 0.717 | 0.870 |
+| Method | backbone | protocol | labels | AP | AP50 | AP25 |
+|---|---|---|---|---|---|---|
+| FAST3DIS (published), 50 views | Depth-Anything-V3, **LoRA-adapted** | unposed | **class-agnostic** | 0.038 | 0.096 | 0.316 |
+| IGGT, **as re-evaluated by FAST3DIS** | — | unposed | **class-agnostic** | 0.028 | 0.112 | 0.287 |
+| **ours** | **VGGT, strictly frozen** | **unposed** | class-aware (18) | **0.023** | **0.067** | **0.268** |
+| ours, tuned lifting knobs | 〃 | unposed | class-aware (18) | 0.029 | 0.083 | 0.305 |
+| **ours, scored FAST3DIS's way** | 〃 | unposed | **class-agnostic** | **0.017** | **0.060** | **0.334** |
+| **ours, run under SegVGGT's own protocol** | **VGGT, strictly frozen** | **posed** | class-aware (18) | **0.060** | **0.156** | **0.408** |
+| SegVGGT (published) | VGGT, **LoRA-adapted** | **posed** | class-aware (18) | 0.504 | 0.717 | 0.870 |
 
 **Among the methods scored the same way as us we are in FAST3DIS's ballpark, while never touching
 the backbone; SegVGGT's much larger number comes from a protocol in which the 2D→3D step is
@@ -259,6 +261,31 @@ error-free by construction.** Both statements belong in any honest summary, and 
 replaced by "they are an order of magnitude ahead" — that framing compares across protocols. The
 tuned row's two knobs were selected on an earlier (leaky) diagnostic run, so the plain row is the
 headline.
+
+**A second axis, added 2026-08-06 after re-reading both papers.** FAST3DIS and IGGT are scored
+**class-agnostic** — *"we ignore the semantic class labels in the annotations"* (FAST3DIS §4.4),
+and that paper publishes no class-aware ScanNet number; SegVGGT and we are class-aware over the
+benchmark's 18 classes. The metric *definition* is the same everywhere (`mAP` in SegVGGT's header
+and `AP` in FAST3DIS's are one quantity: IoU 0.50:0.05:0.95, with AP50/AP25 at fixed thresholds),
+so the column names are not the difference — the setting is. **We measured our own class-agnostic
+column rather than arguing about it** (jobs 9861563 / 9861564, 312 scenes, 0 failures): scored
+their way our tuned row is **0.017 / 0.060 / 0.334** (defaults 0.013 / 0.050 / 0.320). Like for
+like we are **ahead of both published rows on AP25** (0.334 vs FAST3DIS 0.316 and IGGT 0.287) and
+**~1.6–2.2× behind on AP50 and AP**. Collapsing the labels *lowers* our AP/AP50 — it replaces a
+mean over 18 classes, which our rare distinctive classes carry (toilet 0.508 AP50 at 1/18 weight),
+with one instance-pooled ranking dominated by the numerous weak classes and by `otherfurniture`,
+which our 19-class head cannot predict at all. So "in FAST3DIS's ballpark" holds at loose IoU and
+not at strict IoU; that is the sentence to use.
+Two further provenance facts: IGGT's own paper (arXiv 2510.22706) reports **no ScanNet AP** — only
+tracking, reconstruction and open-vocabulary semantics over 10 scenes × 8–10 images; and SegVGGT
+states its posed bridge in the paper itself (*"we utilize the ground-truth depth maps and camera
+poses during this mapping stage for fair comparison"*), so that point rests on their sentence, not
+on our code reading.
+
+**And the numbers a reader may be remembering are a third family.** SegVGGT's Table 1 also lists
+Mask3D 55.2 / 73.7 / 85.3, Relation3D 62.5 / 80.2 / 87.0, SegDINO3D 64.0 / 81.5 / 88.9 and ODIN
+50.0 / 71.0 / 83.6 — all taking a **point cloud or RGB-D** as input. The single image-only
+baseline there, OneFormer3D†, scores **5.4 / 10.2 / 17.4**, below us despite the posed protocol.
 
 **We now have the like-for-like row too, and it does not close the gap** (added 2026-08-04,
 docs/MASKDINO.md §9.10; `--transfer_mode gt_projection`, licensed by an oracle whose round-trip

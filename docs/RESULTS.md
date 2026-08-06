@@ -170,10 +170,12 @@ the point cloud*, and that step dominates the score:
   it projects the GT benchmark cloud into each view using ScanNet's **GT poses and intrinsics**,
   resolving occlusion with the **ScanNet sensor depth** map. No Sim(3), no ICP, no vote radius —
   the 3D↔2D correspondence is exact by construction. That number measures **2D mask quality with
-  a perfect 2D→3D bridge**.
+  a perfect 2D→3D bridge**. Their paper states it outright: *"We utilize the ground-truth depth
+  maps and camera poses during this mapping stage for fair comparison."*
 - **Unposed transfer — FAST3DIS (0.038 / 0.096 / 0.316), IGGT (0.028 / 0.112 / 0.287), and us.**
   Masks are unprojected with the model's **own predicted** depth and cameras. These numbers
-  measure **2D mask quality × feed-forward geometry quality**.
+  measure **2D mask quality × feed-forward geometry quality**. Their two rows are additionally
+  **class-agnostic** and ours is class-aware — see the amendment under the table below.
 
 The evaluator is *not* the difference — both are the official ScanNet one with identical options.
 So FAST3DIS and IGGT cluster with us because they share our protocol; SegVGGT sits far above all
@@ -182,6 +184,13 @@ takes unposed images only, exactly like ours, and using GT geometry solely to tr
 masks for scoring is a legitimate way to isolate segmentation from reconstruction quality. Full
 evidence, with file:line references into their released code, is in `docs/RELATED_WORK.md`
 ("Two 3D protocols").
+
+**And a third family, which is where the ScanNet numbers people remember come from.** SegVGGT's
+own Table 1 lists Mask3D 55.2 / 73.7 / 85.3, Relation3D 62.5 / 80.2 / 87.0, SegDINO3D 64.0 /
+81.5 / 88.9, ODIN 50.0 / 71.0 / 83.6 — all consuming a **reconstructed point cloud or RGB-D**,
+not images. The one image-only baseline in that table, OneFormer3D†, scores **5.4 / 10.2 /
+17.4**. When someone asks why our AP is "so low", that row is the answer: image-only 3D instance
+segmentation is a different difficulty class, and we are above it.
 
 Two structural handicaps to remember when reading the table: `otherfurniture` (1 of the 18
 benchmark classes) is unpredictable for our 19-class head (background in our 2D GT — the
@@ -197,21 +206,52 @@ are not comparable to them, we are behind).
 | **`--anchor_3d` multi-frame (job 9634920 `checkpoint_best_bundle`), defaults — job 9670882** | **1201 official train (leak-free)** | **0.038 / 0.112 / 0.360** | 0.040 / 0.119 / 0.381 | **REPORTABLE — the best row in this table**, untuned |
 | best multi-frame (job 9071415, ep-17 ckpt), defaults — job 9327269 | 0000–0489 (**overlaps val-312!**) | 0.013 / 0.041 / 0.223 | 0.014 / 0.044 / 0.236 | DIAGNOSTIC ONLY — leakage, §9.4 |
 | same, `--vote_radius 0.1 --depth_conf_percentile 25` — job 9327271 | 〃 | 0.016 / 0.052 / 0.238 | 0.016 / 0.055 / 0.253 | 〃 |
-| FAST3DIS (published; LoRA-adapted DA3) | official split | 0.038 / 0.096 / 0.316 | — | literature anchor, **same protocol** (unposed) |
-| IGGT (published, via FAST3DIS's table) | official split | 0.028 / 0.112 / 0.287 | — | literature anchor, **same protocol** (unposed) |
+| FAST3DIS (published; LoRA-adapted DA3), 50 views | official split | 0.038 / 0.096 / 0.316 | — | same **bridge** (unposed), but **CLASS-AGNOSTIC** — see below |
+| IGGT, **as re-evaluated by FAST3DIS** (50 views) | official split | 0.028 / 0.112 / 0.287 | — | 〃. IGGT's own paper reports **no ScanNet AP** |
 | SegVGGT (published; LoRA-adapted VGGT, 1201-scene train) | official split | 0.504 / 0.717 / 0.870 | — | **DIFFERENT protocol** (posed transfer) — not a like-for-like row |
 
 **Among the methods that share our protocol, the reportable rows land in FAST3DIS's ballpark:
 AP25 0.305 vs its 0.316, AP50 0.083 vs 0.096, AP 0.029 vs 0.038** — with a *strictly frozen*
-backbone against its LoRA-adapted DA3, and comparably to IGGT.
+backbone against its LoRA-adapted DA3, and comparably to IGGT. ⚠ **This sentence compares across
+label settings and is superseded by the amendment below — use the class-agnostic column.**
+
+**Amended 2026-08-06 — the FAST3DIS/IGGT rows are class-agnostic, ours are class-aware, and the
+like-for-like column is now MEASURED** (jobs 9861563 / 9861564; docs/MASKDINO.md §9.11).
+FAST3DIS §4.4 scores ScanNet with *"the semantic class labels ignored"* and publishes no
+class-aware number; IGGT's row comes from that same table. SegVGGT and our columns above are the
+18-class, per-class-mean official evaluation. The metric *definition* is identical everywhere
+(AP over IoU 0.5:0.05:0.95, AP50/AP25 at fixed thresholds — `mAP` in SegVGGT's table and `AP` in
+FAST3DIS's are the same quantity), so the difference is the **setting**, not the metric.
+
+| unposed row | class-aware (18, the headline) | **class-agnostic** (comparable to FAST3DIS/IGGT) |
+|---|---|---|
+| ours, defaults | 0.023 / 0.067 / 0.268 | **0.013 / 0.050 / 0.320** |
+| ours, tuned lifting knobs | 0.029 / 0.083 / 0.305 | **0.017 / 0.060 / 0.334** |
+| FAST3DIS (published) | — | 0.038 / 0.096 / 0.316 |
+| IGGT (via FAST3DIS) | — | 0.028 / 0.112 / 0.287 |
+
+**Read it as: like-for-like we LEAD on AP25 (0.334 vs 0.316 and 0.287) and TRAIL ~1.6–2.2× on
+AP50 and AP.** The earlier "in FAST3DIS's ballpark on AP and AP50" reading was an artefact of
+comparing across settings and is struck; the AP25 statement survives and in fact strengthens.
+Collapsing the labels *lowers* our AP and AP50 rather than raising them, because it replaces the
+per-class mean — carried by rare, distinctive classes (toilet 0.508 AP50 for 1/18 of the mean,
+sink and refrigerator 0.173) — with one instance-pooled ranking dominated by the numerous weak
+classes (chair 0.053, cabinet 0.040) and by `otherfurniture`, which our 19-class head scores
+0.000 on. Every 3D run now emits `results_class_agnostic` (`train/benchmark3d.py`: same
+predictions, labels collapsed onto one class); **quote that column, never the 18-class one, when
+a row sits next to FAST3DIS or IGGT.** Provenance in `docs/RELATED_WORK.md`.
 
 **Updated 2026-08-04 by todo 2d.** The `--anchor_3d` row is no longer "in the ballpark" — at
 **0.038 / 0.112 / 0.360 it matches FAST3DIS on AP (0.038) and exceeds it on AP50 (0.112 vs 0.096)
 and AP25 (0.360 vs 0.316)**, and exceeds IGGT on AP and AP25 while matching its AP50 — still on a
 strictly frozen backbone, and *untuned* (all lifting knobs at their defaults, so the §9.8 sweep's
-headroom is unexplored on it). Two honesty notes that must travel with that sentence: it is a
-**single run against a single control**, and the structural handicaps above (`otherfurniture`,
-~17 frames/scene against SegVGGT's 75–100) still apply. The comparison to SegVGGT below is
+headroom is unexplored on it). Three honesty notes that must travel with that sentence: it is a
+**single run against a single control**; the structural handicaps above (`otherfurniture`,
+~17 frames/scene against SegVGGT's 75–100) still apply; and (2026-08-06) **their column is
+class-agnostic and ours is class-aware**, so "exceeds FAST3DIS" is a cross-setting statement.
+On the headline checkpoint the collapse *cost* 0.083 → 0.060 AP50, so this row's class-agnostic
+number is very likely below FAST3DIS's 0.096 too — **do not make the "exceeds" claim outward
+until job 9866391 lands it** (todo 1e). The comparison to SegVGGT below is
 unchanged, because its protocol difference is unaffected by which checkpoint we bring. SegVGGT's much higher number is
 **not a like-for-like gap**: it is scored under posed transfer, where GT poses, intrinsics and
 sensor depth carry the masks onto the point cloud with no geometry error at all, so it measures
@@ -288,7 +328,8 @@ Three things to carry when quoting this block:
    frames/scene, same defaults, 0 failures; it keeps 9 % **fewer** queries and covers 16 % **more**
    vertices. Two consequences worth carrying: (a) the unposed row **0.038 / 0.112 / 0.360** now
    sits inside the published unposed cluster (FAST3DIS 0.038 / 0.096 / 0.316, IGGT
-   0.028 / 0.112 / 0.287) on a **frozen** backbone; (b) **`bundle_AP50` at S = 8 is a poor proxy
+   0.028 / 0.112 / 0.287 — *their* columns class-agnostic, ours class-aware, §5) on a **frozen**
+   backbone; (b) **`bundle_AP50` at S = 8 is a poor proxy
    for this ruler** — score any cross-view-identity mechanism here before judging it. Because both
    blocks move by the same factor, the 2.3× bridge cost of reading 1 is unchanged, and so is the
    ceiling it puts on todo 5b/5c (now ~0.257 rather than 0.156).

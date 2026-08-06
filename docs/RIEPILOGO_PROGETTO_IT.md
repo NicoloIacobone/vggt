@@ -61,14 +61,36 @@ Questo è l'errore più facile da fare nel progetto. Ogni numero appartiene a un
 **3D, benchmark ufficiale** (`RESULTS.md` §5) — l'unico protocollo confrontabile con la
 letteratura, e va letto sapendo che i numeri pubblicati sono **due protocolli diversi**:
 
-| | AP / AP50 / AP25 | protocollo |
-|---|---|---|
-| noi, default | 0.023 / 0.067 / 0.268 | unposed (geometria predetta da VGGT) |
-| noi, `--anchor_3d` | **0.038 / 0.112 / 0.360** | unposed |
-| FAST3DIS (pubblicato, backbone LoRA) | 0.038 / 0.096 / 0.316 | unposed |
-| IGGT (pubblicato) | 0.028 / 0.112 / 0.287 | unposed |
-| noi, posed (`--transfer_mode gt_projection`) | 0.060 / 0.156 / 0.408 | posed (pose + depth GT) |
-| SegVGGT (pubblicato, backbone LoRA) | 0.504 / 0.717 / 0.870 | **posed — non confrontabile con le righe unposed** |
+| | AP / AP50 / AP25 | protocollo | classi |
+|---|---|---|---|
+| noi, default | 0.023 / 0.067 / 0.268 | unposed (geometria predetta da VGGT) | class-aware (18) |
+| **noi, scoring class-agnostic** (manopole tarate) | **0.017 / 0.060 / 0.334** | unposed | **class-agnostic — l'unica riga confrontabile con le due qui sotto** |
+| noi, `--anchor_3d` | **0.038 / 0.112 / 0.360** | unposed | class-aware (18) — versione class-agnostic in corso |
+| FAST3DIS (pubblicato, backbone LoRA), 50 viste | 0.038 / 0.096 / 0.316 | unposed | **class-agnostic** |
+| IGGT, **ri-valutato da FAST3DIS** (50 viste) | 0.028 / 0.112 / 0.287 | unposed | **class-agnostic** |
+| noi, posed (`--transfer_mode gt_projection`) | 0.060 / 0.156 / 0.408 | posed (pose + depth GT) | class-aware (18) |
+| SegVGGT (pubblicato, backbone LoRA) | 0.504 / 0.717 / 0.870 | **posed — non confrontabile con le righe unposed** | class-aware (18) |
+
+Due precisazioni di provenienza, verificate sui paper il 2026-08-06:
+
+- **`mAP` e `AP` sono la stessa metrica** (media su IoU 0.50:0.05:0.95; AP50/AP25 a soglia fissa).
+  L'intestazione diversa fra la tabella di SegVGGT e quella di FAST3DIS non significa niente. A
+  cambiare è il **setting**: FAST3DIS e IGGT ignorano le etichette semantiche (§4.4 del loro
+  paper), noi e SegVGGT no. **L'abbiamo misurato invece di ragionarci** (job 9861563/9861564):
+  scoring class-agnostic il nostro checkpoint fa **0.017 / 0.060 / 0.334** (default 0.013 / 0.050
+  / 0.320). Confronto a parità di setting: **davanti su AP25** (0.334 contro 0.316 di FAST3DIS e
+  0.287 di IGGT), **dietro di ~1.6–2.2× su AP50 e AP**. Ignorare le classi ci *abbassa* AP e AP50
+  perché sostituisce la media su 18 classi — che da noi è retta da classi rare e distintive
+  (toilet 0.508 AP50, che pesa 1/18) — con un unico ranking dominato dalle classi numerose e
+  deboli (sedie 0.053) e da `otherfurniture`, che la nostra testa a 19 classi non predice (0.000).
+- **Il numero di IGGT non viene dal paper di IGGT**, che su ScanNet non riporta nessun AP (solo
+  tracking, ricostruzione e semantica open-vocab, su 10 scene × 8–10 immagini). È la
+  ri-valutazione fatta da FAST3DIS.
+
+**Perché i numeri "alti" che si ricordano sono un'altra famiglia.** Nella stessa Table 1 di
+SegVGGT: Mask3D 55.2 / 73.7 / 85.3, Relation3D 62.5 / 80.2 / 87.0, SegDINO3D 64.0 / 81.5 / 88.9 —
+tutti con **nuvola di punti o RGB-D in input**. L'unico baseline solo-immagini di quella tabella,
+OneFormer3D†, fa **5.4 / 10.2 / 17.4**, sotto di noi pur essendo nel protocollo posed.
 
 ## 5. Le conclusioni che contano
 
@@ -95,7 +117,10 @@ letteratura, e va letto sapendo che i numeri pubblicati sono **due protocolli di
   I checkpoint allenati su 0000–0489 producono numeri **diagnostici**.
 - I due protocolli 3D si stampano come **due colonne**, mai fusi. SegVGGT non sta barando: il
   loro modello è unposed quanto il nostro, usano la geometria GT solo per trasferire maschere
-  già finite ai fini dello scoring.
+  già finite ai fini dello scoring — e lo scrivono nel paper (*"we utilize the ground-truth depth
+  maps and camera poses during this mapping stage for fair comparison"*).
+- Ogni run 3D produce ora **anche** il numero class-agnostic (`results_class_agnostic`), così il
+  confronto con FAST3DIS/IGGT può essere fatto a parità di setting invece che a parole.
 - Il protocollo posed è **licenziato da un oracolo**: rendendo la GT 3D attraverso la stessa
   proiezione si torna al 99.99 % sull'istanza corretta. Senza quell'oracolo il numero non si cita.
 - Le manopole di lifting sono state ri-sweepate sul checkpoint pulito; l'argmax dello sweep **non**

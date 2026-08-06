@@ -97,7 +97,8 @@ In effort order — each step also de-risks the next:
       AP50 0.067 / AP25 0.268** (0.029 / 0.083 / 0.305 with tuned lifting knobs — tuned on the
       leaky diagnostic, so the plain row is the headline). **FAST3DIS's ballpark
       (0.038 / 0.096 / 0.316) on a strictly frozen backbone**, alongside IGGT
-      (0.028 / 0.112 / 0.287). SegVGGT (0.504 / 0.717 / 0.870) is far above but **in a different
+      (0.028 / 0.112 / 0.287) — *both of those class-agnostic, ours class-aware, see 1e*.
+      SegVGGT (0.504 / 0.717 / 0.870) is far above but **in a different
       protocol** — posed transfer, GT poses + sensor depth, no geometry error (established
       2026-08-04, docs/MASKDINO.md §9.9) — so it is not a like-for-like gap; see 5e.
       Two findings: the leak-free checkpoint **beats** the leaked
@@ -107,6 +108,19 @@ In effort order — each step also de-risks the next:
       knobs (two knob settings used to overwrite one file; job 9503137's JSON was lost that way,
       numbers recovered from its log). Guarded by
       `tests/test_maskdino_eval3d.py::test_out_path_names_the_knobs`.
+- [~] **1e. Class-agnostic column — headline rows DONE 2026-08-06, `--anchor_3d` row open**
+      (docs/MASKDINO.md §9.11, RESULTS.md §5).
+      Re-reading FAST3DIS turned up that its and IGGT's ScanNet rows are **class-agnostic** while
+      ours and SegVGGT's are class-aware. The evaluator now computes both
+      (`train/benchmark3d.py::collapse_gt_to_class_agnostic`, `results_class_agnostic` in the
+      eval JSON, `tests/…::test_evaluator_class_agnostic`). Jobs 9861563/9861564 measured the
+      §9.6 rows: **0.013 / 0.050 / 0.320** (defaults) and **0.017 / 0.060 / 0.334** (tuned) —
+      collapsing labels *lowers* AP/AP50 and *raises* AP25, so like-for-like we **lead the
+      published cluster on AP25 and trail ~1.6–2.2× on AP50/AP**, and "in FAST3DIS's ballpark on
+      AP50" is struck everywhere. **Remaining:** job 9866391 does the `--anchor_3d` checkpoint —
+      the row that claims to *exceed* FAST3DIS. Given the headline row lost 0.083 → 0.060 AP50 to
+      the collapse, expect that claim to weaken; do not make it outward-facing until the number
+      is in.
 
 ## 2. Complete the multi-frame study (the contribution)
 

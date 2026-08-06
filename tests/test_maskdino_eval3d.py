@@ -597,6 +597,50 @@ def test_evaluator_duplicate_and_void():
     print("✅ duplicate/void/min-region rules match the official semantics\n")
 
 
+def test_evaluator_class_agnostic():
+    print("=== Testing evaluator: class-agnostic setting (FAST3DIS's) ===")
+    from train.benchmark3d import (AGNOSTIC_LABEL_ID, collapse_gt_to_class_agnostic,
+                                   collapse_preds_to_class_agnostic, evaluate)
+    # chair (nyu40 5) instance 1 and table (nyu40 7) instance 2, plus a void block
+    gt = np.zeros(1000, dtype=np.int64)
+    gt[0:200] = 5 * 1000 + 1
+    gt[200:400] = 7 * 1000 + 2
+    gt[600:800] = 11 * 1000 + 3        # picture, a benchmark class
+    gt[800:900] = 1 * 1000 + 4         # wall — NOT a benchmark class, stays void
+
+    ca = collapse_gt_to_class_agnostic(gt)
+    # the three benchmark instances keep distinct ids under one label; wall stays void
+    assert set(np.unique(ca[ca > 0])) == {1000 * AGNOSTIC_LABEL_ID + 1,
+                                          1000 * AGNOSTIC_LABEL_ID + 2,
+                                          1000 * AGNOSTIC_LABEL_ID + 3,
+                                          1 * 1000 + 4}
+    assert np.array_equal(ca[800:900], gt[800:900])            # non-benchmark GT untouched
+
+    # perfectly-shaped masks with the labels ROTATED: every class wrong, every mask right
+    preds = [_pred(slice(0, 200), label_id=7, confidence=0.9),
+             _pred(slice(200, 400), label_id=11, confidence=0.8),
+             _pred(slice(600, 800), label_id=5, confidence=0.7)]
+    aware = evaluate({"s1": preds}, {"s1": gt})
+    agnostic = evaluate({"s1": preds}, {"s1": gt}, class_agnostic=True)
+    assert aware["all_ap_50%"] == 0.0                          # class confusion is fatal
+    assert abs(agnostic["all_ap_50%"] - 1.0) < 1e-9            # ... and free once ignored
+    # the merged class carries the whole score; the other 17 are NaN and nanmean drops them
+    assert np.isnan(agnostic["classes"]["door"]["ap50%"])
+
+    # correct labels: the two settings agree, so the collapse adds nothing on its own
+    right = [_pred(slice(0, 200), label_id=5, confidence=0.9),
+             _pred(slice(200, 400), label_id=7, confidence=0.8),
+             _pred(slice(600, 800), label_id=11, confidence=0.7)]
+    for r in (evaluate({"s1": right}, {"s1": gt}),
+              evaluate({"s1": right}, {"s1": gt}, class_agnostic=True)):
+        assert abs(r["all_ap_50%"] - 1.0) < 1e-9
+
+    # a prediction with a non-benchmark label (our head's wall/floor) is dropped in BOTH,
+    # so the prediction SET is the single thing the two settings share
+    assert collapse_preds_to_class_agnostic([_pred(slice(0, 200), label_id=1)]) == []
+    print("✅ class-agnostic = same official logic, labels collapsed onto one class\n")
+
+
 def test_script_helpers():
     print("=== Testing eval_3d_maskdino script helpers ===")
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -722,6 +766,7 @@ if __name__ == "__main__":
     test_evaluator_duplicate_and_void()
     test_evaluator_iou_half()
     test_evaluator_false_positive()
+    test_evaluator_class_agnostic()
     test_script_helpers()
     test_out_path_names_the_knobs()
     test_end_to_end_synthetic()
