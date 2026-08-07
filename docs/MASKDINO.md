@@ -21,9 +21,14 @@ split and scored by the vendored official evaluator on val-312, the multi-frame 
 **AP 0.023 / AP50 0.067 / AP25 0.268** (0.029 / 0.083 / 0.305 with tuned lifting knobs) —
 **FAST3DIS's ballpark (0.038 / 0.096 / 0.316) on a strictly frozen backbone**, alongside IGGT
 (0.028 / 0.112 / 0.287 — FAST3DIS's re-evaluation of it, not IGGT's own paper). **Both of those
-columns are class-agnostic and ours is class-aware; scored their way we are 0.017 / 0.060 /
-0.334, i.e. ahead on AP25 and ~1.6–2.2× behind on AP50/AP** (§9.11 — read it before quoting
-"ballpark"). SegVGGT's 0.504 / 0.717 / 0.870 is **a different protocol** (§9.9): its
+columns are class-agnostic and ours is class-aware; scored their way this checkpoint is 0.017 /
+0.060 / 0.334, i.e. ahead on AP25 and ~1.6–2.2× behind on AP50/AP** (§9.11 — read it before
+quoting "ballpark"). **The `--anchor_3d` checkpoint (§8.3) is the strongest row: class-agnostic
+0.042 / 0.138 / 0.504, ahead of FAST3DIS and IGGT on all three, untuned** (job 9866391, §9.11) —
+and re-sweeping its lifting knobs reaches **0.055 / 0.185 / 0.571** with *every* point of the grid
+still ahead, so the lead is not a tuning artefact (§9.8.1). **Seed variance is now measured**
+(§8.3, per-bundle AP50 ±0.009), which is the yardstick every Δ in this document should be read
+against. SegVGGT's 0.504 / 0.717 / 0.870 is **a different protocol** (§9.9): its
 evaluator transfers masks with ScanNet's GT poses and sensor depth, so it measures 2D mask
 quality alone where ours measures 2D mask quality times predicted geometry. **Measured, that
 protocol is worth 2.3× of the gap and no more** (§9.10): run on our own masks it takes us to
@@ -789,12 +794,35 @@ posed control (job 9607206) additionally post-dates `8ad9aab`, so **that compari
 by construction**. Both comparisons independently show ~+66 %, which is the stronger evidence:
 they share no code path between the mesh and the mask.
 
+#### Replicated across seeds (2026-08-07, jobs 9901124 / 9901125)
+
+The 2D verdict above rested on **one run against one control**, the standing weakness of every
+row in this track. Both arms were re-trained with `--seed 1`, everything else identical:
+
+| run | per-frame AP50 | per-bundle AP50 | `id_switch` ↓ | `view_consistency` ↑ |
+|---|---|---|---|---|
+| control, seed 0 (9386666) | 0.6491 | 0.5249 | 0.4982 | 0.7167 |
+| control, seed 1 (9901125) | 0.6505 | 0.5342 | 0.4710 | 0.7173 |
+| `--anchor_3d`, seed 0 (9634920) | 0.6408 | 0.5271 | 0.4088 | 0.7229 |
+| `--anchor_3d`, seed 1 (9901124) | 0.6466 | 0.5362 | 0.4074 | 0.7279 |
+
+**Seed-to-seed spread on per-bundle AP50 is ≈ 0.009 in both arms** — which is the number to
+compare every ΔAP50 in this document against, and it retires "could be seed noise" for the larger
+effects (cross-frame attention 0.183, bundle features 0.147, bundle width 0.027) while placing the
+3D-anchor per-bundle delta (+0.002 / +0.002) firmly *inside* it. That is the point: **AP-neutral
+is now a measured statement, not an absence of evidence.**
+
+**The identity effect survives replication.** `id_switch` falls by **0.089** (seed 0) and
+**0.064** (seed 1) — same sign, both 2.4–3.3× the control arm's own seed spread (0.027). Ditto
+`view_consistency`, up in both. The per-frame cost also replicates (−0.008 / −0.004).
+
 #### Should it be the default?
 
-On the 2D rulers, no (+15 % training time, −0.009 per-frame AP50). On the 3D ruler — the only
-protocol that is placeable next to published work — it is the largest single-flag gain in the
-track. **Recommended for any run whose target is the 3D benchmark; still off by default**, so no
-completed 2D number moves.
+On the 2D rulers, no (+15 % training time, −0.009 per-frame AP50, and the per-bundle gain is
+inside seed noise). On the 3D ruler — the only protocol that is placeable next to published work —
+it is the largest single-flag gain in the track, and §8.4 reading 4 confirms it beats the bundle-
+width flag there at half the wall clock. **Recommended for any run whose target is the 3D
+benchmark; still off by default**, so no completed 2D number moves.
 
 ### 8.4 Bundle width — views per bundle (`--num_frames`, todo 2e, opened 2026-08-04)
 
@@ -879,6 +907,31 @@ question and is *not* answered here.
 
 **Cost.** 11 h 26 (9668639) vs 5 h 42 for the control, ~230 GB of feature cache, A100 80 GB.
 Roughly 2× the wall clock and 2× the host RAM for +0.027 bundle AP50 and −0.113 id_switch.
+
+#### Reading 4 — on the 3D ruler width pays, but LESS than `--anchor_3d` (2026-08-07)
+
+§8.3's lesson was that `bundle_AP50` at S=8 is a poor proxy for the 3D ruler, so both width
+checkpoints were scored there directly (jobs 9901143 / 9901663 / 9901664 / 9901665, val-312, 0
+failures, all knobs default). All rows 18-class, and class-agnostic in brackets (§9.11):
+
+| checkpoint | unposed | posed |
+|---|---|---|
+| control S=8 (9386666) | 0.023 / 0.067 / 0.268 [0.013 / 0.050 / 0.320] | 0.060 / 0.156 / 0.408 |
+| **S=16** (9668639) | 0.033 / 0.098 / 0.336 [0.023 / 0.080 / 0.391] | 0.083 / 0.216 / 0.488 [0.064 / 0.190 / 0.572] |
+| S=16, 20 ep (9668652) | 0.032 / 0.115 / 0.414 [0.029 / 0.104 / 0.458] | **0.088 / 0.260 / 0.572** [0.081 / 0.252 / 0.644] |
+| `--anchor_3d` S=8 (9634920) | **0.038 / 0.112 / 0.360** [**0.042 / 0.138 / 0.504**] | 0.104 / **0.257** / 0.504 |
+
+1. **Width pays on both bridges** — unposed AP50 0.067 → 0.098 (+46 %), posed 0.156 → 0.216
+   (+38 %). A second, independent mechanism confirming §9.10 reading 4: what moves this ruler is
+   multi-view identity, and both flags that buy identity buy 3D AP.
+2. **`--anchor_3d` still wins the unposed column** (0.112 vs 0.098 AP50; 0.138 vs 0.080
+   class-agnostic) at **half the wall clock and a 4090 instead of an A100**. The two have never
+   been combined — that run is the open question (todo 2f).
+3. **The 20-epoch model posts the best posed row in the project** (0.088 / 0.260 / 0.572) and the
+   best unposed AP25 outside `--anchor_3d`, but its class-agnostic column *loses* to its own
+   class-aware one, like every non-anchored checkpoint (§9.11).
+4. The posed re-run of 9668639 reproduced a pre-existing on-disk JSON exactly
+   (0.083 / 0.216 / 0.488) — the pipeline's determinism, re-confirmed on a second checkpoint.
 
 ## 9. The 3D ruler — official ScanNet 3D instance benchmark (docs/todo.md 1d, 2026-08-01)
 
@@ -1117,6 +1170,41 @@ All 312 scenes, 0 failures, 18-class metrics:
    §7.2.1 — and still short of FAST3DIS's 0.096. So the remaining gap is **not** a tuning
    artefact, which is the useful negative result here: it has to come from coverage (§todo 5b)
    and registration quality (5c), the two things the plateau in reading 1 points at.
+
+#### 9.8.1 The same sweep on the `--anchor_3d` checkpoint — reading 3 INVERTS (2026-08-07)
+
+Jobs 9901146/48/49/50/51/52, val-312, 0 failures. The §9.6 checkpoint's sweep above capped
+*below* FAST3DIS; re-run on the `--anchor_3d` checkpoint (§8.3) **every point of the grid is
+above it.** Same sensitivity-analysis caveat as §9.8 — swept on val, so the headline stays the
+defaults row — but the *comparison* claim no longer depends on which point you pick.
+
+| `--vote_radius` | `--depth_conf_percentile` | 18-class AP/AP50/AP25 | **class-agnostic** (§9.11) |
+|---|---|---|---|
+| **0.05 (default) — the headline** | **0 (default)** | 0.038 / 0.112 / 0.360 | **0.042 / 0.138 / 0.504** |
+| 0.10 | 0 | 0.047 / 0.142 / 0.395 | 0.052 / 0.171 / 0.545 |
+| **0.15** | **0** | 0.048 / **0.151** / **0.419** | **0.055 / 0.185 / 0.571** |
+| 0.10 | 25 | 0.047 / 0.136 / 0.381 | 0.051 / 0.168 / 0.518 |
+| 0.15 | 25 | **0.050** / 0.151 / 0.396 | 0.055 / 0.180 / 0.544 |
+| 0.20 | 25 | 0.050 / 0.151 / 0.403 | 0.055 / 0.178 / 0.548 |
+| default + `--eval_topk 600` | 0 | 0.038 / 0.111 / 0.357 | 0.043 / 0.140 / 0.502 |
+| FAST3DIS / IGGT (published, class-agnostic) | | — | 0.038 / 0.096 / 0.316 · 0.028 / 0.112 / 0.287 |
+
+1. **The whole grid leads the published unposed cluster.** The *worst* point is the default,
+   0.138 class-agnostic AP50 = 1.44× FAST3DIS's 0.096; the best is **0.055 / 0.185 / 0.571** =
+   1.45× / 1.93× / 1.81× on FAST3DIS and 1.96× / 1.65× / 1.99× on IGGT. This is the exact mirror
+   of §9.8 reading 3 and it retires that sentence for this checkpoint: **the lead is not a tuning
+   artefact, because there is no point in the grid that does not have it.**
+2. **The radius still saturates at 0.15 m** (0.151 AP50 at 0.15, 0.151 at 0.20) — same plateau,
+   same explanation, on a different checkpoint. That is now a property of the *lifting*, not of
+   one model.
+3. **The confidence filter's sign flipped.** On the §9.6 checkpoint 25 % was the interior optimum;
+   here it is neutral-to-negative (0.185 → 0.180 class-agnostic AP50 at radius 0.15, and it costs
+   AP25 0.571 → 0.544). Like the class-collapse sign (§9.11), this knob is **checkpoint-dependent**
+   — do not carry a tuned value across checkpoints, re-sweep it.
+4. **`--eval_topk` is not a lever — negative result.** Going 100 → 600 kept query-class pairs (the
+   count SegVGGT and FAST3DIS use, listed in §9.9 as one of the secondary differences favouring
+   them) moves nothing: 0.138 → 0.140 class-agnostic AP50. That difference is now measured and can
+   be struck from the list of explanations for the SegVGGT gap.
 
 **Looking at a `.ply` without MeshLab.** `scripts/view_ply.py <file>.ply` writes one
 self-contained HTML next to it — points, colours and a small WebGL viewer embedded, no CDN, no
@@ -1359,12 +1447,40 @@ like the *permissive* setting — a wrong label costs nothing — and for our sy
 |---|---|---|
 | defaults (§9.6) | 0.023 / 0.067 / 0.268 | **0.013 / 0.050 / 0.320** |
 | `--vote_radius 0.1 --depth_conf_percentile 25` | 0.029 / 0.083 / 0.305 | **0.017 / 0.060 / 0.334** |
+| **`--anchor_3d`, defaults (§8.3, job 9866391)** | 0.038 / 0.112 / 0.360 | **0.042 / 0.138 / 0.504** |
+| 〃 best sweep point (`--vote_radius 0.15`, §9.8.1) | 0.048 / 0.151 / 0.419 | **0.055 / 0.185 / 0.571** |
+| `--num_frames 16` (§8.4, job 9901143) | 0.033 / 0.098 / 0.336 | 0.023 / 0.080 / 0.391 |
+| `--num_frames 16`, 20 ep (job 9901664) | 0.032 / 0.115 / 0.414 | 0.029 / 0.104 / 0.458 |
 | FAST3DIS (published) | — | 0.038 / 0.096 / 0.316 |
 | IGGT (via FAST3DIS) | — | 0.028 / 0.112 / 0.287 |
 
-**AP25 goes up and crosses both published rows (0.334 vs 0.316 / 0.287); AP50 and AP go down and
-land ~1.6–2.2× behind.** That is the honest like-for-like statement, and it replaces §9.6's "in
-FAST3DIS's ballpark", which was comparing across settings.
+**The collapse's sign is `--anchor_3d`'s alone (measured 2026-08-07).** Of the four checkpoints
+now scored both ways, only the 3D-anchored one gains: 0.112 → 0.138. The §9.6 control loses
+(0.067 → 0.050), and so do both bundle-width checkpoints (0.098 → 0.080, 0.115 → 0.104). So this
+is not "wider bundles survive pooling" and not a property of the multi-frame recipe — it is
+specific to the mechanism that produces **fewer, cleaner, view-consistent instances** (9 % fewer
+kept queries at 16 % more voted vertices, §8.3), which is exactly what one instance-pooled
+ranking rewards and what duplicate/fragmented detections lose.
+
+On the **headline** checkpoint: AP25 goes up and crosses both published rows (0.334 vs 0.316 /
+0.287); AP50 and AP go down and land ~1.6–2.2× behind. That replaces §9.6's "in FAST3DIS's
+ballpark", which was comparing across settings.
+
+**On the `--anchor_3d` checkpoint the collapse goes the other way, and the result is the strongest
+row in this project (job 9866391, 2026-08-06, 312 scenes, 0 failures, all lifting knobs at
+defaults).** 0.038 / 0.112 / 0.360 class-aware → **0.042 / 0.138 / 0.504 class-agnostic** — i.e.
+**like-for-like it exceeds FAST3DIS (0.038 / 0.096 / 0.316) and IGGT (0.028 / 0.112 / 0.287) on
+all three metrics**, on a strictly frozen backbone against their LoRA-adapted ones, with ~17
+views/scene against FAST3DIS's 50, and untuned. This falsified the prediction recorded in todo 1e
+("expect the claim to weaken"): the sign of the collapse is **checkpoint-dependent**, not a
+property of the setting. Why it flips — the collapse costs a head whose class-aware mean is
+carried by one rare class and gains a head whose *instances* are cleaner: `--anchor_3d` keeps 9 %
+fewer, more view-consistent queries (§8.3), so the pooled ranking it produces is less polluted by
+duplicate/fragmented detections, which is exactly what instance-pooled AP punishes.
+
+Carry three caveats with the claim: single run against a single control; `otherfurniture` and the
+frame-coverage handicaps still apply (they cost the class-aware column, not this one); and the
+comparison is still unposed-protocol only (§9.10).
 
 *Why the collapse costs us.* It swaps a mean over 18 classes for one instance-pooled ranking. Our
 per-class table (tuned row) is carried by rare distinctive classes — toilet **0.508** AP50 at

@@ -227,12 +227,37 @@ FAST3DIS's are the same quantity), so the difference is the **setting**, not the
 |---|---|---|
 | ours, defaults | 0.023 / 0.067 / 0.268 | **0.013 / 0.050 / 0.320** |
 | ours, tuned lifting knobs | 0.029 / 0.083 / 0.305 | **0.017 / 0.060 / 0.334** |
+| **ours, `--anchor_3d`, untuned** (job 9866391) | 0.038 / 0.112 / 0.360 | **0.042 / 0.138 / 0.504** |
+| 〃 best lifting knob (`--vote_radius 0.15`, sensitivity) | 0.048 / 0.151 / 0.419 | **0.055 / 0.185 / 0.571** |
+| ours, `--num_frames 16` (job 9901143) | 0.033 / 0.098 / 0.336 | 0.023 / 0.080 / 0.391 |
+| ours, `--num_frames 16`, 20 ep (job 9901664) | 0.032 / 0.115 / 0.414 | 0.029 / 0.104 / 0.458 |
 | FAST3DIS (published) | — | 0.038 / 0.096 / 0.316 |
 | IGGT (via FAST3DIS) | — | 0.028 / 0.112 / 0.287 |
 
-**Read it as: like-for-like we LEAD on AP25 (0.334 vs 0.316 and 0.287) and TRAIL ~1.6–2.2× on
-AP50 and AP.** The earlier "in FAST3DIS's ballpark on AP and AP50" reading was an artefact of
-comparing across settings and is struck; the AP25 statement survives and in fact strengthens.
+**Read it as, on the headline checkpoint: like-for-like we LEAD on AP25 (0.334 vs 0.316 and
+0.287) and TRAIL ~1.6–2.2× on AP50 and AP.** The earlier "in FAST3DIS's ballpark on AP and AP50"
+reading was an artefact of comparing across settings and is struck.
+
+**On the `--anchor_3d` checkpoint the collapse goes the other way and the row leads outright
+(2026-08-06, job 9866391, todo 1e CLOSED): 0.042 / 0.138 / 0.504 vs FAST3DIS's 0.038 / 0.096 /
+0.316 and IGGT's 0.028 / 0.112 / 0.287 — ahead on all three, on a strictly frozen backbone,
+untuned, at ~17 views/scene against FAST3DIS's 50.** This is the strongest publishable row in the
+project. The sign of the class-collapse is **checkpoint-dependent**, not a property of the
+setting: it costs a head whose class-aware mean leans on one rare class (toilet 0.508) and pays a
+head whose instances are fewer and more view-consistent. Measured on four checkpoints
+(2026-08-07), **only `--anchor_3d` gains** — the control and both bundle-width runs lose — so it
+tracks that mechanism, not the multi-frame recipe. Carry one caveat: unposed protocol only (§5.1).
+
+**And the lead is not a tuning artefact — the whole knob grid has it** (docs/MASKDINO.md §9.8.1,
+jobs 9901146–52). Re-sweeping the two lifting knobs on this checkpoint spans 0.138 → **0.185**
+class-agnostic AP50; the *worst* point is the untuned default and is still 1.44× FAST3DIS's 0.096,
+the best is **0.055 / 0.185 / 0.571** = 1.45× / 1.93× / 1.81× on FAST3DIS and 1.96× / 1.65× /
+1.99× on IGGT. This exactly inverts §9.8's earlier finding on the previous checkpoint, where the
+whole grid stayed *below* 0.096. The sweep runs on val-312, so it stays a **sensitivity analysis
+and the headline remains the defaults row** — but the comparison claim no longer depends on which
+point is picked. Also measured there: `--eval_topk` 100 → 600 (the count SegVGGT and FAST3DIS use)
+is **neutral**, 0.138 → 0.140, which strikes one item off the list of explanations for the
+SegVGGT gap.
 Collapsing the labels *lowers* our AP and AP50 rather than raising them, because it replaces the
 per-class mean — carried by rare, distinctive classes (toilet 0.508 AP50 for 1/18 of the mean,
 sink and refrigerator 0.173) — with one instance-pooled ranking dominated by the numerous weak
@@ -249,9 +274,10 @@ headroom is unexplored on it). Three honesty notes that must travel with that se
 **single run against a single control**; the structural handicaps above (`otherfurniture`,
 ~17 frames/scene against SegVGGT's 75–100) still apply; and (2026-08-06) **their column is
 class-agnostic and ours is class-aware**, so "exceeds FAST3DIS" is a cross-setting statement.
-On the headline checkpoint the collapse *cost* 0.083 → 0.060 AP50, so this row's class-agnostic
-number is very likely below FAST3DIS's 0.096 too — **do not make the "exceeds" claim outward
-until job 9866391 lands it** (todo 1e). The comparison to SegVGGT below is
+**Job 9866391 has since landed the class-agnostic column for this row and the claim SURVIVES:
+0.042 / 0.138 / 0.504, ahead of FAST3DIS and IGGT on all three** (table above). The earlier
+expectation that it would weaken — reasoning from the headline checkpoint's 0.083 → 0.060 loss —
+was wrong. The comparison to SegVGGT below is
 unchanged, because its protocol difference is unaffected by which checkpoint we bring. SegVGGT's much higher number is
 **not a like-for-like gap**: it is scored under posed transfer, where GT poses, intrinsics and
 sensor depth carry the masks onto the point cloud with no geometry error at all, so it measures
@@ -302,6 +328,10 @@ exactly as the Sim(3)+ICP does in the unposed block.
 | **posed** (job 9607206) | 〃 (identical file) | **0.060 / 0.156 / 0.408** | 0.064 / 0.166 / 0.432 | **0.342 / 0.791** |
 | unposed, `--anchor_3d` (job 9670882) | 1201-train + 3D anchors | **0.038 / 0.112 / 0.360** | 0.040 / 0.119 / 0.381 | 0.177 / 0.666 |
 | posed, `--anchor_3d` (job 9670883) | 〃 (identical file) | **0.104 / 0.257 / 0.504** | 0.110 / 0.273 / 0.534 | 0.404 / 0.821 |
+| unposed, `--num_frames 16` (job 9901143) | 1201-train, S=16 | 0.033 / 0.098 / 0.336 | 0.035 / 0.104 / 0.356 | — |
+| posed, `--num_frames 16` (job 9901663) | 〃 (identical file) | 0.083 / 0.216 / 0.488 | 0.088 / 0.229 / 0.517 | — |
+| unposed, S=16 20 ep (job 9901664) | 1201-train, S=16, 20 ep | 0.032 / 0.115 / 0.414 | 0.034 / 0.122 / 0.438 | — |
+| **posed, S=16 20 ep** (job 9901665) | 〃 (identical file) | **0.088 / 0.260 / 0.572** | 0.093 / 0.276 / 0.605 | — |
 | — *oracle ceiling of the posed row* (job 9607210) | GT rendered back through the bridge | 0.828 / 0.948 / 0.974 | — | — / 0.906 |
 | SegVGGT (published) | 1201-train, LoRA-adapted VGGT | 0.504 / 0.717 / 0.870 | — | — |
 
@@ -333,6 +363,12 @@ Three things to carry when quoting this block:
    for this ruler** — score any cross-view-identity mechanism here before judging it. Because both
    blocks move by the same factor, the 2.3× bridge cost of reading 1 is unchanged, and so is the
    ceiling it puts on todo 5b/5c (now ~0.257 rather than 0.156).
+5. **Bundle width moves both blocks too, but less** (2026-08-07, docs/MASKDINO.md §8.4 reading 4):
+   unposed 0.067 → 0.098 (+46 %), posed 0.156 → 0.216 (+38 %). A second, independent mechanism
+   confirming reading 4 — what this ruler responds to is multi-view identity, and both flags that
+   buy identity buy 3D AP. `--anchor_3d` still wins the unposed column (0.112 vs 0.098) at half
+   the wall clock and on a 4090 rather than an A100. The 20-epoch width run posts the best posed
+   row anywhere (0.088 / 0.260 / 0.572). The two flags have never been combined — todo 2f.
 
 ## 6. Official 1201/312 split — first runs (2026-08-02)
 
@@ -364,6 +400,27 @@ steps (~ the N=490 recipe budget of 29.4k), warmup 2, eval every epoch on all 31
 | 〃 | per-bundle (val pinned to 8 views) | 0.541 | 0.544 | 0.331 | 0.324 |
 | … S=16, b2, 20 ep (9668652) | per-frame | 0.627 | **0.669** | 0.476 | 0.453 |
 | 〃 | per-bundle — **16-view ruler, not comparable** | 0.561 | 0.594 | 0.356 | 0.351 |
+| … `--seed 1` replicate of the control (9901125) | per-bundle | 0.542 | 0.534 | — | — |
+| … `--seed 1` replicate of `--anchor_3d` (9901124) | per-bundle | 0.531 | 0.536 | — | — |
+
+### 6.1 Seed variance — the number every Δ in this file must be read against (2026-08-07)
+
+Every row in §2, §3 and §6 was a single run. Both arms of the `--anchor_3d` comparison were
+re-trained with `--seed 1`, nothing else changed (docs/MASKDINO.md §8.3):
+
+| run | per-frame AP50 | per-bundle AP50 | `bundle_id_switch` ↓ | `view_consistency` ↑ |
+|---|---|---|---|---|
+| control, seed 0 (9386666) | 0.6491 | 0.5249 | 0.4982 | 0.7167 |
+| control, seed 1 (9901125) | 0.6505 | 0.5342 | 0.4710 | 0.7173 |
+| `--anchor_3d`, seed 0 (9634920) | 0.6408 | 0.5271 | 0.4088 | 0.7229 |
+| `--anchor_3d`, seed 1 (9901124) | 0.6466 | 0.5362 | 0.4074 | 0.7279 |
+
+**Seed-to-seed spread on per-bundle AP50 ≈ 0.009 in both arms.** Consequences: the large effects
+in §3 (cross-frame attention 0.183, bundle features 0.147) and §6 (bundle width 0.027) are 3–20×
+that spread and stand; the 3D-anchor per-bundle delta (+0.002) sits *inside* it, so **"AP-neutral"
+is now a measured claim rather than an absence of evidence**. The identity effect replicates with
+the same sign in both seeds (`id_switch` −0.089 and −0.064, 2.4–3.3× the control arm's own
+spread), and so does the small per-frame cost.
 
 **Bundle width 8 → 16 (todo 2e, docs/MASKDINO.md §8.4).** `--num_frames` is how many views share
 one query set, and it had never moved off 8 while the 3D ruler runs the head at S ≈ 17.4. New

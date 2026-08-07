@@ -252,14 +252,21 @@ released code: `docs/RELATED_WORK.md`, "Two 3D protocols"; `docs/MASKDINO.md` §
 | **ours** | **VGGT, strictly frozen** | **unposed** | class-aware (18) | **0.023** | **0.067** | **0.268** |
 | ours, tuned lifting knobs | 〃 | unposed | class-aware (18) | 0.029 | 0.083 | 0.305 |
 | **ours, scored FAST3DIS's way** | 〃 | unposed | **class-agnostic** | **0.017** | **0.060** | **0.334** |
+| **ours, `--anchor_3d`, scored FAST3DIS's way** | **VGGT, strictly frozen** | **unposed** | **class-agnostic** | **0.042** | **0.138** | **0.504** |
+| 〃 best lifting knob (sensitivity, not the headline) | 〃 | unposed | class-agnostic | 0.055 | 0.185 | 0.571 |
 | **ours, run under SegVGGT's own protocol** | **VGGT, strictly frozen** | **posed** | class-aware (18) | **0.060** | **0.156** | **0.408** |
 | SegVGGT (published) | VGGT, **LoRA-adapted** | **posed** | class-aware (18) | 0.504 | 0.717 | 0.870 |
 
-**Among the methods scored the same way as us we are in FAST3DIS's ballpark, while never touching
-the backbone; SegVGGT's much larger number comes from a protocol in which the 2D→3D step is
-error-free by construction.** Both statements belong in any honest summary, and neither should be
-replaced by "they are an order of magnitude ahead" — that framing compares across protocols. The
-tuned row's two knobs were selected on an earlier (leaky) diagnostic run, so the plain row is the
+**The headline sentence, as of 2026-08-07: scored exactly the way FAST3DIS and IGGT score
+themselves, our 3D-anchored checkpoint leads both on all three metrics — 0.042 / 0.138 / 0.504
+against 0.038 / 0.096 / 0.316 and 0.028 / 0.112 / 0.287 — with a strictly frozen backbone against
+their LoRA-adapted ones, ~17 views per scene against FAST3DIS's 50, and no tuning of the lifting
+step.** Two supports it needs and now has: re-sweeping the lifting knobs spans 0.138 → 0.185 and
+*every* point of the grid still leads, so this is not a tuning artefact; and re-training both arms
+at a second seed puts per-bundle AP50 spread at ±0.009, so the 2D side is not seed noise either.
+SegVGGT's much larger number comes from a protocol in which the 2D→3D step is error-free by
+construction — never replace that with "they are an order of magnitude ahead", which compares
+across protocols. The tuned row's two knobs were selected on an earlier (leaky) diagnostic run, so the plain row is the
 headline.
 
 **A second axis, added 2026-08-06 after re-reading both papers.** FAST3DIS and IGGT are scored
@@ -275,7 +282,9 @@ like we are **ahead of both published rows on AP25** (0.334 vs FAST3DIS 0.316 an
 mean over 18 classes, which our rare distinctive classes carry (toilet 0.508 AP50 at 1/18 weight),
 with one instance-pooled ranking dominated by the numerous weak classes and by `otherfurniture`,
 which our 19-class head cannot predict at all. So "in FAST3DIS's ballpark" holds at loose IoU and
-not at strict IoU; that is the sentence to use.
+not at strict IoU — **for this checkpoint.** On the `--anchor_3d` checkpoint (the row above, and
+the one to quote) the collapse goes the other way and we lead on all three, so that sentence
+describes the §9.6 model only and must not be carried to the headline row.
 Two further provenance facts: IGGT's own paper (arXiv 2510.22706) reports **no ScanNet AP** — only
 tracking, reconstruction and open-vocabulary semantics over 10 scenes × 8–10 images; and SegVGGT
 states its posed bridge in the paper itself (*"we utilize the ground-truth depth maps and camera
@@ -313,10 +322,13 @@ Two findings worth carrying:
    diagnostics say why — median camera-centre error after alignment is 0.14 m — and only ~16 %
    of mesh vertices receive any vote. An 8-point sweep of the two lifting hyper-parameters moves
    AP50 from 0.067 to 0.091, more than any decoder ablation in §2 is worth, and the voting
-   radius stops helping exactly at 0.15 m — the size of the registration error. But the whole
-   sweep stays below FAST3DIS's 0.096, so **the gap is not a tuning artefact**: it is coverage
-   and registration quality, which is where the next effort belongs. This is the price of the
-   "no ground-truth geometry at inference" design, and it is now quantified rather than assumed.
+   radius stops helping exactly at 0.15 m — the size of the registration error. This is the price
+   of the "no ground-truth geometry at inference" design, and it is now quantified rather than
+   assumed. **Amended 2026-08-07:** re-swept on the 3D-anchored checkpoint the same two knobs are
+   worth more (class-agnostic AP50 0.138 → 0.185) and the whole grid sits *above* FAST3DIS rather
+   than below it, so "the gap is not a tuning artefact" describes the earlier checkpoint only.
+   The knobs are checkpoint-dependent — one of them even flips sign — so they must be re-swept per
+   checkpoint rather than carried across. Coverage and registration remain the structural limit.
 
 Details, per-class tables and reproduction: `docs/MASKDINO.md` §9, `docs/RESULTS.md` §5.
 

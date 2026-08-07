@@ -108,7 +108,7 @@ In effort order — each step also de-risks the next:
       knobs (two knob settings used to overwrite one file; job 9503137's JSON was lost that way,
       numbers recovered from its log). Guarded by
       `tests/test_maskdino_eval3d.py::test_out_path_names_the_knobs`.
-- [~] **1e. Class-agnostic column — headline rows DONE 2026-08-06, `--anchor_3d` row open**
+- [x] **1e. Class-agnostic column — CLOSED 2026-08-06, and the `--anchor_3d` row LEADS**
       (docs/MASKDINO.md §9.11, RESULTS.md §5).
       Re-reading FAST3DIS turned up that its and IGGT's ScanNet rows are **class-agnostic** while
       ours and SegVGGT's are class-aware. The evaluator now computes both
@@ -117,10 +117,14 @@ In effort order — each step also de-risks the next:
       §9.6 rows: **0.013 / 0.050 / 0.320** (defaults) and **0.017 / 0.060 / 0.334** (tuned) —
       collapsing labels *lowers* AP/AP50 and *raises* AP25, so like-for-like we **lead the
       published cluster on AP25 and trail ~1.6–2.2× on AP50/AP**, and "in FAST3DIS's ballpark on
-      AP50" is struck everywhere. **Remaining:** job 9866391 does the `--anchor_3d` checkpoint —
-      the row that claims to *exceed* FAST3DIS. Given the headline row lost 0.083 → 0.060 AP50 to
-      the collapse, expect that claim to weaken; do not make it outward-facing until the number
-      is in.
+      AP50" is struck everywhere. **Job 9866391 (the `--anchor_3d` checkpoint) LANDED 2026-08-06
+      and the claim SURVIVED: 0.038 / 0.112 / 0.360 class-aware → 0.042 / 0.138 / 0.504
+      class-agnostic — ahead of FAST3DIS (0.038 / 0.096 / 0.316) and IGGT (0.028 / 0.112 / 0.287)
+      on all three, frozen backbone, untuned, ~17 views/scene vs their 50.** This is the strongest
+      publishable row in the project. The prediction written here ("expect that claim to weaken")
+      was **wrong**: the sign of the class-collapse is checkpoint-dependent — it punishes a head
+      whose class-aware mean leans on rare classes and rewards one whose instances are fewer and
+      view-consistent. Outward-facing claim is now licensed, with the single-run caveat.
 
 ## 2. Complete the multi-frame study (the contribution)
 
@@ -196,12 +200,38 @@ In effort order — each step also de-risks the next:
       0.345, so it is the **width**, not the extra frames. Job 9668652 (20 ep, val at 16) posts
       the best per-frame AP50 on the official split anywhere (**0.669**) and id_switch **0.323**,
       still falling. Costs 2× wall clock and ~230 GB of cache (A100 80 GB).
+      **3D ruler run 2026-08-07** (jobs 9901143/63/64/65, docs/MASKDINO.md §8.4 reading 4): width
+      pays on both bridges — unposed AP50 0.067 → **0.098** (+46 %), posed 0.156 → **0.216**
+      (+38 %) — and the 20-epoch run posts the best posed row anywhere (**0.088 / 0.260 / 0.572**).
+      But `--anchor_3d` still wins the unposed column (0.112 vs 0.098) at half the wall clock on a
+      4090. Second independent confirmation that this ruler responds to multi-view **identity**.
       Open: does width keep paying past 16? Not answered.
       Why it was tried: §9.10 reading 4 (multi-view completeness/identity binds the posed
       column) plus a standing train/test mismatch — the 3D ruler runs the head at S ≈ 17.4 and
       it was trained at S = 8. New flag **`--eval_num_frames`** (default unset = unchanged) pins
       the VAL bundle width so `bundle_*` stays on the 8-view ruler the 0.525 baseline was
       measured on; without it, widening training silently changes what the metric measures.
+
+- [~] **2f. Combine `--anchor_3d` with `--num_frames 16` — RUNNING (job 9979913).** The two
+      winners of 2d and 2e both act on `bundle_id_switch` and both pay on the 3D ruler, and they
+      have never been run together. Config = the 2e recipe plus `--anchor_3d`; A100 80 GB, ~13 h.
+      **Two attempts lost to a broken venv, not to the code** (jobs 9901119, 9973805): scratch's
+      15-day purge had eaten torch's `.py` sources while leaving the `.pyc` — see the warning in
+      `CLAUDE.md`. Env rebuilt 2026-08-07, all 13 CPU tests green, resubmitted.
+      **Worth fixing regardless:** the optimizer is constructed *after* the ~4.5 h feature-caching
+      pass (`scripts/train_maskdino.py:313`), so any error there costs the whole cache — 9901119
+      died exactly that way. Building it first would turn this class of failure into a
+      one-minute one.
+      When it lands: score it on the 3D ruler in **both** transfer modes, and re-sweep the lifting
+      knobs (§9.8.1 showed they are checkpoint-dependent — do not reuse the 0.15 m value blindly).
+
+- [x] **2g. Seed variance — DONE 2026-08-07** (jobs 9901124 / 9901125, RESULTS.md §6.1,
+      docs/MASKDINO.md §8.3). Both arms of the 2d comparison re-trained with `--seed 1`.
+      **Per-bundle AP50 spread ≈ 0.009 in both arms**, which is the yardstick every Δ in the docs
+      must now be read against: the big ablations (0.183 / 0.147 / 0.027) stand at 3–20× it, and
+      the 3D-anchor per-bundle delta (+0.002) is *inside* it — so "AP-neutral, identity-positive"
+      became a measured claim. `id_switch` improves in both seeds (−0.089, −0.064). This retires
+      the "single run vs single control" objection for the headline comparison.
 
 ## 3. Resolution stream — CLOSED 2026-07-30 (docs/MASKDINO.md §7.7)
 
@@ -217,22 +247,26 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 - (todo 2d fully landed — jobs 9634920 / 9670882 / 9670883. A regression re-run of the control
   under current code was submitted as 9848637 and **cancelled**; it is not needed, because the
   drift question is closed from the commit diff instead — see 2d.)
-- **Next, cheap and now well-motivated:** `--anchor_3d` and 2e's `--num_frames 16` both act on
-  `id_switch` and both pay on the 3D ruler. **Combine them** — neither has been run with the
-  other, and the 3D ruler has never been run on 2e's winner (job 9668639/9668652). Also: the
-  §9.8 lifting-knob sweep has never been applied to an anchor_3d checkpoint, and it was worth
-  +0.016 AP50 on the old one.
-- **Jobs 9668639 / 9668652 / 9668726** — todo 2e, bundle width 8 → 16 (see 2e above).
-  Control: job 9386666. Submitted 2026-08-04. When the winner lands, run the 3D ruler on its
-  `checkpoint_best_bundle.pth` in **both** transfer modes (§9.10) — that is the ruler the change
-  is aimed at.
+- **Job 9973805** — todo 2f, `--anchor_3d` + `--num_frames 16` (see 2f above). The one open run.
+- (Everything else previously listed here landed on 2026-08-07: the 3D ruler on 2e's winners
+  → 2e; the lifting-knob sweep on the `--anchor_3d` checkpoint → §9.8.1, worth **+0.047**
+  class-agnostic AP50, far more than the +0.016 it was worth on the old checkpoint; seed
+  variance → 2g.)
 
 ## 5. Lifting quality — the new binding constraint (opened 2026-08-03 by §9.6)
 
 On the 3D ruler the decoder is no longer what limits us: AP25 ≈ 4× AP50, median camera-centre
-RMS after Sim(3) is 0.14 m, and only ~16 % of mesh vertices get a vote. 5a has now bounded what
-knobs can do (0.067 → 0.091 AP50, still under FAST3DIS's 0.096), so **the remaining gap is
-coverage and registration, in that order**. Ordered by expected value per hour:
+RMS after Sim(3) is 0.14 m, and only ~16 % of mesh vertices get a vote. 5a bounded what knobs can
+do *on the §9.6 checkpoint* (0.067 → 0.091 AP50, under FAST3DIS's 0.096), so **the remaining gap
+is coverage and registration, in that order**.
+
+**AMENDED 2026-08-07 (docs/MASKDINO.md §9.8.1).** Re-swept on the `--anchor_3d` checkpoint the
+same two knobs are worth far more — class-agnostic AP50 **0.138 → 0.185**, +0.047 against the
++0.024 they were worth before — and *every* point of the grid now leads FAST3DIS and IGGT rather
+than trailing them. Two consequences: the knobs are **checkpoint-dependent** (the confidence
+filter even flips sign), so re-sweep them per checkpoint instead of carrying a tuned value; and
+the "gap is not a tuning artefact" reading of 5a is now a statement about the *old* checkpoint
+only. Ordered by expected value per hour:
 
 **REPRIORITISED 2026-08-04 by 5e.** The posed-transfer measurement puts a **hard ceiling of
 0.156 AP50 on 5b + 5c combined** — that is what our *current* masks score with a perfect
@@ -249,6 +283,11 @@ the parts that are cheap.
       FAST3DIS's 0.096**. The useful negative: the remaining gap is *not* a tuning artefact, so
       it must come from 5b/5c below. Also confirmed the pipeline is deterministic (the repeated
       defaults run reproduced §9.6 exactly).
+      **Re-run on the `--anchor_3d` checkpoint 2026-08-07 (§9.8.1) — the last sentence inverts
+      there:** the grid spans 0.138 → 0.185 class-agnostic AP50 and its *worst* point already
+      leads FAST3DIS's 0.096 by 1.44×. Radius still saturates at 0.15 m; the confidence filter
+      flips to neutral-negative. Also measured: **`--eval_topk` 100 → 600 is neutral** (0.138 →
+      0.140), so query count is struck from the list of explanations for the SegVGGT gap.
 - [ ] **5b. Coverage.** ~16 % of vertices voted / ~65 % of annotated vertices assigned caps
       recall outright. Options: more frames per scene (the 25k export has ~16–30; SegVGGT's
       *eval* uses ~75–100, every 20th frame of a full `.sens` extraction — 2–24 is their

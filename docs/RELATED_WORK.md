@@ -100,12 +100,26 @@ the intuition** that class-agnostic is simply the easier setting:
 |---|---|---|
 | defaults | 0.023 / 0.067 / 0.268 | **0.013 / 0.050 / 0.320** |
 | tuned lifting knobs | 0.029 / 0.083 / 0.305 | **0.017 / 0.060 / 0.334** |
+| **`--anchor_3d`, untuned** (job 9866391) | 0.038 / 0.112 / 0.360 | **0.042 / 0.138 / 0.504** |
+| 〃 best lifting knob (sensitivity, not the headline) | 0.048 / 0.151 / 0.419 | **0.055 / 0.185 / 0.571** |
 | FAST3DIS (published) | — | 0.038 / 0.096 / 0.316 |
 | IGGT (via FAST3DIS) | — | 0.028 / 0.112 / 0.287 |
 
-**The like-for-like verdict: we lead the published cluster on AP25 (0.334 vs 0.316 and 0.287) and
-trail it ~1.6–2.2× on AP50 and AP.** Say exactly that. The class-aware "in FAST3DIS's ballpark"
-line was flattering us on AP/AP50 through a metric difference, and must not be repeated.
+**The like-for-like verdict, per checkpoint.** On the headline checkpoint we lead the published
+cluster on AP25 (0.334 vs 0.316 and 0.287) and trail ~1.6–2.2× on AP50 and AP — the class-aware
+"in FAST3DIS's ballpark" line was flattering us through a setting difference and must not be
+repeated. **On the `--anchor_3d` checkpoint (2026-08-06) we lead on all three: 0.042 / 0.138 /
+0.504.** That is the row to quote against this cluster — frozen backbone, untuned lifting, ~17
+views to FAST3DIS's 50.
+
+Two things settled 2026-08-07 that this claim needed. **(a) It is not a tuning artefact**: the
+full lifting-knob grid on that checkpoint spans 0.138 → 0.185 class-agnostic AP50 and its *worst*
+point is the untuned default, already 1.44× FAST3DIS (docs/MASKDINO.md §9.8.1). Quote the default
+row — the sweep is on val — but the lead survives any choice within it. **(b) It is not seed
+noise on the 2D side**: both arms re-trained at `--seed 1` put per-bundle AP50 spread at ±0.009,
+with the `id_switch` effect replicating in sign and magnitude (RESULTS.md §6.1). One caveat still
+travels: `--eval_topk` 600 (their query budget) is **neutral** for us, so that difference is
+measured and cannot be offered as an excuse in either direction.
 
 *Why the drop.* Class-agnostic replaces a per-class mean with one instance-pooled ranking. Our
 class-aware mean is carried by rare, distinctive classes — toilet alone scores 0.508 AP50 for

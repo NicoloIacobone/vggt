@@ -38,7 +38,19 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
 
 ## Environment & core commands
 
-A virtualenv lives in-repo at `myenv/` — use `myenv/bin/python`. Runs on a GPU cluster node;
+A virtualenv lives in-repo at `myenv/` — use `myenv/bin/python`.
+
+> ⚠ **`myenv/` is on scratch, and scratch purges files 15 days after last access — it destroyed
+> the venv on 2026-08-07.** Python imports read `__pycache__/*.pyc` and never touch the `.py`
+> source, so the sources' atime goes stale, the purge deletes them, and the *still-present* `.pyc`
+> then fails to validate. Symptom: `ModuleNotFoundError: No module named 'torch._vendor...'` or
+> `module 'torch._dynamo' has no attribute 'disable'` — a torch that imports partially, in a tree
+> with far fewer `.py` than `.pyc`. Diagnose with
+> `find myenv -name '*.py' | wc -l` vs `-name '*.pyc' | wc -l`. Rebuilding it on scratch just
+> restarts the 15-day clock; `$HOME` is not purged and has room. `requirements.txt` pins
+> torch 2.3.1 / torchvision 0.18.1.
+
+Runs on a GPU cluster node;
 matplotlib must stay headless (`Agg`). SLURM logs go to `slurm/logs/` (gitignored) — never let them
 accumulate in the repo root.
 

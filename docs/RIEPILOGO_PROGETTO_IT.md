@@ -65,7 +65,9 @@ letteratura, e va letto sapendo che i numeri pubblicati sono **due protocolli di
 |---|---|---|---|
 | noi, default | 0.023 / 0.067 / 0.268 | unposed (geometria predetta da VGGT) | class-aware (18) |
 | **noi, scoring class-agnostic** (manopole tarate) | **0.017 / 0.060 / 0.334** | unposed | **class-agnostic — l'unica riga confrontabile con le due qui sotto** |
-| noi, `--anchor_3d` | **0.038 / 0.112 / 0.360** | unposed | class-aware (18) — versione class-agnostic in corso |
+| noi, `--anchor_3d` | 0.038 / 0.112 / 0.360 | unposed | class-aware (18) |
+| **noi, `--anchor_3d`, scoring class-agnostic** | **0.042 / 0.138 / 0.504** | unposed | **class-agnostic — la riga da citare, davanti a entrambi i competitor su tutte e tre** |
+| 〃 con la manopola di lifting migliore (sensibilità, non headline) | 0.055 / 0.185 / 0.571 | unposed | class-agnostic |
 | FAST3DIS (pubblicato, backbone LoRA), 50 viste | 0.038 / 0.096 / 0.316 | unposed | **class-agnostic** |
 | IGGT, **ri-valutato da FAST3DIS** (50 viste) | 0.028 / 0.112 / 0.287 | unposed | **class-agnostic** |
 | noi, posed (`--transfer_mode gt_projection`) | 0.060 / 0.156 / 0.408 | posed (pose + depth GT) | class-aware (18) |
@@ -83,6 +85,17 @@ Due precisazioni di provenienza, verificate sui paper il 2026-08-06:
   perché sostituisce la media su 18 classi — che da noi è retta da classi rare e distintive
   (toilet 0.508 AP50, che pesa 1/18) — con un unico ranking dominato dalle classi numerose e
   deboli (sedie 0.053) e da `otherfurniture`, che la nostra testa a 19 classi non predice (0.000).
+- **Sul checkpoint `--anchor_3d` il collasso va nella direzione opposta e la riga passa in testa**
+  (job 9866391): 0.112 → **0.138** AP50 class-agnostic, cioè **0.042 / 0.138 / 0.504 contro
+  0.038 / 0.096 / 0.316 di FAST3DIS e 0.028 / 0.112 / 0.287 di IGGT — davanti su tutte e tre**,
+  con backbone **congelato** contro i loro LoRA e ~17 viste per scena contro le 50 di FAST3DIS.
+  Il segno del collasso dipende dal **checkpoint**, non dal setting: penalizza una testa la cui
+  media per-classe poggia su classi rare e premia una testa con istanze meno numerose e più
+  coerenti fra le viste. Misurato su quattro checkpoint (2026-08-07), **solo `--anchor_3d`
+  guadagna**. Due verifiche che la claim richiedeva e che ora ha: ri-facendo lo sweep delle
+  manopole di lifting la griglia va da 0.138 a 0.185 e **ogni suo punto resta davanti**, quindi
+  non è un artefatto di tuning; e ri-allenando i due bracci con un secondo seed la dispersione su
+  per-bundle AP50 è **±0.009**, quindi nemmeno rumore da seed.
 - **Il numero di IGGT non viene dal paper di IGGT**, che su ScanNet non riporta nessun AP (solo
   tracking, ricostruzione e semantica open-vocab, su 10 scene × 8–10 immagini). È la
   ri-valutazione fatta da FAST3DIS.
