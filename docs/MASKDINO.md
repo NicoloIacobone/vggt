@@ -24,10 +24,12 @@ split and scored by the vendored official evaluator on val-312, the multi-frame 
 columns are class-agnostic and ours is class-aware; scored their way this checkpoint is 0.017 /
 0.060 / 0.334, i.e. ahead on AP25 and ~1.6–2.2× behind on AP50/AP** (§9.11 — read it before
 quoting "ballpark"). **The `--anchor_3d` checkpoint (§8.3) is the strongest row: class-agnostic
-0.042 / 0.138 / 0.504, ahead of FAST3DIS and IGGT on all three, untuned** (job 9866391, §9.11) —
+0.042 / 0.138 / 0.504 — lead on AP50/AP25, lead IGGT on AP, TIE FAST3DIS on AP, untuned**
+(job 9866391, §9.11; replicated at seed 1, 0.039 / 0.129 / 0.485, job 9979100) —
 and re-sweeping its lifting knobs reaches **0.055 / 0.185 / 0.571** with *every* point of the grid
-still ahead, so the lead is not a tuning artefact (§9.8.1). **Seed variance is now measured**
-(§8.3, per-bundle AP50 ±0.009), which is the yardstick every Δ in this document should be read
+still ahead, so the lead is not a tuning artefact (§9.8.1). **Seed variance is now measured on
+both rulers** (§8.3: per-bundle AP50 ±0.009 *and* class-agnostic 3D AP50 ±0.009, effect ~9×
+that), which is the yardstick every Δ in this document should be read
 against. SegVGGT's 0.504 / 0.717 / 0.870 is **a different protocol** (§9.9): its
 evaluator transfers masks with ScanNet's GT poses and sensor depth, so it measures 2D mask
 quality alone where ours measures 2D mask quality times predicted geometry. **Measured, that
@@ -816,6 +818,43 @@ is now a measured statement, not an absence of evidence.**
 **0.064** (seed 1) — same sign, both 2.4–3.3× the control arm's own seed spread (0.027). Ditto
 `view_consistency`, up in both. The per-frame cost also replicates (−0.008 / −0.004).
 
+#### …and so does the 3D result (2026-08-07, jobs 9979100 / 9979101)
+
+The 2D replication above left the *3D* claim resting on one run against one control — the
+weakness that mattered most, since the 3D ruler is the only protocol placeable next to published
+work. Both seed-1 checkpoints were then scored on it, defaults, 312 scenes, 0 failures, **17.42
+frames/scene in all four runs**:
+
+| run | 18-class AP / AP50 / AP25 | **class-agnostic** | kept queries | voted vertices |
+|---|---|---|---|---|
+| control, seed 0 (9861563) | 0.023 / 0.067 / 0.268 | 0.013 / 0.050 / 0.320 | 97.6 | 0.153 |
+| control, seed 1 (**9979101**) | 0.025 / 0.075 / 0.313 | 0.016 / 0.059 / 0.348 | 97.8 | 0.147 |
+| `--anchor_3d`, seed 0 (9866391) | 0.038 / 0.112 / 0.360 | **0.042 / 0.138 / 0.504** | 89.0 | 0.177 |
+| `--anchor_3d`, seed 1 (**9979100**) | 0.037 / 0.112 / 0.342 | **0.039 / 0.129 / 0.485** | 90.4 | 0.168 |
+
+**Seed spread on the 3D ruler is ≈ 0.009 class-agnostic AP50 in both arms** — the same figure the
+2D per-bundle metric shows, which is a useful coincidence to know. The anchor effect is
+**+0.088 / +0.070** across the two seeds, i.e. **~9× that spread**, so the 3D gain is not a
+single-run artefact. The class-aware ΔAP50 replicates too (+67 % / +49 %), as does the collapse's
+sign (only the anchor arm gains on collapse: +0.026 / +0.017, both controls lose), and so does
+the mechanism's signature: **~8 % fewer kept queries at ~15 % more voted vertices**, in both seeds.
+
+**One claim must be weakened, and it is the AP column.** Quoted against FAST3DIS's
+0.038 / 0.096 / 0.316 and IGGT's 0.028 / 0.112 / 0.287, the two seeds read:
+
+| | AP | AP50 | AP25 |
+|---|---|---|---|
+| ours, seed 0 | 0.042 | 0.138 | 0.504 |
+| ours, seed 1 | 0.039 | 0.129 | 0.485 |
+| FAST3DIS | 0.038 | 0.096 | 0.316 |
+| IGGT | 0.028 | 0.112 | 0.287 |
+
+**AP50 and AP25 are robust leads** (1.34–1.44× FAST3DIS, 1.15–1.23× IGGT on AP50; 1.53–1.59× and
+1.69–1.76× on AP25 — every seed, every competitor). **AP is a tie with FAST3DIS**: 0.039–0.042 vs
+0.038, inside our own seed spread (0.003 on that column). Say "we match FAST3DIS on AP and lead on
+AP50/AP25, and lead IGGT on all three" — **not** "ahead on all three", which was true of seed 0
+alone and is what the pre-2026-08-07 wording claimed.
+
 #### Should it be the default?
 
 On the 2D rulers, no (+15 % training time, −0.009 per-frame AP50, and the per-bundle gain is
@@ -1448,6 +1487,8 @@ like the *permissive* setting — a wrong label costs nothing — and for our sy
 | defaults (§9.6) | 0.023 / 0.067 / 0.268 | **0.013 / 0.050 / 0.320** |
 | `--vote_radius 0.1 --depth_conf_percentile 25` | 0.029 / 0.083 / 0.305 | **0.017 / 0.060 / 0.334** |
 | **`--anchor_3d`, defaults (§8.3, job 9866391)** | 0.038 / 0.112 / 0.360 | **0.042 / 0.138 / 0.504** |
+| 〃 **`--seed 1` replicate (job 9979100)** | 0.037 / 0.112 / 0.342 | **0.039 / 0.129 / 0.485** |
+| control, `--seed 1` replicate (job 9979101) | 0.025 / 0.075 / 0.313 | 0.016 / 0.059 / 0.348 |
 | 〃 best sweep point (`--vote_radius 0.15`, §9.8.1) | 0.048 / 0.151 / 0.419 | **0.055 / 0.185 / 0.571** |
 | `--num_frames 16` (§8.4, job 9901143) | 0.033 / 0.098 / 0.336 | 0.023 / 0.080 / 0.391 |
 | `--num_frames 16`, 20 ep (job 9901664) | 0.032 / 0.115 / 0.414 | 0.029 / 0.104 / 0.458 |
@@ -1469,18 +1510,22 @@ ballpark", which was comparing across settings.
 **On the `--anchor_3d` checkpoint the collapse goes the other way, and the result is the strongest
 row in this project (job 9866391, 2026-08-06, 312 scenes, 0 failures, all lifting knobs at
 defaults).** 0.038 / 0.112 / 0.360 class-aware → **0.042 / 0.138 / 0.504 class-agnostic** — i.e.
-**like-for-like it exceeds FAST3DIS (0.038 / 0.096 / 0.316) and IGGT (0.028 / 0.112 / 0.287) on
-all three metrics**, on a strictly frozen backbone against their LoRA-adapted ones, with ~17
-views/scene against FAST3DIS's 50, and untuned. This falsified the prediction recorded in todo 1e
+like-for-like it **leads FAST3DIS (0.038 / 0.096 / 0.316) and IGGT (0.028 / 0.112 / 0.287) on
+AP50 and AP25, matches FAST3DIS on AP and leads IGGT on it**, on a strictly frozen backbone
+against their LoRA-adapted ones, with ~17 views/scene against FAST3DIS's 50, and untuned.
+⚠ The AP column is a *tie*, not a lead — §8.3's seed-1 replicate put our AP at 0.039 against
+0.038, inside our own 0.003 seed spread; "ahead on all three" was a seed-0-only reading.
+This falsified the prediction recorded in todo 1e
 ("expect the claim to weaken"): the sign of the collapse is **checkpoint-dependent**, not a
 property of the setting. Why it flips — the collapse costs a head whose class-aware mean is
 carried by one rare class and gains a head whose *instances* are cleaner: `--anchor_3d` keeps 9 %
 fewer, more view-consistent queries (§8.3), so the pooled ranking it produces is less polluted by
 duplicate/fragmented detections, which is exactly what instance-pooled AP punishes.
 
-Carry three caveats with the claim: single run against a single control; `otherfurniture` and the
-frame-coverage handicaps still apply (they cost the class-aware column, not this one); and the
-comparison is still unposed-protocol only (§9.10).
+Carry two caveats with the claim: `otherfurniture` and the frame-coverage handicaps still apply
+(they cost the class-aware column, not this one); and the comparison is still unposed-protocol
+only (§9.10). The third — "single run against a single control" — was **retired 2026-08-07**:
+both arms are now scored at two seeds on this ruler (§8.3), effect ~9× the seed spread.
 
 *Why the collapse costs us.* It swaps a mean over 18 classes for one instance-pooled ranking. Our
 per-class table (tuned row) is carried by rare distinctive classes — toilet **0.508** AP50 at
