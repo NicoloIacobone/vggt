@@ -253,6 +253,27 @@ sbatch --export=ALL,BACKBONE=dinov2   slurm/train_maskdino_coco.sh   # same toke
 myenv/bin/python scripts/coco_mask_resolution_oracle.py   # 37x37 caps a PERFECT model at 44.7 AP
 ```
 
+### 7.1 The upstream control arm (§6's fourth row; third_party/maskdino_control/README.md)
+
+Official MaskDINO, **our** recipe — 12 ep / frozen R50 / 518 squash + hflip / our cosine / clip 0.1.
+Runs under the **reference** env (`$MASKDINO_ROOT/myenv`, py3.9 + detectron2 0.6), not `myenv/`; the
+upstream clone is imported and never edited, so `docs/MASKDINO.md` §7.6 stays reproducible.
+
+```bash
+bash third_party/maskdino_control/build_ops.sh                   # ONCE: MSDeformAttn for sm_80
+python third_party/maskdino_control/make_overfit_root.py --n 64  # ONCE: the gate's COCO root
+/cluster/scratch/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
+
+sbatch --time=4:00:00 --export=ALL,GATE=1 slurm/train_maskdino_upstream.sh  # §4.1 gate, must be >40
+sbatch slurm/train_maskdino_upstream.sh                                     # 87 948 iters, A100 80GB
+```
+
+Two things that bite: the clone's shipped MSDeformAttn `.so` is **sm_86-only**, and upstream's bare
+`except:` turns a wrong arch into a silent ~10× slowdown instead of a crash — hence `build_ops.sh`
+and the unwrapped kernel call at startup. And the batch job needs **A100 80 GB**: detectron2 has no
+gradient accumulation, and halving `IMS_PER_BATCH` while doubling iterations would change the
+optimisation and destroy the comparison.
+
 ---
 
 ## 8. Dataset rebuild (only if a tar is lost; docs/DATASET.md §5)
@@ -291,6 +312,23 @@ pack itself: the whole build is this one command (~1 h 20 end to end).
 sbatch --export=ALL,CHAIN_PACK=1 legacy/dataset_build/slurm/extend_dataset_val312.sh 0 311
 sbatch legacy/dataset_build/slurm/pack_official_gt_val312.sh   # only if packing separately
 ```
+
+### ScanNet++ val-50 — the competitor ruler (todo 6c; docs/DATASET.md §2.1, §5.0)
+
+No download: the source is already on `work`. One job, both tars, ~50 min. Node-local, zero
+loose files on scratch, resumable from whichever tar (final or `.partial`) exists.
+
+```bash
+sbatch legacy/dataset_build/slurm/build_scannetpp_val50.sh
+# verify a built tree by hand (5 scenes; the job does this itself unless CHAIN_VERIFY=0)
+myenv/bin/python scripts/verify_scannetpp_gt.py \
+    --gt_root <tree>/scans3d --frames_root <tree>/scans25k --num_scenes 5
+```
+
+`EXCLUDE` names scenes the upstream release ships broken and defaults to the one that is
+(`d755b3d9d8` — docs/DATASET.md §2.1). `EXCLUDE=` builds all 50 and will fail on that scene's
+geometry check, which is the intended behaviour: a missing scene is recoverable, a silently
+misaligned one is not.
 
 ---
 

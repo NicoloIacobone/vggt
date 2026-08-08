@@ -1,9 +1,14 @@
 # MaskDINO on COCO with a swapped backbone — does the published recipe survive VGGT?
 
-**Status (2026-08-01):** all three arms COMPLETE. Headline: **frozen DINOv2 at 37×37 tokens
+**Status (2026-08-08):** all three arms COMPLETE. Headline: **frozen DINOv2 at 37×37 tokens
 beats the frozen R50 control by +4.4 AP** (38.8 vs 34.3), and **`vggt` trails `dinov2` by
 −1.2 AP** (37.7 vs 38.8 final), both reaching ceiling-constrained final steps after converging
 late — see §6.
+
+A fourth arm is **in flight** (job 10094393): **upstream's own MaskDINO under this recipe**, which
+turns §6's "distance to 46.1" from an inference against a released checkpoint into a measurement,
+and is the first check of the port's **training** path. It passed the §4.1 gate at 52.1 AP.
+See `third_party/maskdino_control/README.md`; §6 reading 2 is marked PENDING until it lands.
 
 **The question (supervisor-facing).** Every number in `docs/MASKDINO.md` compares our port against
 *our own* ScanNet baselines. `docs/MASKDINO.md` §7.6 proved the port reproduces upstream's COCO
@@ -114,8 +119,12 @@ The comparisons this design buys:
   count. DINOv2 ViT-L/14-reg is precisely the model VGGT's `patch_embed` is built from, and the
   official checkpoint loads into VGGT's own vendored `vit_large` at `strict=True`, 0 missing keys.
   So this isolates *what VGGT's 3D pretraining did to 2D semantics* from *what the 37×37 grid costs*.
-- **`resnet50` (frozen, 12 ep) vs upstream (finetuned, 50 ep, 46.1)** — the honest distance to the
-  published number, and the reason none of these arms should be read as "MaskDINO reproduced".
+- **`resnet50` (frozen, 12 ep) vs upstream** — the distance to the published number, and the
+  reason none of these arms should be read as "MaskDINO reproduced". Note that 46.1 is a released
+  *checkpoint* we only ever ran inference on, so this comparison needs a fourth arm to mean
+  anything: **upstream's own code under this exact recipe** (`third_party/maskdino_control/`,
+  §6 row 2). Without it, "frozen + 12 ep costs ~12 AP" confounds the schedule, the freezing and
+  the input resolution.
 
 ### Deviations from upstream's COCO recipe (all shared by all three arms)
 
@@ -147,6 +156,9 @@ matcher,criterion,ms_deform_attn,box_ops,utils}.py` was modified, so every ScanN
 | `train/coco_eval.py` | upstream's `instance_inference` + `COCOeval` (segm and bbox) |
 | `scripts/train_maskdino_coco.py` | entry point: CLI, step-budgeted loop, AMP, resume |
 | `slurm/train_maskdino_coco.sh` | cluster job; **self-resubmits** until `summary.json` exists |
+| `third_party/maskdino_control/` | §6's upstream control row: official MaskDINO under this recipe. Own README; imports the pristine clone, never edits it |
+| `slurm/train_maskdino_upstream.sh` | that run's cluster job (A100 80 GB; same self-resubmit contract) |
+| `tests/test_maskdino_upstream_control.py` | its CPU tests — mapper geometry, LR parity against `train_maskdino_coco.py`'s own lambda, every config axis. Needs the **reference** env |
 | `tests/test_coco_maskdino.py` | CPU tests: both pyramid modes, head round-trip, GT helpers, inference, RLE round-trip, overfit |
 
 Why parallel files rather than flags on the ScanNet path: the ScanNet loop caches frozen features
@@ -192,12 +204,27 @@ images and score **those same 64**, via a COCO root whose `train2017` is a symli
 |---|---|---|---|
 | `resnet50` segm AP | 0.002 | 23.4 | **54.3** |
 | `vggt` segm AP | 0.001 | 14.1 | — |
+| upstream control (§6, job 10093469) | 0.275 | 22.4 | **52.1** |
 
 Both climb, so targets, matcher, criterion, `instance_inference`, the contiguous↔dataset category
 mapping, RLE encoding, the upsample-to-original-size step and `COCOeval` are all wired correctly —
 and the `vggt` row exercises the `mask_upsample 4` (148×148) path that the `resnet50` row does not.
 These are **memorisation numbers on 64 images**; they are not results and must never be quoted as
 such.
+
+**The gate measures the LR schedule as much as the pipeline — set it deliberately.** Reproducing
+the row above for the upstream control took three attempts, and the two failures were pure
+schedule artefacts that are indistinguishable from a broken loss:
+
+| gate LR schedule | step 200 / 400 / 600 |
+|---|---|
+| 1000-step warmup (the real run's), so lr only ramps to 6e-5 | 0.000 / 0.000 / 0.838 |
+| 10-step warmup but the cosine's horizon left at 600, so the endgame runs at ~1e-6 | 0.000 / 21.4 / 28.0 |
+| 10-step warmup **and** the cosine's horizon at the real 87 948, so lr ≈ 1e-4 throughout | 0.275 / 22.4 / **52.1** |
+
+A 600-step gate must therefore hold lr near its peak — `CONTROL.LR_HORIZON_ITERS` exists only for
+that, and the real run leaves it at 0 (≡ `MAX_ITER`). A gate that undershoots for this reason
+proves nothing either way, so read the LR before concluding anything from a low number.
 
 ## 5. Reproducing
 
@@ -212,20 +239,27 @@ myenv/bin/python tests/test_coco_maskdino.py
 sbatch --export=ALL,BACKBONE=resnet50 slurm/train_maskdino_coco.sh
 sbatch --export=ALL,BACKBONE=vggt     slurm/train_maskdino_coco.sh
 sbatch --export=ALL,BACKBONE=dinov2   slurm/train_maskdino_coco.sh
+
+# the upstream control row of §6 — official MaskDINO, this recipe (third_party/maskdino_control/)
+bash third_party/maskdino_control/build_ops.sh                     # ONCE: MSDeformAttn for sm_80
+python third_party/maskdino_control/make_overfit_root.py --n 64     # ONCE: the §4.1 gate's root
+sbatch --time=4:00:00 --export=ALL,GATE=1 slurm/train_maskdino_upstream.sh   # the gate
+sbatch slurm/train_maskdino_upstream.sh                                      # 87 948 iters
 ```
 
 COCO lives at `/cluster/scratch/niacobone/coco` (train2017 + val2017 + instances, extracted from
 `/cluster/work/igp_psr/yuxchen/coco.zip`). **Global scratch is purged after 15 days** — re-extract
 from that zip if it has vanished.
 
-## 6. Results (2026-08-01 — all three arms complete)
+## 6. Results (2026-08-01 — all three arms complete; upstream control row pending)
 
 Final full-val2017 numbers at step 87 948 (12 epochs), from each run's `summary.json`
 (`final` block; the `best` interval checkpoint is noted separately):
 
 | arm | segm AP | AP50 | AP75 | APs | APm | APl | box AP | ceiling | best interval AP |
 |---|---|---|---|---|---|---|---|---|---|
-| upstream R50, finetuned, 50 ep (published) | 46.1 | — | — | — | — | — | 51.5 | 92.0 | — |
+| upstream R50, finetuned, 50 ep — **released checkpoint, our inference** (§7.6) | 46.1 | — | — | — | — | — | 51.5 | 92.0 | — |
+| **upstream MaskDINO, THIS recipe** (frozen R50, 12 ep, 518 squash) — job 10094393 | *running* | | | | | | | ~92 | |
 | `resnet50` frozen, 12 ep | 34.3 | 54.1 | 36.2 | 14.3 | 36.1 | 53.6 | 38.2 | ~92 | 36.7 @80k |
 | `vggt` frozen, 12 ep | 37.659 | 59.384 | 39.512 | 15.253 | 41.555 | 58.524 | 42.065 | 84.2 | 39.7 @75k |
 | `dinov2` frozen, 12 ep | **38.8** | 64.8 | 39.6 | 14.8 | 43.0 | 65.1 | 45.9 | 84.2 | **41.3 @85k** |
@@ -237,8 +271,25 @@ Three readings, the first two already firm:
    (38.8 vs 34.3), and even its `APs` (14.8) matches the R50's (14.3). The §1.3 concern
    ("small objects need the token grid") shows up only as the *shared* gap of both ViT arms to
    their 84.2 ceiling, not as a deficit against the R50 control.
-2. **Freezing + 12 ep costs the R50 recipe ~12 AP** against upstream's finetuned 50-ep 46.1 —
-   the honest distance to the published number, measured as designed.
+2. **The distance to 46.1 is being MEASURED, not inferred — row 1 is a checkpoint, not a run.**
+   Read row 1's label: 46.1 / 51.5 is upstream's **released checkpoint**, scored by our own
+   inference (`docs/MASKDINO.md` §7.6, job 8967932: 46.129 unmodified / 46.133 ported). No
+   MaskDINO has ever been *trained* in this project, so "freezing + 12 ep costs ~12 AP" was an
+   inference against a differently-trained model, confounding three things at once: 50 epochs vs
+   12, a finetuned R50 vs a frozen one, and LSJ@1024 vs squash@518. Upstream's README also fences
+   that row as COCO-only ("clean models that do not use extra detection data or tricks") — only
+   its Swin-L 54.5 row uses Objects365 — so extra data is *not* part of the gap.
+   **Row 2 removes the confound**: upstream's own code, our recipe, every axis we control matched
+   (`third_party/maskdino_control/`). Until it lands, do not quote a number for the cost of our
+   recipe. **[PENDING — job 10094393.]**
+
+   Row 2 is also the first **training**-path check of the port. §7.6 certifies inference only and
+   explicitly excludes `matcher.py`, `criterion.py` and DN generation. If row 2 lands near our
+   `resnet50` arm's 34.3, those three modules are corroborated end to end. **If it lands far
+   above 34.3, our training path has a bug** — say so loudly rather than reporting the gap as a
+   recipe cost. First evidence already in: on the §4.1 overfit gate the two implementations track
+   each other point-for-point (0.275 / 22.4 / 52.1 vs 0.002 / 23.4 / 54.3), which is what
+   agreement between independent loss paths looks like.
 3. **VGGT's 3D pretraining costs ~1–1.6 AP on 2D semantics at identical token geometry.** Best
    checkpoint: `vggt` 39.7 @75k vs `dinov2` 41.3 @85k; final step: 37.659 vs 38.8. Both arms
    start wide apart (14.1 vs 23.4 at overfit-gate), converge gradually through mid-training, and

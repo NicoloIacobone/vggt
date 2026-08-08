@@ -1,0 +1,31 @@
+# The mandatory overfit gate of docs/MASKDINO_COCO.md §4.1, for the upstream control arm.
+#
+# Train on 64 images and score THOSE SAME 64, via a COCO root whose train2017 is a symlink to
+# val2017 (third_party/maskdino_control/make_overfit_root.py). A silent bug downstream of the
+# loss shows up as AP ~ 0 forever, which is indistinguishable from "has not learned yet" until
+# 90 GPU-hours are gone. Our `resnet50` arm hit segm AP 54.3 by step 600 here; the gate for this
+# run is >40 by step 600.
+#
+# These are MEMORISATION numbers on 64 images. They are not results and must never be quoted.
+_BASE_: maskdino_upstream_matched.yaml
+
+SOLVER:
+  MAX_ITER: 600
+  # The gate must spend its 600 steps at the recipe's LR, or it measures the schedule instead of
+  # the pipeline. Both other options were run and both fail for schedule reasons alone:
+  #   WARMUP_ITERS 1000 (inherited)  -> pure ramp, lr <= 6e-5, AP 0/0/0.8    (job 10091221)
+  #   WARMUP_ITERS 10, horizon 600   -> cosine decays to ~1e-6, AP 0/21/28   (job 10089735)
+  # So: reach 1e-4 quickly, and take the cosine's horizon from the REAL run so it barely decays.
+  WARMUP_ITERS: 10
+  CHECKPOINT_PERIOD: 600
+
+CONTROL:
+  COCO_ROOT: "/cluster/scratch/niacobone/coco_overfit64"
+  TIME_BUDGET_HOURS: 0.0
+  LR_HORIZON_ITERS: 87948    # the real run's budget: hold lr near 1e-4 across the whole gate
+
+DATALOADER:
+  NUM_WORKERS: 4
+
+TEST:
+  EVAL_PERIOD: 200

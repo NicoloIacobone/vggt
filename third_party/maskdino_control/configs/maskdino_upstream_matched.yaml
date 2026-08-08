@@ -1,0 +1,56 @@
+# Upstream MaskDINO, OUR recipe -- the control row of docs/MASKDINO_COCO.md §6.
+#
+# _BASE_ is upstream's own COCO instance-segmentation config, unedited, in the pristine clone.
+# EVERY key below is one of the axes docs/MASKDINO_COCO.md §2 lists as a deviation of our arms
+# from upstream's recipe. Anything not listed here is upstream's value, on purpose.
+_BASE_: /cluster/scratch/niacobone/MaskDINO/configs/coco/instance-segmentation/maskdino_R50_bs16_50ep_3s.yaml
+
+MODEL:
+  BACKBONE:
+    # 5 = stem + res2..res5, i.e. the whole ResNet. Deviation §2.1: our arms freeze the backbone
+    # because VGGT is frozen by project constraint, so the R50 control is frozen too.
+    FREEZE_AT: 5
+  MaskDINO:
+    # Upstream pads to a multiple of 32. 518 is not one, so that would show the backbone a 26 px
+    # black border our arms never see. 1 = no padding; every image is already exactly 518x518.
+    SIZE_DIVISIBILITY: 1
+
+INPUT:
+  FORMAT: "RGB"
+  # replaces upstream's "coco_instance_lsj" (LSJ 1024, scale 0.1-2.0) -- deviations §2.3/§2.4
+  DATASET_MAPPER_NAME: "coco_instance_squash"
+  SQUASH_SIZE: 518
+  RANDOM_FLIP: "horizontal"
+
+SOLVER:
+  IMS_PER_BATCH: 16          # unchanged; one A100 80GB holds it, so no accumulation is needed
+  BASE_LR: 0.0001            # unchanged
+  WEIGHT_DECAY: 0.05         # unchanged
+  OPTIMIZER: "ADAMW"         # unchanged
+  MAX_ITER: 87948            # deviation §2.2: 12 epochs ("1x"), not 50 (368750)
+  STEPS: []                  # unused: the schedule below is cosine, not multistep
+  LR_SCHEDULER_NAME: "WarmupCosineMatched"   # third_party/maskdino_control/lr.py
+  WARMUP_ITERS: 1000         # our arms' --warmup_steps (upstream: 10)
+  BACKBONE_MULTIPLIER: 0.0   # belt and braces next to FREEZE_AT 5
+  CHECKPOINT_PERIOD: 5000
+  CLIP_GRADIENTS:
+    ENABLED: True
+    CLIP_TYPE: "full_model"
+    CLIP_VALUE: 0.1          # our arms' --grad_clip (upstream: 0.01)
+    NORM_TYPE: 2.0
+  AMP:
+    ENABLED: True
+
+CONTROL:
+  COCO_ROOT: "/cluster/scratch/niacobone/coco"
+  HFLIP_PROB: 0.5
+  COSINE_END_LR_RATIO: 0.01
+  TIME_BUDGET_HOURS: 0.0     # set by slurm/train_maskdino_upstream.sh
+
+DATALOADER:
+  NUM_WORKERS: 8
+  FILTER_EMPTY_ANNOTATIONS: True
+
+TEST:
+  EVAL_PERIOD: 10000
+  DETECTIONS_PER_IMAGE: 100  # unchanged; == our arms' --eval_topk
