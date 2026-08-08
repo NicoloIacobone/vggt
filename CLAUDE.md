@@ -32,6 +32,11 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
 - `docs/todo.md` — open work only.
 - `docs/RELATED_WORK.md` — competitor landscape & positioning. Read before framing any result as a
   contribution.
+- `docs/TRAINING_COMPARABILITY.md` — what each competitor **trains** on vs evaluates on, what is on
+  the cluster, what is missing. Read alongside RELATED_WORK: that file covers the evaluation side,
+  this one the training side.
+- `docs/SEGVGGT_ANALYSIS.md` — the closest competitor, dissected: no training code, where the
+  ×10.7→×2.8 AP50 gap goes, and the conceptual difference.
 - `docs/SUPERVISOR_COMPARISON.md`, `docs/RIEPILOGO_PROGETTO_IT.md` — send-outward summaries derived
   from the two files above. If a number changes there, change it here too.
 - `docs/old/` — archive. Nothing in it is current; don't cite it as a source of truth.

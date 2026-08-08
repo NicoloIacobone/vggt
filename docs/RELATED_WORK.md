@@ -1,5 +1,10 @@
 # Related work & positioning (literature survey 2026-07-08, competitors re-read 2026-07-28)
 
+> **This file covers the EVALUATION side of comparability.** The training side lives in
+> `docs/TRAINING_COMPARABILITY.md` (who trains on what, what is on the cluster, what is missing) and
+> the SegVGGT dissection in `docs/SEGVGGT_ANALYSIS.md`. One fact, one home — do not restate either
+> here.
+
 Source: a Claude-run arXiv harvest (822 papers, 113 classified on-topic; CSVs + landscape
 figure live with the project owner, not in the repo). Tiering in that harvest was
 LLM-assigned — **spot-check any paper before citing its claimed contribution** (one Tier-1

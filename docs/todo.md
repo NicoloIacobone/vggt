@@ -322,6 +322,74 @@ the parts that are cheap.
       The number is a diagnostic decomposition and is never the headline; the headline stays the
       unposed 0.023 / 0.067 / 0.268.
 
+## 6. Comparability programme (supervisor, opened 2026-08-07) — the current top priority
+
+Everything in §1 made our *evaluation* placeable. This makes the *training setting* placeable, and
+completes the evaluation to every benchmark the competitors report on. Full plan and budget lines:
+the approved plan file; the audit itself: `docs/TRAINING_COMPARABILITY.md`.
+
+- [x] **6a. The training × evaluation audit — DONE 2026-08-07** (`docs/TRAINING_COMPARABILITY.md`).
+      Three findings that reshape the rest: **SegVGGT trains on the same official 1201 split we do**
+      (so that row needs no retraining, only more evaluation); **FAST3DIS trains on Aria Synthetic
+      Environments ONLY and scores all three benchmarks zero-shot**; **IGGT trains on InsScene-15K,
+      which contains ScanNet++**, one of its own eval sets. Field practice, read from the papers
+      rather than assumed: **nobody finetunes on the target benchmark**, and SegVGGT §4.3 explicitly
+      treats baselines that do as weaker for it. Also settled: the ~3.6 TB of `.hdf5` packs under
+      `csakarid/data/3D_datasets` are **RGB+depth only** — no instance/semantic/pose annotations
+      anywhere, including `ASE.hdf5` — so they cannot supply any competitor's supervision.
+- [x] **6b. SegVGGT dissection — DONE 2026-08-07** (`docs/SEGVGGT_ANALYSIS.md`). **Their release has
+      no training code at all** (no loss/matcher/optimizer/dataset; FADA ships as the hook without
+      its loss), so their training setting is paper-only and unreproducible. Gap decomposition
+      updated per checkpoint: on `--anchor_3d` the total is **×6.4**, the bridge **×2.3**, the
+      **residual ×2.8** — down from the ×4.6 written in §9.10, bought entirely by 2d + 2e. Quote
+      ×2.8 with its checkpoint, not ×4.6.
+- [ ] **6c. Build the missing eval datasets** — ScanNet200 val GT (**zero download**: the existing
+      `scannet_3d_gt_val312.tar.zst` + a raw→200-class map), ~~ScanNet++ val-50 GT + 50-view
+      frames~~, Replica 8 scenes (**must be downloaded**, ~15–25 GB, CC-BY-NC-4.0). Node-local per
+      `docs/DATASET.md` §5.1; scratch inode cost **zero**.
+  - [x] **ScanNet++ val-50 DONE 2026-08-08** (jobs 10089394 / 10091616) —
+        `scannetpp_3d_gt_val50.tar.zst` (1.9 GB, **49 scenes / 2585 instances**) +
+        `scannetpp_frames_val50.tar.zst` (980 MB, **49 × 50 = 2450 frames**). 49 not 50:
+        `d755b3d9d8`'s upstream trajectory diverges to 7.2 km and the build's geometry
+        self-check refused to ship it. See `docs/DATASET.md` §2.1 (contents, the four
+        silently-failing conventions and the evidence for each) and §5.0 (rebuild).
+        `legacy/dataset_build/{scripts/{scannetpp_common,build_scannetpp_3d_gt,
+        build_scannetpp_frames}.py, slurm/build_scannetpp_val50.sh}`, verified by
+        `scripts/verify_scannetpp_gt.py` and `tests/test_scannetpp_build.py`. Scratch loose-file
+        cost 0. **Feeds 6d**: the frames tar is 50 sampled views/scene with GT poses + sensor
+        depth, i.e. it supports both transfer modes; note for the adapter that ScanNet++
+        `segments.json` is one segment per vertex, so the superpoint vote degenerates.
+- [ ] **6d. Dataset adapters + the cross-dataset eval matrix.** `train/scannetpp3d.py` /
+      `train/replica3d.py` as siblings of `train/scannet3d.py`, a `--dataset` switch on
+      `scripts/eval_3d_maskdino.py` defaulting to `scannetv2` so no existing number moves, and the
+      GT-as-predictions = `1.000/1.000/1.000` gate per dataset. Then score the headline checkpoints
+      on all four datasets × both transfer modes → new `docs/RESULTS.md` §7.
+- [ ] **6e. `--class_agnostic` training mode.** Needed to train on any dataset without the ScanNet
+      taxonomy; also the setting FAST3DIS and IGGT report in. Defaults off.
+- [ ] **6f. InsScene-15K arm** (IGGT's own training data, Apache-2.0, 522 GB as ~120 zip shards on
+      work). **Partial replication** — the Aria portion is not uploaded. An ASE arm is out of scope
+      and permanently so: 9.2 TB *and* the sampled scene list is unpublished.
+- [~] **6g. Upstream MaskDINO trained under OUR recipe** — **IN FLIGHT, job 10094393**
+      (2026-08-08). Built as `third_party/maskdino_control/` (own README); driver
+      `slurm/train_maskdino_upstream.sh`; tests `tests/test_maskdino_upstream_control.py` (5/5, needs
+      the **reference** env). 8 axes moved to our values, 22 asserted still at upstream's.
+      **§4.1 gate PASSED: segm AP 52.1 @600 vs our `resnet50` arm's 54.3** — the two implementations
+      track each other point-for-point, which is already first evidence for `matcher.py`,
+      `criterion.py` and DN generation. Remaining: fill §6 row 2 and rewrite reading 2 (marked
+      PENDING there) when `summary.json` appears. ~42 h at 1.70 s/iter, batch 16 peaks at 23.9 GB,
+      so it self-resubmits once. Three things this cost, all recorded where they bite:
+      the clone's MSDeformAttn `.so` is **sm_86-only** and upstream's bare `except:` turns a wrong
+      arch into a silent ~10× slowdown (`build_ops.sh`, and an unwrapped kernel call at startup);
+      torch 1.10 **rejects** `PYTORCH_CUDA_ALLOC_CONF=expandable_segments`; and a 600-step gate
+      measures the LR schedule unless the cosine's horizon is pinned to the real budget
+      (`CONTROL.LR_HORIZON_ITERS`, MASKDINO_COCO.md §4.1 — two failed attempts read as a broken loss).
+- [ ] **6h. Optional second control: upstream's OWN recipe** (finetuned backbone, LSJ@1024, same
+      87 948 iters, ~3 days). 6g alone cannot separate "our recipe" from "our implementation" — it
+      pins the two together. This run pins the **recipe** cost, so the pair brackets the 46.1 gap
+      from both sides. **Not launched** — out of the scope 6g was requested under; ask before
+      spending it. Mechanically it is one more yaml against the same driver (revert FREEZE_AT,
+      BACKBONE_MULTIPLIER, the mapper, the schedule and the clip; keep MAX_ITER 87948).
+
 ## Recently closed (2026-07-29/30, 2026-08-01) — details in docs/MASKDINO.md §7.4.1, §7.7, §8.2
 
 - [x] `--bundles_per_scene 4` (job 8950610) — **saturates** (0.699 / 0.722 vs b2's

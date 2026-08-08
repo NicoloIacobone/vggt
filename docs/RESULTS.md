@@ -52,6 +52,11 @@ it is the only place in this project where a number may sit next to a published 
 lives in its own section for that reason. Read §5's protocol note before doing so: the published
 3D numbers are themselves split across **two different protocols**, and only one of them is ours.
 
+**And the training data differs too — see `docs/TRAINING_COMPARABILITY.md`.** SegVGGT trains on the
+same official 1201 split we do; FAST3DIS trains on synthetic Aria data *only* and scores ScanNet
+zero-shot; IGGT trains on a mixture that includes ScanNet++. A protocol-matched comparison is still
+not a training-matched one.
+
 ### 1.3 Fixed cached view sets (accepted 2026-07-28)
 
 Frames are drawn once per scene up front and reused for the whole run — that is what makes
