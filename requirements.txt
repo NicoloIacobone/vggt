@@ -5,3 +5,6 @@ Pillow
 huggingface_hub
 einops
 safetensors
+# ScanNet++ dataset build only (docs/DATASET.md §2.1): iphone/depth.bin is an LZ4 block
+# stream. Not needed to train or evaluate.
+lz4

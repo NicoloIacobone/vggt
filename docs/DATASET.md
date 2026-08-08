@@ -58,6 +58,58 @@ scene with `subset/` (~100 stride-5 frames), `masks/<class>/` (per-class binary)
 
 Specs on group storage: `OFFICIAL_GT_README.md`, `INSTANCE_MASKS_README.md` (+ `…_split2.md`).
 
+### 2.1 ScanNet++ v2 — the competitor ruler (docs/todo.md 6c)
+
+Under `/cluster/work/igp_psr/niacobone/distillation/dataset/scannetpp/`. **Evaluation only** —
+ScanNet++ is the dataset all three direct competitors report on (SegVGGT zero-shot, FAST3DIS
+zero-shot, IGGT; `docs/TRAINING_COMPARABILITY.md`), and we had no ScanNet++ numbers at all.
+Licence: **ScanNet++ Terms of Use** (research-only, non-redistributable — these tars stay on
+group storage).
+
+The split is the official `nvs_sem_val.txt`, **50 scenes** (49 shipped — see below). Layouts mirror
+`scannet_3d_gt_val312.tar.zst` / `scannet_frames25k_val312.tar.zst` exactly, so the evaluator's
+loaders need no new file conventions.
+
+| Tar | Contents |
+|---|---|
+| **`scannetpp_3d_gt_val50.tar.zst`** (1.9 GB) — **BUILT 2026-08-08**, jobs 10089394 / 10091616 | **3D benchmark GT.** Layout `scans3d/<scene>/` with `mesh.ply` (= `mesh_aligned_0.05.ply`, verbatim), `segments.json`, `segments_anno.json`, plus a per-scene `gt_stats.json` and one shared `scans3d/_metadata/` (`top100_instance.txt`, `map_benchmark.csv`, `semantic_classes.txt`, `nvs_sem_val.txt`). **49 scenes, 2585 instances** (median 43/scene, range 4–250 — scene `13c3e046d7` really does have only 4 objects inside the 84-class instance benchmark). Validated per scene: ply magic, `segIndices` length == ply vertex count, segment-id closure, every kept label in `top100_instance`, ≥1 instance. Meshes are ~1.1–3.4 M vertices, an order of magnitude denser than ScanNet's `_vh_clean_2`. |
+| **`scannetpp_frames_val50.tar.zst`** (980 MB) — **BUILT 2026-08-08**, same jobs | **The input frames + eval-only registration poses.** Layout `scans25k/<scene>/` with `color/<stem>.jpg` (1920×1440), `depth/<stem>.png` (256×192 uint16 mm), `pose/<stem>.txt` (4×4 **camera-to-world**), `intrinsic/intrinsic_{color,depth}.txt`, `intrinsics_{color,depth}.txt` (byte-identical copies at the ScanNet `frames25k` path, so `train/scannet3d.py::load_frames25k_intrinsics` works unchanged) and `manifest.json`. **49 scenes × 50 frames = 2450 frames**, sampled uniformly over the WHOLE iphone sequence (3 378–26 021 frames/scene). No 2D GT. |
+
+**49, not 50.** `d755b3d9d8` is excluded from **both** tars: its iphone trajectory diverges —
+`aligned_pose` translations reach 7.2 km against a 5.3 × 4.0 × 3.6 m mesh, and only 143 of its
+8 863 frames put the camera within 3 m of the mesh bounding box. The build's geometry self-check
+caught it at 3.9 km and refused to ship it; nothing about it is recoverable by resampling. This is
+an upstream defect, not a build defect. Both tars carry the same 49-scene list on purpose — a GT
+scene with no frames is a landmine for the evaluator. `EXCLUDE=` on the SLURM script rebuilds all
+50 and fails on that scene again. Across the other 49, unprojected sensor depth sits **1.1–7.9 cm
+(median 1.9 cm)** from the mesh, and the RGB/pose index sweep peaked at offset 0 in **49/49**.
+
+
+**Where it came from.** `/cluster/work/igp_psr/nedela/scannetpp_data`, read **once**, by the
+build. That tree belongs to another user and can vanish; nothing downstream may read it, which is
+why the class tables and the split file are copied into the GT tar's `_metadata/`.
+
+**The four conventions that fail silently, and the evidence for each** (all reproducible with
+`scripts/verify_scannetpp_gt.py`; the build re-checks 1–3 per scene and refuses to ship a scene
+that fails):
+
+| | convention | how it was established |
+|---|---|---|
+| 1 | **Pose = `aligned_pose`, camera-to-world.** `pose_intrinsic_imu.json` carries both `pose` and `aligned_pose`; `pose` is the raw ARKit trajectory. | Unprojected sensor depth lands **1.4–3.3 cm** (median, per scene) from `mesh_aligned_0.05.ply` under `aligned_pose` read as camera-to-world, **~85 m** away under `pose`, and **2.3–3.2 m** away under the world-to-camera reading. No other combination puts any geometry in the frustum. |
+| 2 | **RGB: `cv2.VideoCapture` on `iphone/rgb.mkv`; decoded frame N is `frame_{N:06d}`.** No ffmpeg module exists on this cluster. | Frame count matches the pose json exactly, per scene (asserted). By content: the mesh rendered at pose N correlates with the video over a **±40-frame index sweep** and the mean NCC peaks at offset 0 in every scene (recorded in each `manifest.json["rgb_index_check"]`). |
+| 3 | **Depth: `iphone/depth.bin` = per frame `<4-byte LE compressed size><LZ4 block>`, decompressing to 192×256 uint16 MILLIMETRES.** Not zlib, not float16. | Bit-identical to an independently prepared reference export of one scene for 5 frames spanning the sequence; the `/1000 → metres` scale is what makes check 1 land at centimetres (×0.1 gives 23–45 cm, ×10 gives 14–29 m). |
+| 4 | **Labels: `segments_anno.json`'s raw label → `map_benchmark.csv`'s `instance_map_to` → filter to `top100_instance.txt` (84 classes).** | Skipping the map costs ~10 % of the instances (48 → 54 on the first val scene). Segment-id closure is asserted per object, exactly as `download_3d_gt.py::validate_scene` does for ScanNet. |
+
+Two things to know before using this GT:
+
+- **`segments.json` is not a superpoint over-segmentation here** — `segIndices` is the identity
+  permutation, one segment per vertex. Any superpoint majority vote (`docs/MASKDINO.md` §9.1
+  step 4) therefore degenerates to a per-vertex vote on ScanNet++; that is a property of the
+  release, not of the build.
+- **The colour intrinsic varies per frame** (iPhone autofocus, ~1.5 % of fx). The scene-level
+  `intrinsic/intrinsic_*.txt` hold the median over the sampled frames; exact per-frame intrinsics
+  are in `manifest.json["intrinsic_color_per_frame"]`.
+
 ## 3. Mask conventions (both GTs)
 
 - uint8 `{0, 255}` PNGs at the scene's color-camera resolution (1296×968; 640×480 for the 9
@@ -167,6 +219,24 @@ sbatch legacy/dataset_build/slurm/pack_official_gt_val312.sh   # only if packing
 
 Its `--tmp` is 40000, not the 1201 build's 120000: 312 scenes are ~8 GB of tree plus a ~7.5 GB
 tar.
+
+### 5.0 Rebuilding the ScanNet++ val-50 tars (§2.1)
+
+One job, ~25 min, no download — the source is on `work`:
+
+```bash
+sbatch legacy/dataset_build/slurm/build_scannetpp_val50.sh
+```
+
+Two stages (`build_scannetpp_3d_gt.py`, then `build_scannetpp_frames.py`, both sharing
+`scannetpp_common.py`), node-local in `$TMPDIR` per §5.1, **zero loose files on scratch** — and
+unlike the ScanNet builds, not even a chunk tar: the deliverables themselves are the checkpoint.
+While a stage is incomplete its tar is written as `…partial.tar.zst` and only renamed to the
+deliverable name when all 50 scenes are done, so a partial build can never masquerade as the
+finished dataset; re-running restores from whichever exists and skips `.complete` scenes.
+
+`CHAIN_VERIFY=1` (default) runs `scripts/verify_scannetpp_gt.py` on the finished tree.
+`tests/test_scannetpp_build.py` covers the same code on a synthetic scene, CPU-only.
 
 ### 5.1 The scratch inode quota — why the 1201 and val-312 builds never touch scratch
 
