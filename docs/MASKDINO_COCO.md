@@ -254,9 +254,20 @@ from that zip if it has vanished.
 ## 6. Results (2026-08-01 — all three arms complete; upstream control row pending)
 
 Final full-val2017 numbers at step 87 948 (12 epochs), from each run's `summary.json`
-(`final` block; the `best` interval checkpoint is noted separately):
+(`final` block; the `best` interval checkpoint is noted separately).
 
-| arm | segm AP | AP50 | AP75 | APs | APm | APl | box AP | ceiling | best interval AP |
+> ⚠ **The last column is a DIFFERENT POPULATION from every column left of it, and the two are not
+> comparable.** `segm AP`…`box AP` are the **full 5000-image** val2017. `best interval AP` comes
+> from a periodic eval, and periodic evals score **1000 images** (`--eval_images`, the first 1000
+> sorted image ids; `train/coco_eval.py` restricts `COCOeval.params.imgIds` to what it saw). That,
+> and nothing else, is why every arm appears to "drop" ~2 AP at its last step — 36.7→34.3,
+> 39.7→37.7, 41.3→38.8. It is a protocol change, **not** a late-training regression, and the
+> per-arm consistency of the offset is the evidence. Never subtract across the divide, and never
+> place a 1000-image number next to a published one. The upstream control row is built to the same
+> split on purpose (`CONTROL.VAL_SUBSET_JSON`, `TEST.EVAL_PERIOD 5000`), so its curve is readable
+> against our arms' curve at a matched step **and** its final number against theirs.
+
+| arm | segm AP | AP50 | AP75 | APs | APm | APl | box AP | ceiling | best interval AP **(1000 img)** |
 |---|---|---|---|---|---|---|---|---|---|
 | upstream R50, finetuned, 50 ep — **released checkpoint, our inference** (§7.6) | 46.1 | — | — | — | — | — | 51.5 | 92.0 | — |
 | **upstream MaskDINO, THIS recipe** (frozen R50, 12 ep, 518 squash) — job 10094393 | *running* | | | | | | | ~92 | |
@@ -295,3 +306,25 @@ Three readings, the first two already firm:
    start wide apart (14.1 vs 23.4 at overfit-gate), converge gradually through mid-training, and
    diverge in the endgame — `vggt` plateaus at 75k while `dinov2` climbs to 85k. The gap
    reflects 3D domain shift, not token scarcity: both arms beat the frozen R50 control's 34.3.
+
+### 6.1 Reading the control row before it finishes — the matched-step curve
+
+Row 2 costs ~41 h (87 948 steps at 1.69 s/iter, so one self-resubmit), but it does not have to be
+finished to answer the question it exists for. Its periodic evals use **our arms' protocol
+exactly** — every 5000 steps, the same first 1000 val2017 images — so a control point can be laid
+against the column below at the same step from its first eval onward, ~3 h in.
+
+`segm AP` on the 1000-image periodic split (`num_images == 1000` in each run's `metrics.jsonl`):
+
+| step | `resnet50` frozen | `vggt` frozen | `dinov2` frozen | upstream control |
+|---|---|---|---|---|
+| 5 000 | 17.48 | 13.42 | 25.35 | *pending* |
+| 10 000 | 22.77 | 21.17 | 32.27 | |
+| 20 000 | 27.80 | 28.76 | 35.84 | |
+| 40 000 | 33.26 | 35.78 | 39.06 | |
+| best | 36.66 @80k | 39.73 @75k | 41.33 @85k | |
+
+**`resnet50` is the column to read row 2 against** — it is the same frozen ResNet-50 under the same
+recipe, so the two differ only by implementation. Agreement corroborates our `matcher.py`,
+`criterion.py` and DN generation end to end; the §4.1 gate already agrees (52.1 vs 54.3). A control
+landing *far above* `resnet50` is a bug in our training path, not a recipe cost — §6 reading 2.

@@ -52,5 +52,7 @@ DATALOADER:
   FILTER_EMPTY_ANNOTATIONS: True
 
 TEST:
-  EVAL_PERIOD: 10000
+  # our arms' --eval_interval, on our arms' --eval_images 1000 (CONTROL.VAL_SUBSET_JSON).
+  # The final eval always runs on the full 5000 -- train_control.py::full_val_cfg.
+  EVAL_PERIOD: 5000
   DETECTIONS_PER_IMAGE: 100  # unchanged; == our arms' --eval_topk

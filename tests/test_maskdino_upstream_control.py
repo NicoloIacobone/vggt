@@ -220,6 +220,57 @@ def test_overfit_config():
     print("✓ overfit gate config inherits the real run's axes; lr held at ~1.0x through step 600")
 
 
+def test_periodic_eval_population_matches_our_arms():
+    """
+    The control's curve is only readable against our arms' curve if BOTH axes match: how often
+    it evaluates, and on which images. Our arms use `--eval_interval 5000` on `--eval_images
+    1000` (the first 1000 of `sorted(coco.getImgIds())`, val NOT filtered for empty annotations —
+    train/coco_data.py) and switch to all 5000 only for the final. Our arms' own numbers drop
+    ~2 AP at that switch, so an unmatched population would put the control ~2 AP off for a reason
+    that has nothing to do with MaskDINO (docs/MASKDINO_COCO.md §6).
+    """
+    from third_party.maskdino_control import train_control as tc
+
+    cfg = load_cfg(MATCHED)
+    ours = ast.parse((REPO / "scripts/train_maskdino_coco.py").read_text())
+    defaults = {}
+    for node in ast.walk(ours):
+        if (isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "add_argument"
+                and node.args and isinstance(node.args[0], ast.Constant)):
+            for kw in node.keywords:
+                if kw.arg == "default" and isinstance(kw.value, ast.Constant):
+                    defaults[node.args[0].value] = kw.value.value
+    assert cfg.TEST.EVAL_PERIOD == defaults["--eval_interval"], \
+        f"eval cadence drifted from our arms: {cfg.TEST.EVAL_PERIOD} vs {defaults['--eval_interval']}"
+
+    # the subset json IS the population, so check it against the full val rather than trusting it
+    root = Path(cfg.CONTROL.COCO_ROOT)
+    subset_path, full_path = root / cfg.CONTROL.VAL_SUBSET_JSON, root / cfg.CONTROL.VAL_JSON
+    assert subset_path.is_file(), f"{subset_path} — run make_val_subset.py --n 1000"
+    with open(subset_path) as f:
+        subset = json.load(f)
+    with open(full_path) as f:
+        full = json.load(f)
+    want = sorted(im["id"] for im in full["images"])[: defaults["--eval_images"]]
+    assert sorted(im["id"] for im in subset["images"]) == want, \
+        "subset is not our arms' first --eval_images sorted image ids"
+    # verbatim categories: COCOEvaluator derives its contiguous-id map from the registered
+    # metadata, so dropping unused categories would renumber the classes silently
+    assert subset["categories"] == full["categories"], "categories must be copied verbatim"
+
+    # periodic eval -> subset, final eval -> full 5000. Never the other way round.
+    cfg.DATASETS.TEST = (tc.VAL_SUBSET_DATASET,)
+    cfg.freeze()
+    assert tc.full_val_cfg(cfg).DATASETS.TEST == (tc.VAL_DATASET,)
+    assert cfg.DATASETS.TEST == (tc.VAL_SUBSET_DATASET,), "full_val_cfg mutated its input"
+
+    # the gate trains and scores the same 64 images; there is no subset to take there
+    gate = load_cfg(CONFIG_DIR / "maskdino_upstream_matched_overfit.yaml")
+    assert gate.CONTROL.VAL_SUBSET_JSON == "", "the overfit gate must score its whole 64-image val"
+    print(f"✓ periodic eval matches our arms: every {cfg.TEST.EVAL_PERIOD} steps on the same "
+          f"{len(subset['images'])} images; final on the full val")
+
+
 def test_ops_build_present():
     """The A100 (sm_80) rebuild. Missing here == a silent 10x slowdown at run time."""
     so = REPO / "third_party/maskdino_control/ops_build"
@@ -233,5 +284,6 @@ if __name__ == "__main__":
     test_squash_mapper()
     test_config_axes()
     test_overfit_config()
+    test_periodic_eval_population_matches_our_arms()
     test_ops_build_present()
     print("\nAll upstream-control tests passed.")

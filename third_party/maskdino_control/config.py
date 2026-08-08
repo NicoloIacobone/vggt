@@ -19,6 +19,12 @@ def add_control_config(cfg):
     cfg.CONTROL.TRAIN_IMAGES = "train2017"
     cfg.CONTROL.VAL_JSON = "annotations/instances_val2017.json"
     cfg.CONTROL.VAL_IMAGES = "val2017"
+    # The population the PERIODIC evals score, so the control's curve is comparable to our arms'
+    # curve step for step. Our arms evaluate on `--eval_images 1000` while training and on all
+    # 5000 only at the end; COCOEvaluator scores whatever is in the registered GT json, so the
+    # subset has to be a registered dataset of its own. Built once by make_val_subset.py.
+    # "" = score the full val at every periodic eval (what the run did before 2026-08-08).
+    cfg.CONTROL.VAL_SUBSET_JSON = "annotations/instances_val2017_first1000.json"
     cfg.CONTROL.HFLIP_PROB = 0.5         # our arms' only augmentation
     # schedule -----------------------------------------------------------------------------
     # `scripts/train_maskdino_coco.py::build_step_scheduler`: linear warmup then cosine down to

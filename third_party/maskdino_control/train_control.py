@@ -79,6 +79,7 @@ from third_party.maskdino_control.squash_mapper import CocoSquashDatasetMapper  
 
 TRAIN_DATASET = "control_coco_2017_train"
 VAL_DATASET = "control_coco_2017_val"
+VAL_SUBSET_DATASET = "control_coco_2017_val_subset"
 
 
 class TimeBudgetReached(BaseException):
@@ -139,11 +140,18 @@ def register_control_datasets(cfg):
     evaluator's GT json in lockstep with the images being scored.
     """
     root = Path(cfg.CONTROL.COCO_ROOT)
-    for name, js, imgs in ((TRAIN_DATASET, cfg.CONTROL.TRAIN_JSON, cfg.CONTROL.TRAIN_IMAGES),
-                           (VAL_DATASET, cfg.CONTROL.VAL_JSON, cfg.CONTROL.VAL_IMAGES)):
+    specs = [(TRAIN_DATASET, cfg.CONTROL.TRAIN_JSON, cfg.CONTROL.TRAIN_IMAGES),
+             (VAL_DATASET, cfg.CONTROL.VAL_JSON, cfg.CONTROL.VAL_IMAGES)]
+    if cfg.CONTROL.VAL_SUBSET_JSON:
+        specs.append((VAL_SUBSET_DATASET, cfg.CONTROL.VAL_SUBSET_JSON, cfg.CONTROL.VAL_IMAGES))
+    for name, js, imgs in specs:
         if name in MetadataCatalog.list():
             continue
-        register_coco_instances(name, {}, str(root / js), str(root / imgs))
+        path = root / js
+        assert path.is_file(), (
+            f"{name}: {path} missing. The periodic-eval subset is built once by "
+            f"`python third_party/maskdino_control/make_val_subset.py --n 1000`.")
+        register_coco_instances(name, {}, str(path), str(root / imgs))
 
 
 class ControlTrainer(UpstreamTrainer):
@@ -165,7 +173,9 @@ class ControlTrainer(UpstreamTrainer):
     @classmethod
     def build_evaluator(cls, cfg, dataset_name, output_folder=None):
         if output_folder is None:
-            output_folder = os.path.join(cfg.OUTPUT_DIR, "inference")
+            # Per dataset: the periodic subset and the final full val are DIFFERENT populations
+            # and their dumped predictions must not overwrite each other.
+            output_folder = os.path.join(cfg.OUTPUT_DIR, "inference", dataset_name)
         # Same evaluator upstream uses for `coco`: segm AND bbox, topk from TEST.DETECTIONS_PER_IMAGE.
         return COCOEvaluator(dataset_name, output_dir=output_folder)
 
@@ -204,7 +214,11 @@ def setup(args):
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     cfg.DATASETS.TRAIN = (TRAIN_DATASET,)
-    cfg.DATASETS.TEST = (VAL_DATASET,)
+    # DATASETS.TEST drives the PERIODIC eval hook only; the final eval overrides it with the full
+    # val below. Matching our arms on both axes -- every 5000 steps, first 1000 images -- is what
+    # makes the two curves comparable at a step mark. See docs/MASKDINO_COCO.md 6.
+    cfg.DATASETS.TEST = ((VAL_SUBSET_DATASET,) if cfg.CONTROL.VAL_SUBSET_JSON
+                         else (VAL_DATASET,))
     cfg.freeze()
     default_setup(cfg, args)
     setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="maskdino")
@@ -222,7 +236,10 @@ def write_summary(cfg, results, iteration):
         "run": "maskdino_upstream_matched",
         "max_iter": cfg.SOLVER.MAX_ITER,
         "final_iter": iteration,
-        "dataset": VAL_DATASET,
+        "dataset": VAL_DATASET,                       # `final` below is the FULL 5000-image val
+        "periodic_eval_dataset": (VAL_SUBSET_DATASET if cfg.CONTROL.VAL_SUBSET_JSON
+                                  else VAL_DATASET),  # metrics.json's segm/AP is THIS population
+        "periodic_eval_period": cfg.TEST.EVAL_PERIOD,
         "coco_root": cfg.CONTROL.COCO_ROOT,
         "final": {
             "segm_AP": segm.get("AP"), "segm_AP50": segm.get("AP50"),
@@ -238,6 +255,23 @@ def write_summary(cfg, results, iteration):
           flush=True)
 
 
+def full_val_cfg(cfg):
+    """
+    `cfg` with DATASETS.TEST pointing at the FULL 5000-image val2017.
+
+    The periodic evals deliberately score a 1000-image subset (our arms' `--eval_images`), but a
+    reported number must be the full val or it is not comparable to anything published -- our own
+    arms' finals included. Mixing the two populations in one table is exactly the trap
+    docs/MASKDINO_COCO.md 6 documents: our arms appear to "drop" ~2 AP at their last step purely
+    because the population changed under them.
+    """
+    out = cfg.clone()
+    out.defrost()
+    out.DATASETS.TEST = (VAL_DATASET,)
+    out.freeze()
+    return out
+
+
 def main(args):
     cfg = setup(args)
     register_control_datasets(cfg)
@@ -248,7 +282,7 @@ def main(args):
         model = ControlTrainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
             cfg.MODEL.WEIGHTS, resume=args.resume)
-        results = ControlTrainer.test(cfg, model)
+        results = ControlTrainer.test(full_val_cfg(cfg), model)
         write_summary(cfg, results, cfg.SOLVER.MAX_ITER)
         return results
 
@@ -264,7 +298,8 @@ def main(args):
               f"checkpointed, exiting WITHOUT summary.json so the job resubmits ===", flush=True)
         return None
 
-    results = ControlTrainer.test(cfg, trainer.model)
+    print("\n" + "=" * 70 + "\nFINAL EVAL (full val2017)\n" + "=" * 70, flush=True)
+    results = ControlTrainer.test(full_val_cfg(cfg), trainer.model)
     if comm.is_main_process():
         write_summary(cfg, results, trainer.iter)
     return results

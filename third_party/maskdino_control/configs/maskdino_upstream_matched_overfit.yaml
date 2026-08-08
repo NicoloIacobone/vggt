@@ -21,6 +21,10 @@ SOLVER:
 
 CONTROL:
   COCO_ROOT: "/cluster/scratch/niacobone/coco_overfit64"
+  # The gate scores the same 64 images it trains on -- there is no 1000-image subset to take,
+  # and the real run's subset json does not exist under this root. "" = score the whole (64-image)
+  # val at every periodic eval.
+  VAL_SUBSET_JSON: ""
   TIME_BUDGET_HOURS: 0.0
   LR_HORIZON_ITERS: 87948    # the real run's budget: hold lr near 1e-4 across the whole gate
 
