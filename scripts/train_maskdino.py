@@ -102,6 +102,14 @@ def build_argparser():
                         "volume over 16 views is a harder object than one over 8 — so pin this "
                         "to the baseline's width to keep bundle_* comparable "
                         "(docs/MASKDINO.md §8.4). Train scenes always use --num_frames.")
+    p.add_argument("--class_agnostic", action="store_true",
+                   help="Train ONE class ('object') instead of the 19 ScanNet ones "
+                        "(docs/todo.md 6e). Required to mix datasets whose taxonomies the head "
+                        "cannot name — ScanNet++, Infinigen — and it is also the setting "
+                        "FAST3DIS and IGGT report in. The head is built with num_classes=1 and "
+                        "`build_frame_targets` collapses every GT label onto it, so no instance "
+                        "is dropped for being unnameable. Default off: every published number "
+                        "in this project is class-aware.")
     p.add_argument("--class_level", action="store_true",
                    help="Use per-class masks instead of the default per-instance GT "
                         "(masks_instance/); per-instance is what an instance-segmentation "
@@ -250,7 +258,9 @@ def main():
 
     head_kwargs = dict(
         memory_dim=2048 * len(args.feature_layers), hidden_dim=args.hidden_dim,
-        mask_dim=args.hidden_dim, num_classes=NUM_SCANNET_CLASSES, num_queries=args.num_queries,
+        mask_dim=args.hidden_dim,
+        num_classes=1 if args.class_agnostic else NUM_SCANNET_CLASSES,
+        num_queries=args.num_queries,
         num_feature_levels=args.num_feature_levels, enc_layers=args.enc_layers,
         dec_layers=args.dec_layers, nheads=args.nheads, dropout=args.dropout,
         two_stage=args.two_stage, learn_tgt=not args.two_stage, initial_pred=True,

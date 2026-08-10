@@ -18,7 +18,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from data.scannet_overfit import IDX_TO_CLASS, ScanNetMultiSceneDataset
+from data.instance_map_dataset import build_scene_dataset
+from data.scannet_overfit import IDX_TO_CLASS, ScanNetMultiSceneDataset  # noqa: F401 (re-export)
 from models.maskdino import NUM_SCANNET_CLASSES, build_bundle_target, normalize_token_xyz
 from models.maskdino.box_ops import masks_to_boxes_normalized
 from train.common import photometric_jitter
@@ -45,9 +46,18 @@ def build_frame_targets(batch: Dict, out_hw: Tuple[int, int], device: str,
     2D target. Masks are area-downsampled to the mask grid with the same peak-preserving rule as
     the D4RT `build_gt_targets`, so a small-but-visible object never disappears.
 
-    `num_classes` is the class head's width (default 19). Instances whose dataset class index
-    falls outside 1..num_classes are DROPPED — treated as background, exactly as the official-GT
-    builder already does upstream (`legacy/dataset_build/scripts/build_official_masks.py` maps
+    **A one-class head means CLASS-AGNOSTIC (`--class_agnostic`, docs/todo.md 6e).** With
+    `num_classes == 1` every instance keeps its mask and is relabelled to the single class, so
+    nothing is dropped for having a class the head cannot name. That is what makes datasets with
+    foreign taxonomies (ScanNet++'s ~84 classes, Infinigen's factories) trainable at all, and it
+    is also the setting FAST3DIS and IGGT report in (docs/RELATED_WORK.md). The rule lives here,
+    not behind a second flag, so a checkpoint's `head_config` alone decides how its GT is built —
+    train and every eval path go through this function.
+
+    `num_classes` is otherwise the class head's width (default 19). Instances whose dataset class
+    index falls outside 1..num_classes are DROPPED — treated as background, exactly as the
+    official-GT builder already does upstream
+    (`legacy/dataset_build/scripts/build_official_masks.py` maps
     every NYU40 class outside the 19 trainable ones, `otherfurniture` included, to background).
     Without this a GT tree built against the full 20-name
     `data/scannet_overfit.py::SCANNET_CLASSES` list produces label 19 against a 19-logit head,
@@ -64,20 +74,23 @@ def build_frame_targets(batch: Dict, out_hw: Tuple[int, int], device: str,
     classes = _squeeze_batch(batch["classes"]).to(device)   # [Ng], values 1..num_classes
     masks = _squeeze_batch(batch["masks"]).to(device)       # [S, H, W] global-id map
     S = masks.shape[0]
+    class_agnostic = num_classes == 1
 
     # Decide per global instance id (1-based) whether the head can represent its class.
+    # Class-agnostic: every annotated instance is representable, whatever its source taxonomy.
     class_list = [int(c) for c in classes.tolist()]
     droppable = {gid for gid, c in enumerate(class_list, start=1)
-                 if not 1 <= c <= num_classes}
+                 if c < 1 or (not class_agnostic and c > num_classes)}
     if droppable:
         counts = Counter(IDX_TO_CLASS.get(class_list[gid - 1], f"class_{class_list[gid - 1]}")
                          for gid in sorted(droppable))
         scene = batch.get("scene_name", "?")
         scene = scene[0] if isinstance(scene, (list, tuple)) else scene
         detail = ", ".join(f"{name} x{n}" for name, n in sorted(counts.items()))
+        why = ("has an invalid class index (<1)" if class_agnostic
+               else f"is outside the {num_classes}-class head")
         print(f"⚠ build_frame_targets [{scene}]: dropped {len(droppable)} instance(s) whose class "
-              f"is outside the {num_classes}-class head and is therefore treated as background "
-              f"({detail}).")
+              f"{why} and is therefore treated as background ({detail}).")
 
     per_frame = []
     for f in range(S):
@@ -94,7 +107,8 @@ def build_frame_targets(batch: Dict, out_hw: Tuple[int, int], device: str,
             if small.sum() == 0:
                 continue
             frame_masks.append(small)
-            frame_labels.append(class_list[gid - 1] - 1)  # 1..num_classes → 0..num_classes-1
+            # 1..num_classes → 0..num_classes-1; class-agnostic collapses every class onto 0.
+            frame_labels.append(0 if class_agnostic else class_list[gid - 1] - 1)
             frame_ids.append(gid)
 
         if frame_masks:
@@ -242,9 +256,20 @@ def prepare_scenes(model, scene_dirs: List[str], args, device: str, split: str) 
     num_bundles = args.bundles_per_scene if split == "train" else 1
     common = dict(num_frames=bundle_frames_for_split(args, split), img_size=518,
                   instance_level=not args.class_level)
-    even = DataLoader(ScanNetMultiSceneDataset(scene_dirs, frame_sampling="even", **common),
-                      batch_size=1, shuffle=False, num_workers=0)
-    rand_dataset = (ScanNetMultiSceneDataset(scene_dirs, frame_sampling="random", **common)
+    # build_scene_dataset picks the per-scene loader from each directory's layout, so a scene
+    # list may mix ScanNet with the instance-map datasets of docs/todo.md 6f. A pure ScanNet
+    # list still goes through ScanNetMultiSceneDataset, unchanged.
+    even_dataset = build_scene_dataset(scene_dirs, frame_sampling="even", **common)
+    if hasattr(even_dataset, "counts_by_source"):
+        counts = even_dataset.counts_by_source()
+        print(f"  {split} scene sources: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+        if set(counts) != {"scannet"} and model.head.num_classes != 1:
+            raise ValueError(
+                "scene list mixes datasets whose taxonomies the class head cannot name "
+                f"({sorted(set(counts) - {'scannet'})}) but the head has "
+                f"{model.head.num_classes} classes — pass --class_agnostic (docs/todo.md 6e).")
+    even = DataLoader(even_dataset, batch_size=1, shuffle=False, num_workers=0)
+    rand_dataset = (build_scene_dataset(scene_dirs, frame_sampling="random", **common)
                     if num_bundles > 1 else None)
     cache_dtype = DTYPES[args.cache_dtype]
 
