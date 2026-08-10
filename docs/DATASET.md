@@ -84,6 +84,12 @@ scene with no frames is a landmine for the evaluator. `EXCLUDE=` on the SLURM sc
 50 and fails on that scene again. Across the other 49, unprojected sensor depth sits **1.1–7.9 cm
 (median 1.9 cm)** from the mesh, and the RGB/pose index sweep peaked at offset 0 in **49/49**.
 
+**Verified as shipped, not just as built** (job 10278989, `verify_scannetpp_tars.sh`): the two
+tars were unpacked back off `work` and `scripts/verify_scannetpp_gt.py` re-ran every check on
+**all 49 scenes — 49/49 pass**. Both tars hold the identical scene list. The build's own
+`CHAIN_VERIFY` pass runs on the pre-tar tree, which is not the same thing: compression, the entry
+count check and the copy to `work` sit between the two.
+
 
 **Where it came from.** `/cluster/work/igp_psr/nedela/scannetpp_data`, read **once**, by the
 build. That tree belongs to another user and can vanish; nothing downstream may read it, which is
@@ -109,6 +115,70 @@ Two things to know before using this GT:
 - **The colour intrinsic varies per frame** (iPhone autofocus, ~1.5 % of fx). The scene-level
   `intrinsic/intrinsic_*.txt` hold the median over the sampled frames; exact per-frame intrinsics
   are in `manifest.json["intrinsic_color_per_frame"]`.
+- **The `segGroups` order decides overlaps.** A few upstream objects share segments; the later
+  group wins, so a scene can end with slightly fewer distinct GT ids than kept objects (e.g.
+  `25f3b7a318`: 54 kept, 51 distinct). The evaluator sees a consistent per-vertex GT either way
+  — the gate below proves it — but do not read the 2585 instance total as "distinct GT ids".
+
+### 2.2 Replica — the third competitor ruler (docs/todo.md 6c, built 2026-08-08, job 10100042)
+
+Under `/cluster/work/igp_psr/niacobone/distillation/dataset/replica/`. **Evaluation only.**
+FAST3DIS reports Replica zero-shot (`docs/TRAINING_COMPARABILITY.md`); we had no Replica numbers.
+Licence: **CC-BY-NC-4.0** (`LICENSE.txt` beside the tars) — research-only, **not redistributable**.
+
+The 8 scenes of the standard vMAP/iMAP set: `room_0-2`, `office_0-4`. Layouts mirror the ScanNet
+tars, so the evaluator's loaders needed no new file conventions — only `train/replica3d.py`, which
+documents each convention and the measurement that pinned it.
+
+| Tar | Contents |
+|---|---|
+| **`replica_3d_gt_8.tar.zst`** (372 MB) | **3D benchmark GT**, `scans3d/<scene>/` with `mesh_semantic.ply` (the habitat instance mesh: per-**face** `object_id`, verified in the PLY header), `info_semantic.json` (`id_to_label[object_id]` → class), the plain `mesh.ply`, and Replica's own `preseg.json`/`preseg.bin`. From the official `facebookresearch/Replica-Dataset` release. |
+| **`replica_frames_8.tar.zst`** (417 MB) | **Input frames + eval-only registration poses**, `scans25k/<scene>/` with `color/<stem>.png` (1200×680), `depth/<stem>.png` (uint16 **millimetres**), `pose/<stem>.txt` (4×4 **camera-to-world**, from `traj_w_c.txt`), `intrinsic/intrinsic_depth.txt` and `manifest.json`. **8 × 50 = 400 frames**, uniformly sampled over the iMAP trajectory. From `kxic/vMAP`'s `vmap.zip`. |
+
+Four things to know before using this GT — all measured, none assumed:
+
+- **The instance set is OUR construction.** Replica annotates the room shell as objects; the GT
+  here drops `wall`, `floor`, `ceiling` and every object whose class id is not positive
+  (unlabelled), which is the convention both the ScanNet benchmark (18 classes, no wall/floor)
+  and ScanNet++'s `top100_instance.txt` follow. Per scene that leaves 28–73 instances out of
+  52–94 objects. Any Replica number must carry this caveat.
+- **The GT lives on faces, and 2.1–2.2 % of vertices are shared between objects.** A vertex takes
+  the object of the plurality of its incident faces (ties to the lower id).
+- **Depth is uint16 millimetres, not the NICE-SLAM 6553.5 constant.** Unprojected with
+  `traj_w_c` as camera-to-world it lands **0.5–0.6 cm** from the mesh on every probe frame;
+  ÷6553.5 lands 65–91 cm away. The same check validates the intrinsics, which are a documented
+  **FALLBACK** (no camera-parameter file exists in the release; the build wrote the standard
+  habitat values fx=fy=600, cx=599.5, cy=339.5 @ 1200×680 and flagged them `FALLBACK` per scene
+  in `REPORT.json`). A wrong focal would not land at half a centimetre.
+- **`preseg` is not used as the vote's over-segmentation.** It is a *planar* segmentation
+  (468–802 segments/scene) whose vertex-weighted purity against the GT objects is only
+  **0.77–0.95**, so segments straddle objects and would cap the achievable AP. The adapter uses
+  identity superpoints, i.e. a per-vertex vote — the same situation as ScanNet++.
+
+### 2.3 The licence gate — no dataset ships a number until it passes
+
+`scripts/gate_3d_gt.py` (driver `slurm/gate_3d_gt.sh`) feeds a dataset's own GT back as
+predictions and requires the official evaluator to answer exactly **1.000 / 1.000 / 1.000** —
+the same gate that licensed the ScanNet evaluator (`docs/MASKDINO.md` §9.2) — plus the
+pose/depth-scale geometry check above. Reports land beside the tars as `gate_<dataset>.json`.
+
+```bash
+sbatch --export=ALL,DATASET=replica slurm/gate_3d_gt.sh     # scannetv2|scannet200|scannetpp|replica
+```
+
+**Results, 2026-08-09 — all four pass**, on every scene of the real tars:
+
+| dataset | scenes | evaluated GT instances | median vertices | sensor depth → mesh (scene median / worst scene) | GT-as-predictions |
+|---|---|---|---|---|---|
+| `scannetv2` | 312 | 4 364 | 146 k | 1.26 cm / 9.56 cm | 1.000 / 1.000 / 1.000 (both label settings) |
+| `scannet200` | 312 | **10 045** | 146 k | 1.26 cm / 9.56 cm | 1.000 / 1.000 / 1.000 |
+| `scannetpp` | 49 | 2 579 | 1 184 k | 1.42 cm / 5.94 cm | 1.000 / 1.000 / 1.000 |
+| `replica` | 8 | 368 | 791 k | 0.55 cm / 0.58 cm | 1.000 / 1.000 / 1.000 |
+
+The geometry check fails on a scene's **median** probe frame, not its worst: 3 of ScanNet's own
+312 val scenes and 1 of ScanNet++'s 49 carry a single drifted probe (17–76 cm) while their medians
+stay under 6 cm. Those are reported as outliers, not failures — a rule that fails the reference
+dataset is the wrong rule.
 
 ## 3. Mask conventions (both GTs)
 
