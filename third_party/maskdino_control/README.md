@@ -34,6 +34,21 @@ checkpoint, and exit **without** writing `summary.json`; that absence is what
 `slurm/train_maskdino_upstream.sh` tests. Same mechanism, same reason as
 `slurm/train_maskdino_coco.sh`.
 
+**The reference venv is on scratch, and scratch purges.** It was destroyed mid-run on 2026-08-10
+(docs/MASKDINO_COCO.md §6.1). Rebuild:
+
+```bash
+rm -rf "$MASKDINO_ROOT/myenv"
+export TORCH_CUDA_ARCH_LIST="8.0;8.6"     # REQUIRED: install.sh's op build dies without it on a
+bash "$MASKDINO_ROOT/install.sh"          # CPU node — IndexError in _get_cuda_arch_flags
+```
+
+Diagnose with the `.py` vs `.pyc` counts (a healthy tree is ~1:1; the damaged one was 27:1848),
+never from the error text — a purged PIL reports a perfectly good JPEG as
+`UnidentifiedImageError`. Then resume with `sbatch --export=ALL,RUN_DIR=<run_dir>
+slurm/train_maskdino_upstream.sh`; checkpoints live on `/cluster/work` and are not purged, so
+nothing is lost but the eval scheduled at the crash step.
+
 ## Running
 
 ```bash

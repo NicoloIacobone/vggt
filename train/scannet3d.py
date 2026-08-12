@@ -31,6 +31,11 @@ import numpy as np
 
 from data.scannet_overfit import SCANNET_CLASSES
 
+# The ScanNet labels table every taxonomy here is read through (raw_category -> nyu40id /
+# id). It lives on group storage next to the tars, not in the repo.
+DEFAULT_TSV = ("/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/"
+               "scannetv2-labels.combined.tsv")
+
 # nyu40 id of each name in data/scannet_overfit.py::SCANNET_CLASSES (dataset index = list
 # position + 1). The 19-logit head covers positions 0..18 (wall..bathtub); otherfurniture
 # (nyu40 39) exists only in the GT taxonomy.
@@ -131,50 +136,99 @@ def load_superpoints(segs_path) -> np.ndarray:
 
 def load_raw_to_nyu40(tsv_path) -> Dict[str, int]:
     """raw_category -> nyu40 id from scannetv2-labels.combined.tsv."""
+    return _load_raw_to_label(tsv_path, "nyu40id")
+
+
+def load_raw_to_scannet_id(tsv_path) -> Dict[str, int]:
+    """
+    raw_category -> raw ScanNet label id (the TSV's `id` column, 1..1191) — the taxonomy
+    ScanNet200 is defined over (`data/scannet200_constants.py`). NOT interchangeable with
+    the nyu40 ids above.
+    """
+    return _load_raw_to_label(tsv_path, "id")
+
+
+def _load_raw_to_label(tsv_path, column: str) -> Dict[str, int]:
     lines = Path(tsv_path).read_text().splitlines()
     header = lines[0].split("\t")
-    i_raw, i_nyu = header.index("raw_category"), header.index("nyu40id")
+    i_raw, i_label = header.index("raw_category"), header.index(column)
     out = {}
     for line in lines[1:]:
         cols = line.split("\t")
-        if len(cols) > max(i_raw, i_nyu) and cols[i_nyu]:
-            out[cols[i_raw]] = int(cols[i_nyu])
+        if len(cols) > max(i_raw, i_label) and cols[i_label]:
+            out[cols[i_raw]] = int(cols[i_label])
     return out
 
 
-def build_gt_ids(superpoints: np.ndarray, agg_path, raw_to_nyu40: Dict[str, int]
-                 ) -> np.ndarray:
+def build_gt_ids(superpoints: np.ndarray, agg_path, raw_to_label: Dict[str, int],
+                 valid_label_ids=None, collapse_to: Optional[int] = None) -> np.ndarray:
     """
-    Per-vertex GT id [V] in the benchmark encoding: `1000 * nyu40_label + (objectId + 1)`,
+    Per-vertex GT id [V] in the benchmark encoding: `1000 * label + (objectId + 1)`,
     0 for unannotated vertices — the same construction as the official
-    `export_train_mesh_for_evaluation.py` (instances of ALL classes are encoded; the
-    evaluator itself selects the 18 benchmark classes).
+    `export_train_mesh_for_evaluation.py`.
+
+    Defaults reproduce the v2 benchmark exactly: `raw_to_label` is the nyu40 map, instances
+    of ALL classes are encoded, and the evaluator itself selects the 18 benchmark classes.
+
+    The two optional arguments serve the ScanNet200 taxonomy (docs/todo.md 6d) and are
+    inert when omitted:
+      `valid_label_ids`  keep only objects whose label is in this set (ScanNet200's 200
+                         raw ids; the v2 path keeps everything and lets the evaluator filter),
+      `collapse_to`      write this label id instead of the object's own — how a taxonomy
+                         our 19-class head cannot address is reported CLASS-AGNOSTICALLY
+                         (`train/benchmark3d.py::AGNOSTIC_LABEL_ID`). The instance component
+                         is re-indexed densely so it cannot collide after the collapse.
     """
     agg = json.loads(Path(agg_path).read_text())
     gt = np.zeros(len(superpoints), dtype=np.int64)
+    valid = None if valid_label_ids is None else set(valid_label_ids)
     sp_to_verts: Dict[int, np.ndarray] = {}
+    n_kept = 0
     for group in agg["segGroups"]:
-        label = raw_to_nyu40.get(group["label"], 0)
+        label = raw_to_label.get(group["label"], 0)
         if label == 0:
-            continue                       # raw category outside the nyu40 taxonomy
-        gid = 1000 * label + group["objectId"] + 1
+            continue                       # raw category outside the taxonomy
+        if valid is not None and label not in valid:
+            continue
+        n_kept += 1
+        gid = (1000 * label + group["objectId"] + 1 if collapse_to is None
+               else 1000 * collapse_to + n_kept)
         for seg in group["segments"]:
             verts = sp_to_verts.get(seg)
             if verts is None:
                 verts = sp_to_verts[seg] = np.nonzero(superpoints == seg)[0]
             gt[verts] = gid
+    if collapse_to is not None and n_kept >= 1000:
+        raise ValueError(f"{agg_path}: {n_kept} instances do not fit the "
+                         f"1000 * label + instance encoding")
     return gt
 
 
-def load_scene_3d_gt(gt_root, scene: str, tsv_path) -> Dict[str, np.ndarray]:
-    """vertices [V,3], superpoints [V], gt_ids [V] of one scene from the 3D GT tree."""
+def load_scene_3d_gt(gt_root, scene: str, tsv_path, taxonomy: str = "nyu40",
+                     collapse_to: Optional[int] = None) -> Dict[str, np.ndarray]:
+    """
+    vertices [V,3], superpoints [V], gt_ids [V] of one scene from the 3D GT tree.
+
+    `taxonomy` selects the label set the GT instances are drawn from: `nyu40` (the default,
+    the official v2 benchmark — every existing number was produced with it) or `scannet200`
+    (the 200 raw ScanNet ids of `data/scannet200_constants.py`). See `build_gt_ids` for
+    `collapse_to`.
+    """
     scene_dir = Path(gt_root) / scene
     vertices = read_ply_vertices(scene_dir / f"{scene}_vh_clean_2.ply")
     superpoints = load_superpoints(scene_dir / f"{scene}_vh_clean_2.0.010000.segs.json")
     if len(superpoints) != len(vertices):
         raise ValueError(f"{scene}: {len(vertices)} vertices but {len(superpoints)} seg ids")
+    if taxonomy == "nyu40":
+        raw_to_label, valid_label_ids = load_raw_to_nyu40(tsv_path), None
+    elif taxonomy == "scannet200":
+        from data.scannet200_constants import VALID_CLASS_IDS_200_SET
+        raw_to_label, valid_label_ids = (load_raw_to_scannet_id(tsv_path),
+                                         VALID_CLASS_IDS_200_SET)
+    else:
+        raise ValueError(f"unknown taxonomy {taxonomy!r} (nyu40 | scannet200)")
     gt_ids = build_gt_ids(superpoints, scene_dir / f"{scene}.aggregation.json",
-                          load_raw_to_nyu40(tsv_path))
+                          raw_to_label, valid_label_ids, collapse_to)
     return {"vertices": vertices, "superpoints": superpoints, "gt_ids": gt_ids}
 
 

@@ -83,8 +83,8 @@ This is a depth/MVS training corpus. Treat the whole directory as unusable for i
 |---|---|---|---|---|
 | **ScanNet200 val GT** | SegVGGT's 2nd benchmark | **not missing** — derivable from `scannet_3d_gt_val312.tar.zst` + a raw→200-class label map | **0** | **0** |
 | **ScanNet++ val-50 3D GT + frames** | SegVGGT, FAST3DIS, IGGT | buildable from nedela's tree, no download | ~7 GB (2 tars) | 2 inodes on work; ~10 k node-local |
-| **Replica (8 scenes: room0-2, office0-4)** | FAST3DIS's 3rd benchmark | **MISSING — must be downloaded**; CC-BY-NC-4.0 | ~15–25 GB | 1 inode on work; ~50 k node-local |
-| **InsScene-15K** | replicating IGGT's training data | **MISSING** — HuggingFace `lifuguan/InsScene-15K`, Apache-2.0, multipart zip shards ~4.29 GB each | ~522 GB | **~120 files** (1 per shard) |
+| **Replica (8 scenes: room0-2, office0-4)** | FAST3DIS's 3rd benchmark | **DONE 2026-08-08** — `dataset/replica/{replica_3d_gt_8,replica_frames_8}.tar.zst`; CC-BY-NC-4.0 | 372 MB + 417 MB (789 MB total — the 15–25 GB estimate assumed unsampled frames; 50/scene + zstd is far smaller) | 2 inodes on work; 0 loose on scratch |
+| **InsScene-15K** | replicating IGGT's training data | **DONE 2026-08-08** — `dataset/insscene15k/`, mirrored as-is (not unzipped), Apache-2.0. **Still partial**: Aria/ASE not uploaded upstream as of this date (re-checked, unchanged since 2026-08-07) | 522.07 GB | **1565 files** (not ~120 — `processed_infinigen` alone is 1468 small per-scene zips, not one shard per subset) |
 | **Aria Synthetic Environments, annotated** | replicating FAST3DIS's training data | **MISSING and out of reach** — 23 TB / 100 000 scenes / 58 M images; their 40 % ≈ 9.2 TB | 9.2 TB | ~23 M frames |
 | Infinigen, RE10K (standalone) | only if InsScene-15K's shards prove incomplete | missing | — | — |
 
@@ -102,6 +102,9 @@ This is a depth/MVS training corpus. Treat the whole directory as unusable for i
 3. **InsScene-15K appears incomplete.** Its HuggingFace tree currently exposes only
    `processed_infinigen`, `processed_re10k`, `processed_scannetpp_v2` — the Aria portion is absent
    ("datasets are still being uploaded"). Any replication built on it is **partial** and must say so.
+   The full 522 GB / 1565-file mirror is on work as of 2026-08-08; re-checked at mirror time and
+   still no Aria/ASE directory — this fact does not change once the download completes, only the
+   date it was last confirmed does.
 4. **FAST3DIS never states which scenes it evaluates** on any of its three datasets — only "50
    uniformly sampled views". Our numbers will be on official val-312 / `nvs_sem_val`-50 / the
    standard 8 Replica scenes; do not claim identical evaluation sets.

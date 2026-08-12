@@ -133,6 +133,17 @@ def superpoint_majority(votes: np.ndarray, superpoints: np.ndarray) -> np.ndarra
     GT over-segmentation boundaries (and what dedups stray pixel votes).
     """
     sp_ids, sp_inverse = np.unique(superpoints, return_inverse=True)
+    if len(sp_ids) == len(superpoints):
+        # Every superpoint holds exactly one vertex, so each group sum IS that vertex's row
+        # and the result is identical to the general path below (`argmax` breaks ties on the
+        # lowest index in both). ScanNet++ ships `segIndices` as the identity permutation and
+        # the Replica adapter passes identity superpoints, and their meshes are ~1 M
+        # vertices: the general path would allocate a [V, Q] int64 buffer (~1 GB at Q=100)
+        # and scatter-add into it for nothing. Guarded by
+        # `tests/test_datasets3d.py::test_superpoint_majority_identity_fast_path`.
+        winner = votes.argmax(axis=1)
+        winner[votes.max(axis=1) == 0] = -1
+        return winner
     sp_votes = np.zeros((len(sp_ids), votes.shape[1]), dtype=np.int64)
     np.add.at(sp_votes, sp_inverse, votes)
     winner = sp_votes.argmax(axis=1)

@@ -9,6 +9,7 @@ import argparse
 import concurrent.futures as cf
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -42,7 +43,9 @@ def download_one(rel_path, size, tmp_dir, out_dir, log):
     else:
         return "fail"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path.replace(dst)
+    # tmp_dir ($TMPDIR, node-local) and out_dir (/cluster/work) are different filesystems,
+    # so os.rename/Path.replace fails with EXDEV -- shutil.move falls back to copy+delete.
+    shutil.move(str(tmp_path), str(dst))
     return "ok"
 
 

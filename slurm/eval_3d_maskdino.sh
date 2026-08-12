@@ -8,8 +8,15 @@
 # Knobs (all via --export=ALL,VAR=...):
 #   CHECKPOINT   REQUIRED — the checkpoint to score (a multi-frame one; per-frame checkpoints
 #                produce meaningless 3D instances, the script warns)
+#   DATASET      scannetv2 (default) | scannet200 | scannetpp | replica — picks BOTH the tars
+#                staged below and the adapter the script reads them with (docs/todo.md 6d,
+#                docs/RESULTS.md §7). The three non-default ones are CLASS-AGNOSTIC only.
 #   EXTRA_ARGS   appended verbatim (e.g. '--num_frames 8', '--no-icp',
 #                '--depth_conf_percentile 25', '--dump_ply')
+#
+# The cross-dataset matrix (docs/RESULTS.md §7) is this script run over
+# {3 headline checkpoints} x {4 datasets} x {2 transfer modes}; `slurm/eval_3d_matrix.sh`
+# submits the whole grid.
 #
 # The SegVGGT-comparable second column (docs/MASKDINO.md §9.9) — a DIFFERENT experiment,
 # reported next to the default one, never in place of it:
@@ -47,10 +54,25 @@ PYTHON=myenv/bin/python
 export PYTHONUNBUFFERED=1
 
 : "${CHECKPOINT:?export CHECKPOINT=<run_dir>/checkpoint_best_bundle.pth}"
+DATASET=${DATASET:-scannetv2}
 
-WORK=/cluster/work/igp_psr/niacobone/distillation/dataset/scannet
-GT_TAR=${GT_TAR:-$WORK/scannet_3d_gt_val312.tar.zst}
-FRAMES_TAR=${FRAMES_TAR:-$WORK/scannet_frames25k_val312.tar.zst}
+# Which tars hold which dataset (docs/DATASET.md §2, §2.1, §2.2). scannet200 is the SAME
+# tars as scannetv2 — only the label map differs, which is why it costs no new data.
+WORK=/cluster/work/igp_psr/niacobone/distillation/dataset
+case "$DATASET" in
+    scannetv2|scannet200)
+        DEFAULT_GT_TAR=$WORK/scannet/scannet_3d_gt_val312.tar.zst
+        DEFAULT_FRAMES_TAR=$WORK/scannet/scannet_frames25k_val312.tar.zst ;;
+    scannetpp)
+        DEFAULT_GT_TAR=$WORK/scannetpp/scannetpp_3d_gt_val50.tar.zst
+        DEFAULT_FRAMES_TAR=$WORK/scannetpp/scannetpp_frames_val50.tar.zst ;;
+    replica)
+        DEFAULT_GT_TAR=$WORK/replica/replica_3d_gt_8.tar.zst
+        DEFAULT_FRAMES_TAR=$WORK/replica/replica_frames_8.tar.zst ;;
+    *) echo "unknown DATASET=$DATASET (scannetv2|scannet200|scannetpp|replica)"; exit 1 ;;
+esac
+GT_TAR=${GT_TAR:-$DEFAULT_GT_TAR}
+FRAMES_TAR=${FRAMES_TAR:-$DEFAULT_FRAMES_TAR}
 
 STAGE=${TMPDIR:?TMPDIR unset — this job needs node-local scratch via #SBATCH --tmp}
 for t in "$GT_TAR" "$FRAMES_TAR"; do
@@ -61,6 +83,7 @@ done
 
 $PYTHON scripts/eval_3d_maskdino.py \
     --checkpoint "$CHECKPOINT" \
+    --dataset "$DATASET" \
     --gt_root "$STAGE/scans3d" \
     --frames_root "$STAGE/scans25k" \
     ${EXTRA_ARGS:-}

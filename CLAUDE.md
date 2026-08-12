@@ -36,7 +36,7 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
   the cluster, what is missing. Read alongside RELATED_WORK: that file covers the evaluation side,
   this one the training side.
 - `docs/SEGVGGT_ANALYSIS.md` — the closest competitor, dissected: no training code, where the
-  ×10.7→×2.8 AP50 gap goes, and the conceptual difference.
+  ×10.7→~4.6× residual AP50 gap goes, and the conceptual difference.
 - `docs/SUPERVISOR_COMPARISON.md`, `docs/RIEPILOGO_PROGETTO_IT.md` — send-outward summaries derived
   from the two files above. If a number changes there, change it here too.
 - `docs/old/` — archive. Nothing in it is current; don't cite it as a source of truth.
@@ -74,6 +74,8 @@ python scripts/train_maskdino.py --train_scenes scene0000_00 --val_scenes scene0
 
 # 3D ruler — the only protocol placeable next to published numbers (docs/MASKDINO.md §9)
 sbatch --export=ALL,CHECKPOINT=<run_dir>/checkpoint_best_bundle.pth slurm/eval_3d_maskdino.sh
+# …the same ruler on the other benchmarks (§9.12); DATASET defaults to scannetv2
+sbatch --export=ALL,DATASET=scannetpp,CHECKPOINT=<ckpt> slurm/eval_3d_maskdino.sh
 
 # Figures / qualitative
 sbatch --export=ALL,RUNS='<run_dir>' slurm/visualize_maskdino.sh
@@ -118,6 +120,14 @@ train/perframe.py         the protocol itself, shared by both scorers
 train/common.py           scene paths, photometric jitter, LR schedule, metrics.jsonl
 train/eval_metrics.py     mIoU / AP50 / AP75 / mAP / class_acc
 data/scannet_overfit.py   the dataset loader
+
+the 3D ruler (docs/MASKDINO.md §9) and its four benchmarks (§9.12)
+  train/benchmark3d.py    the VENDORED official ScanNet evaluator — do not touch
+  train/eval3d_geometry.py  Sim(3)+ICP, the two 2D→3D transfers, the vote lifting
+  train/datasets3d.py     the `--dataset` registry: scannetv2 | scannet200 | scannetpp | replica
+  train/scannet3d.py      + train/scannetpp3d.py, train/replica3d.py — one adapter per dataset,
+                          same interface; `data/scannet200_constants.py` is the 200-class map
+  scripts/eval_3d_maskdino.py  the ruler; scripts/gate_3d_gt.py  the per-dataset licence gate
 ```
 
 The batch dimension is **FRAMES**, not scenes. GT is per frame (labels + masks + boxes). With

@@ -26,6 +26,11 @@ dropped rather than penalised (`train/perframe.py::drop_empty_masks`). That is w
 All numbers below: official ScanNet GT, per-instance masks, val = scenes 0080–0089, held out of
 every training set.
 
+**A third and a fourth block exist and neither belongs on this page's axis.** §5 is the 3D ruler
+(official 3D instance benchmark, point clouds, its own evaluator) and **§7 is that same ruler run
+on three further benchmarks** — ScanNet200, ScanNet++ and Replica, class-agnostic only. A §7 row
+may never be read next to a 2D row here, nor next to a class-aware ScanNetv2 one.
+
 ### 1.1 The val split, and why it is not the official one (decided 2026-07-28)
 
 Val = scenes **0080–0089** is a *project convention*, not the official ScanNet v2 val split. It
@@ -512,12 +517,135 @@ alone cannot see what a 3D anchor does. Off by default; costs +15 % training tim
   (`output/maskdino_sf_list1201_mf_20260802_133826/`) is the leak-free checkpoint the 3D ruler
   (§5) has been waiting for.
 
-## 7. Summary table — the numbers to quote, and against what
+## 7. Cross-dataset matrix — the same ruler on four benchmarks (todo 6d, 2026-08-09)
 
-A read-out of §2–§6, nothing new. **Each block is its own ruler**; rows may be compared *inside* a
+**A block of its own. Never merge these rows into §2/§3/§5**, and never read a row here next to a
+class-aware ScanNetv2 number: three of the four datasets are class-agnostic-only.
+
+`scripts/eval_3d_maskdino.py --dataset {scannetv2,scannet200,scannetpp,replica}` swaps the
+benchmark and *nothing else* — same head, same lifting, same vendored official evaluator, same two
+transfer modes (`docs/MASKDINO.md` §9.12). So every column below is a single-variable comparison,
+and the ScanNetv2 column doubles as the regression guard.
+
+**No dataset is in this table until its licence gate passed** (`scripts/gate_3d_gt.py`: its own GT
+fed back as predictions must score exactly 1.000 / 1.000 / 1.000, `docs/MASKDINO.md` §9.2). All
+four passed on 2026-08-09, on every scene of the real tars.
+
+**Nothing here is fine-tuned.** All three checkpoints are trained on ScanNetv2's official 1201
+split and nothing else, so ScanNet200 is a *relabelling* of the training domain and ScanNet++ /
+Replica are **zero-shot** — the same posture FAST3DIS and SegVGGT report their cross-dataset rows
+in (`docs/TRAINING_COMPARABILITY.md`: nobody fine-tunes on the target benchmark).
+
+### 7.1 The four benchmarks, and their denominators
+
+Measured by the gates (`gate_<dataset>.json` beside each tar), not quoted from papers:
+
+| dataset | scenes | views/scene | mesh vertices (median) | evaluated GT instances | per scene (median) | annotated vertices | our column |
+|---|---|---|---|---|---|---|---|
+| `scannetv2` | 312 | 17.4 | 146 k | 4 364 | 12 | 0.90 | class-aware **and** class-agnostic |
+| `scannet200` | 312 | 17.4 | 146 k | **10 045** | 29 | 0.89 | class-agnostic only |
+| `scannetpp` | 49 | 50.0 | 1 184 k | 2 579 | 42 | 0.28 | class-agnostic only |
+| `replica` | 8 | 50.0 | 791 k | 368 | 44 | 0.40 | class-agnostic only |
+
+`scannet200` reads the **same two tars** as `scannetv2` — only the label set changes — which is why
+its rows share the ScanNetv2 forward pass exactly (identical ICP inliers 0.963, camera RMS 0.136 m).
+Its GT is **2.3× denser**: 10 045 evaluated instances against 4 364, because 200 categories are
+scored instead of 18, and wall/floor are valid classes there (so the prediction side stops dropping
+them, `train/datasets3d.py`).
+
+### 7.2 The matrix — AP / AP50 / AP25, CLASS-AGNOSTIC
+
+Every cell at **defaults** (the tuned lifting knobs were tuned on a leaky diagnostic, §5), one run
+each, 0 failed scenes anywhere. Regenerate with `myenv/bin/python scripts/collect_eval3d_matrix.py`.
+
+| checkpoint | dataset | unposed (`unproject`) | posed (`gt_projection`) |
+|---|---|---|---|
+| **mf** (1201 control, job 9386666) | scannetv2 | 0.013 / 0.050 / 0.320 | 0.039 / 0.122 / 0.483 |
+| | scannet200 | 0.023 / 0.069 / 0.278 | 0.075 / 0.171 / 0.411 |
+| | scannetpp | 0.000 / 0.000 / 0.004 | 0.003 / 0.009 / 0.075 |
+| | replica | 0.000 / 0.000 / 0.007 | 0.004 / 0.023 / 0.096 |
+| **`--anchor_3d`** (job 9634920) | scannetv2 | **0.042 / 0.138 / 0.504** | **0.109 / 0.304 / 0.677** |
+| | scannet200 | 0.036 / 0.111 / 0.366 | **0.124 / 0.275 / 0.523** |
+| | scannetpp | 0.000 / 0.000 / 0.015 | **0.009 / 0.038 / 0.178** |
+| | replica | 0.000 / 0.000 / 0.009 | 0.006 / 0.028 / **0.190** |
+| **`--num_frames 16`** (job 9668639) | scannetv2 | 0.023 / 0.080 / 0.391 | 0.064 / 0.190 / 0.572 |
+| | scannet200 | 0.027 / 0.084 / 0.314 | 0.099 / 0.224 / 0.474 |
+| | scannetpp | 0.000 / 0.000 / 0.013 | 0.007 / 0.021 / 0.108 |
+| | replica | 0.000 / 0.000 / 0.008 | 0.008 / **0.046** / 0.125 |
+
+The class-aware ScanNetv2 rows are §5's and are unchanged — see 7.3 reading 1.
+
+### 7.3 What the matrix says
+
+**1. The adapters disturbed nothing — the regression guard passed exactly.** Re-running ScanNetv2
+through the new `--dataset` machinery reproduces every published class-aware triple to the last
+digit: mf 0.023 / 0.067 / 0.268 and 0.060 / 0.156 / 0.408, **`--anchor_3d` 0.038 / 0.112 / 0.360**
+(the value todo 6d named as the gate) and 0.104 / 0.257 / 0.504, s16 0.033 / 0.098 / 0.336 and
+0.083 / 0.216 / 0.488. Two posed cells also gained the class-agnostic column they never had.
+
+**2. ScanNet200 is a real second column, and its sign is checkpoint-dependent.** Against the same
+scans' class-agnostic ScanNetv2 row, the control *gains* (0.050 → 0.069 AP50), `--num_frames 16` is
+flat (0.080 → 0.084, inside the seed spread) and `--anchor_3d` *loses* (0.138 → 0.111) — while
+all three gain in the posed bridge and all three lose AP25 (e.g. 0.504 → 0.366). Two structural differences drive it
+and they pull opposite ways: 2.3× more GT instances (harder recall) but also far more GT for a
+given prediction to match, plus wall/floor now being scorable on both sides. This mirrors §9.11's
+finding that the label collapse is checkpoint-dependent; it is **not** evidence about 200-way
+recognition, which we never attempt.
+
+**3. Zero-shot to ScanNet++ and Replica fails under the unposed bridge and survives, weakly, under
+the posed one.** Every unposed out-of-domain cell is 0.000 / 0.000 / ~0.01. The posed cells are
+small but real (`--anchor_3d`: 0.038 AP50 on ScanNet++, 0.028 on Replica; AP25 0.178 / 0.190).
+
+**4. …and the two bridges localise *why*, which is the point of reporting both.** Median per-scene
+coverage, `--anchor_3d`:
+
+| | posed: annotated vertices assigned | unposed: annotated vertices assigned | ICP inliers | camera RMS |
+|---|---|---|---|---|
+| scannetv2 | 0.834 | **0.679** | 0.963 | 0.136 m |
+| scannetpp | 0.685 | **0.223** | 0.924 | 0.200 m |
+| replica | 0.685 | **0.255** | 0.660 | 0.275 m |
+
+With a perfect bridge the out-of-domain scenes are *covered* about as well as ScanNet is
+(0.685 vs 0.834) — so the AP collapse there is the **2D masks**, an 8× drop in AP50 against the
+same checkpoint's ScanNetv2 posed cell (0.038 vs 0.304). Under the unposed bridge coverage itself
+collapses to a third — so on ScanNet++/Replica it is the **feed-forward geometry** that fails
+first, exactly the constraint §9.6 identified on ScanNet, amplified out of domain. Replica shows
+where: VGGT's cameras degrade badly on its synthetic renders (ICP inliers 0.66 vs 0.96, camera RMS
+0.275 m vs 0.136 — twice the 0.05 m vote radius).
+
+**5. `--anchor_3d` leads almost everywhere, and its lead is not a ScanNet artefact.** It is the
+best of the three on every ScanNetv2 cell, on both ScanNet200 cells, and on ScanNet++ posed
+(0.038 AP50 against 0.021 and 0.009) — i.e. on a relabelling of the training domain *and* on an
+unseen dataset. The one exception is Replica, where `--num_frames 16` takes AP and AP50
+(0.046 vs 0.028) while `--anchor_3d` keeps AP25 (0.190 vs 0.125) — on 8 scenes, so read it as a
+single noisy cell, not a reversal.
+
+**6. What may and may not be compared to a paper.** SegVGGT publishes ScanNet++ zero-shot
+13.3 / 33.9 / 56.4 — but on **10 randomly sampled val scenes** (their Table 2, a different protocol
+from their own Table 1, `docs/SEGVGGT_ANALYSIS.md`), with a LoRA-adapted backbone, and trained on
+ScanNet200. Our 49-scene posed row (0.009 / 0.038 / 0.178) is below it and the comparison carries
+three confounds at once; quote it only with all three named. FAST3DIS reports ScanNet++ and Replica
+zero-shot too, but this project has **no recorded triple** for those two datasets — do not invent
+one for the comparison.
+
+### 7.4 What this block does NOT license
+
+- **One run per cell.** The seed spread measured in §6.1 (0.009 per-bundle AP50; 0.003 3D AP)
+  applies here too, and no cell was replicated. Deltas smaller than that are noise.
+- **Replica's GT instance set is our construction** — the room shell (`wall`, `floor`, `ceiling`)
+  and unlabelled objects are dropped (`docs/DATASET.md` §2.2). Every Replica number must say so.
+- **ScanNet++ ships 49 of 50 val scenes**, one being an upstream trajectory defect (§2.1), and its
+  256×192 depth confirms only 0.43 of projected vertices against ScanNet's 0.599 — the posed bridge
+  is thinner there, though its coverage still lands at 0.685.
+- **No claim about 200-way or 84-way recognition.** The head has 19 ScanNet logits; those columns
+  collapse labels on both sides by construction.
+
+## 8. Summary table — the numbers to quote, and against what
+
+A read-out of §2–§7, nothing new. **Each block is its own ruler**; rows may be compared *inside* a
 block and never across blocks (§1). Every "vs" column names what the number is being compared to.
 
-### 7.1 One line per ruler — where we stand
+### 8.1 One line per ruler — where we stand
 
 | # | Ruler (protocol) | Our best | Compared against | Verdict |
 |---|---|---|---|---|
@@ -527,12 +655,14 @@ block and never across blocks (§1). Every "vs" column names what the number is 
 | D | **3D, official benchmark, UNPOSED** — predicted depth+cameras (§5) | class-agnostic **0.042 / 0.138 / 0.504** (`--anchor_3d`; seed 1: 0.039 / 0.129 / 0.485) | FAST3DIS 0.038 / 0.096 / 0.316 · IGGT 0.028 / 0.112 / 0.287 | **lead on AP50 + AP25** (1.34–1.44× / 1.53–1.59× FAST3DIS), **tie FAST3DIS on AP**, lead IGGT on all three; frozen backbone, untuned, **2 seeds** (§5.2) |
 | E | **3D, official benchmark, POSED** — GT poses/intrinsics/depth (§5.1) | **0.088 / 0.260 / 0.572** (S=16, 20 ep) | SegVGGT 0.504 / 0.717 / 0.870 | still behind; the protocol explains 2.3×, the rest is real |
 | F | **COCO port check** (`docs/MASKDINO_COCO.md`, §1.4) | 46.133 mask AP / 51.549 box AP | upstream MaskDINO's own checkpoint, 46.1 / 51.5 | implementation is faithful; **not a project result** |
+| G | **3D, the other three benchmarks** — ScanNet200 / ScanNet++ / Replica (§7) | posed `--anchor_3d` **0.124 / 0.275 / 0.523** (ScanNet200) · 0.009 / 0.038 / 0.178 (ScanNet++) · 0.006 / 0.028 / 0.190 (Replica) | no like-for-like published row is held in this project (§7.3 reading 6) | zero-shot **fails** under the unposed bridge (0.000 everywhere) and survives weakly under the posed one; the split localises it to geometry vs masks |
 
 AP triples are always `AP / AP50 / AP25`. A/B/C are per-view 2D masks on our own metric code
 (never placeable next to published ScanNet figures). D/E use the official vendored evaluator on
 the official val-312 point clouds — the only rows in this project that may sit next to a paper's.
+G uses the same evaluator on three further benchmarks, class-agnostic only.
 
-### 7.2 The competitor table — like-for-like, class-agnostic, unposed (§5)
+### 8.2 The competitor table — like-for-like, class-agnostic, unposed (§5)
 
 The one comparison that is fair in every dimension: same evaluator, same *bridge* (each method's
 own predicted geometry), same label setting (classes collapsed — FAST3DIS and IGGT publish no
@@ -557,7 +687,7 @@ protocol (§5.1); and the point-cloud/RGB-D family (Mask3D 55.2, SegDINO3D 64.0 
 input modality. The image-only baseline in SegVGGT's own table, OneFormer3D†, scores
 **5.4 / 10.2 / 17.4** — that row is the answer to "why is your AP low".
 
-### 7.3 The same masks under both 3D bridges — what the geometry costs
+### 8.3 The same masks under both 3D bridges — what the geometry costs
 
 | Checkpoint | unposed (own geometry) | posed (GT bridge) | bridge cost |
 |---|---|---|---|
@@ -572,7 +702,7 @@ input modality. The image-only baseline in SegVGGT's own table, OneFormer3D†, 
 the bridge and a factor ~4.6 is real (LoRA backbone, 75–100 views vs 17, 259×196 masks vs 37×37,
 600 kept queries vs 100).
 
-### 7.4 What actually buys the result — ranked by effect size
+### 8.4 What actually buys the result — ranked by effect size
 
 Read every Δ against the **measured seed-to-seed spread of 0.009 per-bundle AP50** (§6.1).
 

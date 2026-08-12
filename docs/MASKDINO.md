@@ -1557,3 +1557,49 @@ lists the point-cloud / RGB-D family — Mask3D 55.2 / 73.7 / 85.3, Relation3D 6
 SegDINO3D 64.0 / 81.5 / 88.9, ODIN 50.0 / 71.0 / 83.6 — and exactly one image-only baseline,
 OneFormer3D†, at **5.4 / 10.2 / 17.4**. The high numbers everyone remembers come from a different
 input modality; the image-only entry is below us even in the posed protocol.
+
+### 9.12 The same ruler on four benchmarks — the dataset adapters (todo 6d, 2026-08-09)
+
+§9.9 and §9.11 gave the two axes that make a 3D number quotable (bridge, labels). This adds the
+third: **which benchmark**. `scripts/eval_3d_maskdino.py --dataset {scannetv2,scannet200,
+scannetpp,replica}` swaps the dataset and *nothing else* — same head, same two transfer modes,
+same vendored evaluator, same lifting. It defaults to `scannetv2`, so every number above is
+unchanged. The matrix it produces lives in `docs/RESULTS.md` §7.
+
+| | GT source | taxonomy | our column |
+|---|---|---|---|
+| `scannetv2` | `scannet_3d_gt_val312` + `frames25k_val312` | 18 nyu40 classes | class-aware **and** class-agnostic |
+| `scannet200` | **the same two tars** + `data/scannet200_constants.py` | 200 raw ScanNet ids | class-agnostic only |
+| `scannetpp` | `scannetpp_3d_gt_val50` + `scannetpp_frames_val50` (49 scenes × 50 views) | 84 ScanNet++ instance classes | class-agnostic only |
+| `replica` | `replica_3d_gt_8` + `replica_frames_8` (8 scenes × 50 views) | Replica's own | class-agnostic only |
+
+**Why three of the four are class-agnostic-only.** The head has 19 ScanNet logits and those
+taxonomies are not ours; inventing a correspondence would be fabricating a comparison. Instead
+every instance is emitted under the evaluator's single collapsed label
+(`train/benchmark3d.py::AGNOSTIC_LABEL_ID`) on **both** sides, which is exactly §9.11's setting —
+and the one FAST3DIS and IGGT report in. Their class-aware fields are written as `null`, never as
+a number.
+
+**The prediction filter follows each dataset's GT taxonomy.** ScanNetv2's benchmark excludes
+wall/floor, ScanNet++'s `top100_instance.txt` excludes the room shell, and our Replica GT drops
+`wall`/`floor`/`ceiling` — so wall/floor predictions are dropped on those three. ScanNet200
+*includes* wall and floor as valid classes, so there they are kept. Either way the two sides
+match, which is what keeps each column single-variable
+(`train/datasets3d.py::drop_wall_floor_predictions`).
+
+**Every dataset is licensed the same way this evaluator was (§9.2)**: its own GT fed back as
+predictions must score exactly 1.000 / 1.000 / 1.000. `scripts/gate_3d_gt.py`
+(`slurm/gate_3d_gt.sh`) runs it over all scenes of the real tars and additionally re-derives the
+pose/depth-scale convention by unprojecting the sensor depth onto the mesh. Results, 2026-08-09:
+**all four pass at 1.000 / 1.000 / 1.000**; the geometry check's scene medians are 1.3 cm
+(ScanNet, 312 scenes), 1.4 cm (ScanNet++, 49) and 0.5 cm (Replica, 8). The check fails on the
+scene **median** rather than the worst probe frame, because 3 of ScanNet's own 312 val scenes and
+1 of ScanNet++'s 49 carry a single drifted probe (up to 76 cm) while their medians stay under
+6 cm — a rule that fails the reference dataset is the wrong rule.
+
+**Two properties of the releases, not of the build, that the adapters must live with**
+(`docs/DATASET.md` §2.1/§2.2): ScanNet++'s `segIndices` is one segment per vertex and Replica's
+own `preseg` is a *planar* segmentation whose purity against the GT objects is only 0.77–0.95, so
+on both the superpoint majority (§9.1 step 4) degenerates to a **per-vertex vote**. Replica's GT
+instance set is additionally **our** construction (the room shell dropped) and every Replica
+number must say so.

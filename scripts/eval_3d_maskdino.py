@@ -35,6 +35,13 @@ Per scene (official val split, scannet_frames_25k frames — whole-scan coverage
 In BOTH modes the model still sees only images: GT poses / intrinsics / sensor depth are
 eval-time transfer machinery applied after the head has produced its masks.
 
+`--dataset {scannetv2,scannet200,scannetpp,replica}` (docs/todo.md 6d, docs/RESULTS.md §7)
+picks the benchmark; everything above is identical across the four, which is what makes the
+cross-dataset matrix a single-variable comparison. It defaults to `scannetv2`, so every
+published number and every existing command is unchanged. The other three have taxonomies
+our 19-class head cannot address and are therefore CLASS-AGNOSTIC only (the setting FAST3DIS
+and IGGT report in): their class-aware fields are written as null rather than fabricated.
+
     python scripts/eval_3d_maskdino.py --checkpoint <run>/checkpoint_best_bundle.pth \
         --frames_root $TMPDIR/scans25k --gt_root $TMPDIR/scans3d
     → <run_dir>/eval3d_<ckpt stem>.json
@@ -61,31 +68,33 @@ from data.scannet_overfit import load_frames_by_name
 from models.maskdino.head import MaskDINOVGGTHead, to_scannet_class_logits
 from models.maskdino.anchor3d import normalize_token_xyz
 from models.maskdino.model import MaskDINOVGGTModel
-from train.benchmark3d import (BENCHMARK_CLASS_NAMES, assign_instances_for_scan,
+from train.benchmark3d import (AGNOSTIC_LABEL_ID, BENCHMARK_CLASS_NAMES,
+                               assign_instances_for_scan,
                                collapse_gt_to_class_agnostic,
                                collapse_preds_to_class_agnostic,
                                compute_averages, evaluate_matches, format_results,
                                MIN_REGION_SIZE, OVERLAPS)
+from train.datasets3d import DATASET_NAMES, DEFAULT_DATASET, get_dataset
 from train.eval3d_geometry import (accumulate_votes, apply_sim3, assign_pixels_to_queries,
                                    camera_centers_from_extrinsics, icp_refine_sim3,
                                    mask_grid_intrinsic, project_votes_to_vertices,
                                    superpoint_majority, umeyama_sim3,
                                    unproject_masks_to_points)
 from train.maskdino_data import DTYPES, patch_token_positions
-from train.scannet3d import SCANNET_IDX_TO_NYU40, load_frames25k_color_size, \
-    load_frames25k_depth, load_frames25k_intrinsics, load_frames25k_poses, \
-    load_scene_3d_gt, sample_frames25k
+from train.scannet3d import DEFAULT_TSV, SCANNET_IDX_TO_NYU40
 from vggt.utils.geometry import unproject_depth_map_to_point_map
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 
 IMG_SIZE = 518
-DEFAULT_TSV = ("/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/"
-               "scannetv2-labels.combined.tsv")
 
 
 def build_argparser():
     p = argparse.ArgumentParser(description="Official ScanNet 3D instance eval (the 3D ruler)")
     p.add_argument("--checkpoint", type=str, required=True)
+    p.add_argument("--dataset", choices=DATASET_NAMES, default=DEFAULT_DATASET,
+                   help="which benchmark the roots hold (train/datasets3d.py). The default "
+                        "is the ScanNetv2 ruler every published number was measured on; the "
+                        "other three are CLASS-AGNOSTIC only (docs/RESULTS.md §7)")
     p.add_argument("--frames_root", type=str, required=True,
                    help="scans25k tree: <scene>/{color,pose,intrinsics_color.txt}")
     p.add_argument("--gt_root", type=str, required=True,
@@ -134,7 +143,7 @@ def build_argparser():
 # must not write to the same file — that silently cost us job 9503137's JSON on 2026-08-03
 # (both knob settings landed on `eval3d_<stem>.json`, the second overwrote the first and only
 # the SLURM log preserved the numbers).
-RESULT_AFFECTING = ("num_frames", "eval_topk", "min_score", "mask_prob_threshold",
+RESULT_AFFECTING = ("dataset", "num_frames", "eval_topk", "min_score", "mask_prob_threshold",
                     "transfer_mode", "depth_tolerance", "vote_radius",
                     "depth_conf_percentile", "icp", "icp_max_dist", "scenes")
 
@@ -183,11 +192,13 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
               args, device: str) -> Dict:
     """The five pipeline steps for one scene; returns preds + diagnostics."""
     t0 = time.time()
+    ds = get_dataset(args.dataset)
     gt_projection = args.transfer_mode == "gt_projection"
     # gt_projection reads the sensor depth of every frame it uses, so a frame without one
     # is not usable there (the default protocol never touches depth/ on disk).
-    stems = sample_frames25k(scene_frames_dir, args.num_frames, require_depth=gt_projection)
-    images = load_frames_by_name(str(scene_frames_dir), stems, IMG_SIZE).to(device)  # [S,3,H,W]
+    stems = ds.sample_frames(scene_frames_dir, args.num_frames, require_depth=gt_projection)
+    images = load_frames_by_name(str(scene_frames_dir), stems, IMG_SIZE,
+                                 image_ext=ds.color_ext).to(device)          # [S,3,H,W]
     S = images.shape[0]
 
     # -- 1. one backbone pass: tokens for the head, depth + cameras for the geometry ------
@@ -259,7 +270,11 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
     cls_idx = cls_idx + 1                                              # 1..19 dataset classes
     nyu40 = torch.as_tensor([SCANNET_IDX_TO_NYU40[int(c)] for c in cls_idx],
                             device=score.device)
-    keep = (score >= args.min_score) & (nyu40 > 2)     # drop wall/floor: not benchmark classes
+    keep = score >= args.min_score
+    if ds.drop_wall_floor_predictions:
+        # not benchmark classes on this dataset — the prediction filter mirrors the GT
+        # taxonomy (train/datasets3d.py), which is what keeps the comparison single-variable
+        keep = keep & (nyu40 > 2)
     keep_idx = torch.nonzero(keep).squeeze(1)
     keep_idx = keep_idx[score[keep_idx].argsort(descending=True)][:args.eval_topk]
     if len(keep_idx) == 0:                             # nothing to lift — GT becomes all FNs
@@ -268,6 +283,11 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
                           "seconds": round(time.time() - t0, 1)}}
     q_score = score[keep_idx].cpu().numpy()
     q_label = nyu40[keep_idx].cpu().numpy()
+    if not ds.class_aware:
+        # this dataset's taxonomy is not ours: every surviving query is emitted under the
+        # evaluator's single collapsed label, exactly as `collapse_preds_to_class_agnostic`
+        # would do on ScanNetv2 (train/datasets3d.py)
+        q_label = np.full_like(q_label, AGNOSTIC_LABEL_ID)
 
     pixel_query = np.stack([
         assign_pixels_to_queries(out["pred_masks"][f, keep_idx], (IMG_SIZE, IMG_SIZE),
@@ -279,14 +299,14 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
         # SegVGGT's protocol: pull the mesh into the views instead of pushing pixels out.
         # No Sim(3), no ICP, no scale, no radius — the correspondence is exact, so the
         # only thing left being measured is the 2D mask.
-        poses = load_frames25k_poses(scene_frames_dir)
-        K = load_frames25k_intrinsics(scene_frames_dir)
+        poses = ds.load_poses(scene_frames_dir)
+        K = ds.load_intrinsics(scene_frames_dir)
         K_mask = mask_grid_intrinsic(
-            K["color"], load_frames25k_color_size(scene_frames_dir, stems),
+            K["color"], ds.load_color_size(scene_frames_dir, stems),
             (IMG_SIZE, IMG_SIZE))
         votes, transfer_stats = project_votes_to_vertices(
             gt3d["vertices"], np.stack([poses[s] for s in stems]), K["depth"], K_mask,
-            load_frames25k_depth(scene_frames_dir, stems), pixel_query, len(keep_idx),
+            ds.load_depth(scene_frames_dir, stems), pixel_query, len(keep_idx),
             args.depth_tolerance)
     else:
         # unproject with the PREDICTED geometry, register with Sim(3) (eval-only)
@@ -296,7 +316,7 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
         points, point_query = unproject_masks_to_points(world, pixel_query, depth_conf,
                                                         conf_thr)
 
-        poses = load_frames25k_poses(scene_frames_dir)
+        poses = ds.load_poses(scene_frames_dir)
         gt_centers = np.stack([poses[s][:3, 3] for s in stems])
         pred_centers = camera_centers_from_extrinsics(extri)
         s3, R3, t3 = umeyama_sim3(pred_centers, gt_centers)
@@ -363,17 +383,25 @@ def main():
     ckpt_path = Path(args.checkpoint)
     model, train_args = load_model(ckpt_path, device)
 
+    ds = get_dataset(args.dataset)
     frames_root, gt_root = Path(args.frames_root), Path(args.gt_root)
     if args.scenes:
         scenes = list(args.scenes)
     else:
         scenes = sorted(d.name for d in gt_root.iterdir()
-                        if d.is_dir() and (frames_root / d.name).is_dir())
+                        if d.is_dir() and not d.name.startswith("_")
+                        and (frames_root / d.name).is_dir())
     if not scenes:
         raise SystemExit(f"no scenes found under both {gt_root} and {frames_root}")
-    print(f"Scoring {len(scenes)} scene(s), checkpoint {ckpt_path.name} "
+    print(f"Scoring {len(scenes)} scene(s) of {ds.name} ({ds.note}), "
+          f"checkpoint {ckpt_path.name} "
           f"(multi_frame={train_args.get('multi_frame', False)}, "
           f"feature_mode={train_args.get('feature_mode', 'single')})")
+    if not ds.class_aware:
+        print(f"{ds.name} is CLASS-AGNOSTIC only: its taxonomy is not our 19 ScanNet "
+              f"classes, so labels are collapsed on BOTH sides and only the class-agnostic "
+              f"AP/AP50/AP25 are reported (docs/RESULTS.md §7). Never quote these next to a "
+              f"class-aware ScanNetv2 row.")
     if args.transfer_mode == "gt_projection":
         print("transfer_mode=gt_projection (SegVGGT's protocol, docs/MASKDINO.md §9.9): the "
               "mesh is PROJECTED into each view with GT poses + GT intrinsics and gated on "
@@ -389,11 +417,11 @@ def main():
     out_path = Path(args.out) if args.out else default_out_path(ckpt_path, args, parser)
     matches, matches_ca, per_scene, failed = {}, {}, {}, []
     for i, scene in enumerate(scenes):
-        gt3d = load_scene_3d_gt(gt_root, scene, args.tsv)
+        gt3d = ds.load_scene_3d_gt(gt_root, scene, args.tsv)
         preds: List[Dict] = []
         try:
             r = run_scene(model, train_args, scene, frames_root / scene, gt3d, args, device)
-            preds, per_scene[scene] = r["preds"], r["stats"]
+            preds, per_scene[scene] = r["preds"], {**r["stats"], **gt3d.get("meta", {})}
             print(f"[{i + 1}/{len(scenes)}] {scene}: {r['stats']}", flush=True)
             if args.dump_ply:
                 write_instance_ply(out_path.parent / f"eval3d_{scene}.ply",
@@ -402,29 +430,36 @@ def main():
             failed.append(scene)
             print(f"[{i + 1}/{len(scenes)}] {scene} FAILED:\n"
                   + "".join(traceback.format_exc().splitlines(keepends=True)[-6:]), flush=True)
-        gt2pred, pred2gt = assign_instances_for_scan(scene, preds, gt3d["gt_ids"],
-                                                     MIN_REGION_SIZE)
-        matches[scene] = {"gt": gt2pred, "pred": pred2gt}
+        if ds.class_aware:
+            gt2pred, pred2gt = assign_instances_for_scan(scene, preds, gt3d["gt_ids"],
+                                                         MIN_REGION_SIZE)
+            matches[scene] = {"gt": gt2pred, "pred": pred2gt}
         # same predictions, same official logic, semantic labels ignored — FAST3DIS's and
-        # IGGT's setting (train/benchmark3d.py). Reported BESIDE the class-aware headline.
+        # IGGT's setting (train/benchmark3d.py). Reported BESIDE the class-aware headline on
+        # ScanNetv2, and it IS the headline on the other three (the collapse is a no-op
+        # there: both sides already carry the collapsed label, train/datasets3d.py).
         ca_gt, ca_pred = assign_instances_for_scan(
             scene, collapse_preds_to_class_agnostic(preds),
             collapse_gt_to_class_agnostic(gt3d["gt_ids"]), MIN_REGION_SIZE)
         matches_ca[scene] = {"gt": ca_gt, "pred": ca_pred}
 
-    aps = evaluate_matches(matches, OVERLAPS, MIN_REGION_SIZE)
-    avgs = compute_averages(aps, OVERLAPS)
-    diag17 = seventeen_class_mean(avgs)
+    avgs, diag17 = None, None
+    if ds.class_aware:
+        avgs = compute_averages(evaluate_matches(matches, OVERLAPS, MIN_REGION_SIZE),
+                                OVERLAPS)
+        diag17 = seventeen_class_mean(avgs)
     avgs_ca = compute_averages(evaluate_matches(matches_ca, OVERLAPS, MIN_REGION_SIZE),
                                OVERLAPS)
     agnostic = {k: float(avgs_ca[k]) for k in ("all_ap", "all_ap_50%", "all_ap_25%")}
 
-    print("\nOfficial 18-class ScanNet 3D instance benchmark (the headline):")
-    print(format_results(avgs))
-    print(f"\n17-common-class diagnostic (our head cannot predict otherfurniture): "
-          f"AP {diag17['all_ap']:.3f}  AP50 {diag17['all_ap_50%']:.3f}  "
-          f"AP25 {diag17['all_ap_25%']:.3f}")
-    print(f"class-agnostic (labels ignored — FAST3DIS's / IGGT's setting, NOT the headline): "
+    if ds.class_aware:
+        print("\nOfficial 18-class ScanNet 3D instance benchmark (the headline):")
+        print(format_results(avgs))
+        print(f"\n17-common-class diagnostic (our head cannot predict otherfurniture): "
+              f"AP {diag17['all_ap']:.3f}  AP50 {diag17['all_ap_50%']:.3f}  "
+              f"AP25 {diag17['all_ap_25%']:.3f}")
+    print(f"\nclass-agnostic (labels ignored — FAST3DIS's / IGGT's setting"
+          f"{', and the only column this dataset has' if not ds.class_aware else ', NOT the headline'}): "
           f"AP {agnostic['all_ap']:.3f}  AP50 {agnostic['all_ap_50%']:.3f}  "
           f"AP25 {agnostic['all_ap_25%']:.3f}")
     if failed:
@@ -437,18 +472,25 @@ def main():
                      "intrinsics + sensor-depth visibility; SegVGGT's protocol, §9.9)")
     result = {
         "checkpoint": str(ckpt_path),
-        "protocol": "official ScanNet 3D instance benchmark (docs/MASKDINO.md §9); "
-                    "NOT comparable to any 2D-protocol number",
+        "dataset": ds.name,
+        "dataset_note": ds.note,
+        "class_aware": ds.class_aware,
+        "protocol": "official ScanNet 3D instance evaluator (docs/MASKDINO.md §9) over "
+                    f"{ds.name}; NOT comparable to any 2D-protocol number",
         "transfer_mode": args.transfer_mode,
         "measures": measures,
         "args": {k: v for k, v in vars(args).items() if k != "scenes"},
         "num_scenes": len(scenes),
         "failed_scenes": failed,
-        "results_18class": {k: (None if isinstance(v, float) and np.isnan(v) else v)
+        # null on the three class-agnostic-only datasets: their taxonomy is not the
+        # benchmark's 18 classes, so a class-aware row would be a fabrication
+        "results_18class": None if avgs is None else
+                           {k: (None if isinstance(v, float) and np.isnan(v) else v)
                             for k, v in avgs.items() if k != "classes"},
         "results_17class_diagnostic": diag17,
         "results_class_agnostic": agnostic,
-        "per_class": {n: {k: (None if np.isnan(v) else float(v))
+        "per_class": None if avgs is None else
+                     {n: {k: (None if np.isnan(v) else float(v))
                           for k, v in c.items()} for n, c in avgs["classes"].items()},
         "per_scene": per_scene,
     }

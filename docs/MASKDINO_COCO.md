@@ -300,7 +300,8 @@ Three readings, the first two already firm:
    above 34.3, our training path has a bug** — say so loudly rather than reporting the gap as a
    recipe cost. First evidence already in: on the §4.1 overfit gate the two implementations track
    each other point-for-point (0.275 / 22.4 / 52.1 vs 0.002 / 23.4 / 54.3), which is what
-   agreement between independent loss paths looks like.
+   agreement between independent loss paths looks like — and §6.1 now extends that agreement to
+   15 000 steps of real COCO training, within ±0.85 AP at every matched step.
 3. **VGGT's 3D pretraining costs ~1–1.6 AP on 2D semantics at identical token geometry.** Best
    checkpoint: `vggt` 39.7 @75k vs `dinov2` 41.3 @85k; final step: 37.659 vs 38.8. Both arms
    start wide apart (14.1 vs 23.4 at overfit-gate), converge gradually through mid-training, and
@@ -316,13 +317,53 @@ against the column below at the same step from its first eval onward, ~3 h in.
 
 `segm AP` on the 1000-image periodic split (`num_images == 1000` in each run's `metrics.jsonl`):
 
-| step | `resnet50` frozen | `vggt` frozen | `dinov2` frozen | upstream control |
-|---|---|---|---|---|
-| 5 000 | 17.48 | 13.42 | 25.35 | *pending* |
-| 10 000 | 22.77 | 21.17 | 32.27 | |
-| 20 000 | 27.80 | 28.76 | 35.84 | |
-| 40 000 | 33.26 | 35.78 | 39.06 | |
-| best | 36.66 @80k | 39.73 @75k | 41.33 @85k | |
+| step | `resnet50` frozen | `vggt` frozen | `dinov2` frozen | upstream control | Δ vs `resnet50` |
+|---|---|---|---|---|---|
+| 5 000 | 17.48 | 13.42 | 25.35 | **17.10** | −0.37 |
+| 10 000 | 22.77 | 21.17 | 32.27 | **23.61** | +0.84 |
+| 15 000 | 25.85 | — | — | **26.12** | +0.27 |
+| 20 000 | 27.80 | 28.76 | 35.84 | **28.55** | +0.75 |
+| 25 000 | 29.70 | — | — | **29.95** | +0.25 |
+| 30 000 | 31.25 | — | — | **31.59** | +0.34 |
+| 35 000 | 32.73 | — | — | **32.50** | −0.23 |
+| 40 000 | 33.26 | 35.78 | 39.06 | *(eval lost — see below)* | |
+| best | 36.66 @80k | 39.73 @75k | 41.33 @85k | | |
+
+**Interim, at iter 40k of 87 948 (2026-08-10).** The two implementations agree to
+**within ±0.85 AP at all seven matched steps so far** (mean Δ +0.26, sign changing), with no sign
+of drift — on independently written matchers, criteria and DN generation, over 35 000 steps of
+COCO. Together with the §4.1
+gate (52.1 vs 54.3) that is the corroboration §6 reading 2 asks for, arriving well before the run
+ends. Nothing here is quotable as a result: these are 1000-image periodic numbers and the row-2
+figure is the full-5000 final.
+
+**The 40 000 eval is missing, and the reason is worth knowing before it eats a run of yours.**
+The scratch purge took the **reference venv** mid-run (`/cluster/scratch/niacobone/MaskDINO/myenv`
+— the same 15-day mechanism CLAUDE.md documents, different victim than 2026-08-07). It presented
+as a **data** error, not an environment one:
+
+```
+PIL.UnidentifiedImageError: cannot identify image file '.../coco/val2017/000000000139.jpg'
+```
+
+That file was fine — valid JPEG header, 161 KB, all 5000 val and 118 287 train images present.
+**PIL was down to 0 `.py` files** (venv-wide: 27 `.py` against 1848 `.pyc`), so it had no JPEG
+plugin left to register and reported a good image as unreadable. Training had run 6 992 further
+iterations without complaint because its dataloader workers imported PIL *before* the deletion;
+the eval spawns fresh workers, which re-import. **So the symptom appears at the next eval, on a
+data path, long after the actual damage** — diagnose with the `.py` vs `.pyc` count, not the file
+it names.
+
+Recovery cost nothing but wall clock: `last_checkpoint` lives on `/cluster/work` (not purged) and
+carries optimiser + scheduler + iteration, so the run resumed at exactly 39 999. Only the eval
+scheduled for 40 000 is gone — it is not re-run on resume.
+
+Two traps in the rebuild itself: `install.sh` **cannot run on a CPU node** as written (with no GPU
+visible and `TORCH_CUDA_ARCH_LIST` unset, torch's `_get_cuda_arch_flags` returns an empty list and
+`arch_list[-1] += '+PTX'` raises `IndexError`) — export `TORCH_CUDA_ARCH_LIST="8.0;8.6"` first,
+which also fixes the sm_86-only build the clone shipped with. And rebuilding **in place** on
+scratch is the right unblock (it preserves every path §7.6 and `coco_transplant.sh` hardcode, and
+restarts the 15-day clock) but not a fix: the durable answer is moving that venv off scratch.
 
 **`resnet50` is the column to read row 2 against** — it is the same frozen ResNet-50 under the same
 recipe, so the two differ only by implementation. Agreement corroborates our `matcher.py`,

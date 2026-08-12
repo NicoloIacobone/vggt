@@ -210,6 +210,36 @@ sbatch legacy/dataset_build/slurm/download_3d_gt_val312.sh       # mesh+superpoi
 sbatch legacy/dataset_build/slurm/download_frames25k_val312.sh   # whole-scan frames + poses
 ```
 
+### 4.1 The same ruler on the other benchmarks — `--dataset` (todo 6d, RESULTS.md §7)
+
+`--dataset {scannetv2,scannet200,scannetpp,replica}` (`train/datasets3d.py`) swaps the benchmark
+and nothing else: same head, same two transfer modes, same vendored evaluator. It **defaults to
+`scannetv2`**, so every command above and every published number is unchanged. The SLURM driver
+picks the matching tars from `DATASET`.
+
+```bash
+sbatch --export=ALL,DATASET=scannetpp,CHECKPOINT=<run_dir>/checkpoint_best_bundle.pth \
+    slurm/eval_3d_maskdino.sh
+bash slurm/eval_3d_matrix.sh                 # the whole 3 ckpt x 4 dataset x 2 mode grid
+DRY_RUN=1 bash slurm/eval_3d_matrix.sh       # …print the sbatch lines instead
+```
+
+**The three non-default datasets are CLASS-AGNOSTIC only** — their taxonomies are not our 19
+ScanNet classes, so labels are collapsed on both sides and the class-aware fields are written as
+`null` rather than fabricated. Never put such a row next to a class-aware ScanNetv2 one.
+
+### 4.2 The licence gate — run it before believing ANY number from a dataset
+
+Feeds a dataset's own GT back as predictions; the official evaluator must answer exactly
+1.000 / 1.000 / 1.000 (MASKDINO.md §9.2), and the sensor depth must land on the mesh. CPU-only,
+no checkpoint. `gate_<dataset>.json` lands beside the tars.
+
+```bash
+sbatch --export=ALL,DATASET=replica slurm/gate_3d_gt.sh
+myenv/bin/python scripts/gate_3d_gt.py --dataset replica --gt_root <scans3d> \
+    --frames_root <scans25k> --num_scenes 2 --report_superpoints    # local smoke test
+```
+
 ---
 
 ## 5. Re-render a finished run's figures (MASKDINO.md §6.4)
@@ -320,10 +350,18 @@ loose files on scratch, resumable from whichever tar (final or `.partial`) exist
 
 ```bash
 sbatch legacy/dataset_build/slurm/build_scannetpp_val50.sh
-# verify a built tree by hand (5 scenes; the job does this itself unless CHAIN_VERIFY=0)
+# acceptance test on the SHIPPED tars (unpacks them node-local, then verifies)
+sbatch --export=ALL,VERIFY_SCENES=0 legacy/dataset_build/slurm/verify_scannetpp_tars.sh
+# or verify an already-unpacked tree by hand
 myenv/bin/python scripts/verify_scannetpp_gt.py \
     --gt_root <tree>/scans3d --frames_root <tree>/scans25k --num_scenes 5
 ```
+
+`build_scannetpp_val50.sh` verifies the tree it just built, before packing. That is not the
+same as verifying the deliverable — compression, the count check and the copy to `work` sit
+between them — so `verify_scannetpp_tars.sh` unpacks the tars back and re-runs the checks
+against what downstream will actually read. Run it after a lost/restored tar, and before a
+number depends on this data.
 
 `EXCLUDE` names scenes the upstream release ships broken and defaults to the one that is
 (`d755b3d9d8` — docs/DATASET.md §2.1). `EXCLUDE=` builds all 50 and will fail on that scene's

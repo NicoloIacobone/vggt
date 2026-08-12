@@ -343,10 +343,24 @@ the approved plan file; the audit itself: `docs/TRAINING_COMPARABILITY.md`.
       updated per checkpoint: on `--anchor_3d` the total is **×6.4**, the bridge **×2.3**, the
       **residual ×2.8** — down from the ×4.6 written in §9.10, bought entirely by 2d + 2e. Quote
       ×2.8 with its checkpoint, not ×4.6.
-- [ ] **6c. Build the missing eval datasets** — ScanNet200 val GT (**zero download**: the existing
-      `scannet_3d_gt_val312.tar.zst` + a raw→200-class map), ~~ScanNet++ val-50 GT + 50-view
-      frames~~, Replica 8 scenes (**must be downloaded**, ~15–25 GB, CC-BY-NC-4.0). Node-local per
+- [x] **6c. Build the missing eval datasets — DONE 2026-08-09.** ~~ScanNet200 val GT~~,
+      ~~ScanNet++ val-50 GT + 50-view frames~~, ~~Replica 8 scenes~~. Node-local per
       `docs/DATASET.md` §5.1; scratch inode cost **zero**.
+  - [x] **ScanNet200 DONE 2026-08-09 — zero download, as predicted.** The 200 valid raw ScanNet
+        ids (`data/scannet200_constants.py`, cross-checked against the TSV by
+        `tests/test_scannet200_taxonomy.py`) plus a `--taxonomy {nyu40,scannet200}` switch in
+        `train/scannet3d.py::build_gt_ids` turn the **existing** val-312 tars into the
+        ScanNet200 ruler. Default `nyu40`, so no existing number moves.
+  - [x] **Replica 8 scenes DONE 2026-08-08** (job 10100042) —
+        `dataset/replica/{replica_3d_gt_8,replica_frames_8}.tar.zst` (372 MB + 417 MB, CC-BY-NC-4.0).
+        GT mesh (`habitat/mesh_semantic.ply`, per-face `object_id`, verified in the PLY header) +
+        `info_semantic.json` from the official `facebookresearch/Replica-Dataset` release; frames
+        (50/scene, uniformly sampled, manifest.json with the full list) from `kxic/vMAP`'s
+        `vmap.zip`, confirmed to hold exactly these 8 scenes' traj-00 (iMAP) renders. No explicit
+        intrinsics file was found in the downloaded tree, so the fallback is the standard
+        habitat/NICE-SLAM/vMAP values (fx=fy=600, cx=599.5, cy=339.5 @ 1200×680) — flagged as
+        `FALLBACK` per scene in the build's `REPORT.json`, not silently assumed. Adapter (6d) still
+        needed to actually score against it.
   - [x] **ScanNet++ val-50 DONE 2026-08-08** (jobs 10089394 / 10091616) —
         `scannetpp_3d_gt_val50.tar.zst` (1.9 GB, **49 scenes / 2585 instances**) +
         `scannetpp_frames_val50.tar.zst` (980 MB, **49 × 50 = 2450 frames**). 49 not 50:
@@ -359,16 +373,45 @@ the approved plan file; the audit itself: `docs/TRAINING_COMPARABILITY.md`.
         cost 0. **Feeds 6d**: the frames tar is 50 sampled views/scene with GT poses + sensor
         depth, i.e. it supports both transfer modes; note for the adapter that ScanNet++
         `segments.json` is one segment per vertex, so the superpoint vote degenerates.
-- [ ] **6d. Dataset adapters + the cross-dataset eval matrix.** `train/scannetpp3d.py` /
-      `train/replica3d.py` as siblings of `train/scannet3d.py`, a `--dataset` switch on
-      `scripts/eval_3d_maskdino.py` defaulting to `scannetv2` so no existing number moves, and the
-      GT-as-predictions = `1.000/1.000/1.000` gate per dataset. Then score the headline checkpoints
-      on all four datasets × both transfer modes → new `docs/RESULTS.md` §7.
+- [x] **6d. Dataset adapters + the cross-dataset eval matrix — DONE 2026-08-09**
+      (`docs/RESULTS.md` **§7**, mechanism in `docs/MASKDINO.md` §9.12). `train/scannetpp3d.py` /
+      `train/replica3d.py` as siblings of `train/scannet3d.py`, the `train/datasets3d.py` registry
+      behind `--dataset {scannetv2,scannet200,scannetpp,replica}` (default `scannetv2`), 80 new
+      CPU checks (`tests/test_datasets3d.py`, `tests/test_scannet200_taxonomy.py`).
+      **All four licence gates passed at exactly 1.000/1.000/1.000** on every scene of the real
+      tars (`scripts/gate_3d_gt.py`, `slurm/gate_3d_gt.sh`), and the regression guard reproduced
+      the `--anchor_3d` ScanNetv2 row **0.038 / 0.112 / 0.360** to the last digit — as did all six
+      ScanNetv2 class-aware cells. 24 cells scored (`slurm/eval_3d_matrix.sh`,
+      `scripts/collect_eval3d_matrix.py`), 0 failed scenes.
+      **Three findings.** (i) **ScanNet200 costs no data at all** and is a genuine second column
+      (2.3× the GT instances: 10 045 vs 4 364), whose sign against ScanNetv2 is
+      *checkpoint-dependent*, like §9.11's label collapse. (ii) **Zero-shot to ScanNet++ and
+      Replica is 0.000 under the unposed bridge** on all three checkpoints, and small but real
+      under the posed one (`--anchor_3d`: 0.038 AP50 ScanNet++, 0.028 Replica). (iii) Reporting
+      both bridges **localises the failure**: posed coverage out of domain is nearly ScanNet's
+      (0.685 vs 0.834 annotated vertices assigned) so the AP loss there is the **2D masks**, while
+      unposed coverage collapses to a third (0.223 / 0.255) so out of domain the **feed-forward
+      geometry fails first** — §9.6's "lifting binds", amplified. On Replica, VGGT's cameras are
+      the specific culprit (ICP inliers 0.66 vs 0.96, camera RMS 0.275 m vs 0.136).
+      Two things the builds had flagged were handled and re-verified rather than rediscovered:
+      ScanNet++'s `segIndices` really is one segment per vertex on all 49 scenes (the superpoint
+      vote degenerates to a per-vertex vote, reported per scene), and Replica's FALLBACK
+      intrinsics + `traj_w_c` as camera-to-world + **millimetre** depth put the sensor surface
+      0.55 cm from the mesh (÷6553.5, the NICE-SLAM constant, lands 65–91 cm out).
+      One correction worth keeping: the gate's geometry check originally failed a scene on its
+      *worst* probe frame, which **failed ScanNet itself** — 3/312 val scenes carry one drifted
+      probe up to 64.7 cm while no scene median exceeds 9.6 cm. It now fails on the scene median
+      and reports single-frame outliers. A rule that fails the reference dataset is the wrong rule.
 - [ ] **6e. `--class_agnostic` training mode.** Needed to train on any dataset without the ScanNet
       taxonomy; also the setting FAST3DIS and IGGT report in. Defaults off.
-- [ ] **6f. InsScene-15K arm** (IGGT's own training data, Apache-2.0, 522 GB as ~120 zip shards on
-      work). **Partial replication** — the Aria portion is not uploaded. An ASE arm is out of scope
-      and permanently so: 9.2 TB *and* the sampled scene list is unpublished.
+- [ ] **6f. InsScene-15K arm** (IGGT's own training data, Apache-2.0). **Download DONE 2026-08-08**
+      (job 10106802): the full mirror is on work at `dataset/insscene15k/`, 522.07 GB / **1565**
+      files (not ~120 — `processed_infinigen` is 1468 small per-scene zips, `processed_re10k` 44,
+      `processed_scannetpp_v2` 53), shards untouched (never unzipped), `README.md` alongside with
+      licence/date/manifest sha256. Re-checked at mirror time: still **no Aria/ASE directory**
+      upstream, so this remains a **partial replication** by construction, not by our choice — an
+      ASE arm is out of scope and permanently so: 9.2 TB *and* the sampled scene list is
+      unpublished. The arm itself (unzip-on-demand loader, training run) is still open work.
 - [~] **6g. Upstream MaskDINO trained under OUR recipe** — **IN FLIGHT, job 10094393**
       (2026-08-08). Built as `third_party/maskdino_control/` (own README); driver
       `slurm/train_maskdino_upstream.sh`; tests `tests/test_maskdino_upstream_control.py` (5/5, needs
@@ -383,6 +426,16 @@ the approved plan file; the audit itself: `docs/TRAINING_COMPARABILITY.md`.
       torch 1.10 **rejects** `PYTORCH_CUDA_ALLOC_CONF=expandable_segments`; and a 600-step gate
       measures the LR schedule unless the cosine's horizon is pinned to the real budget
       (`CONTROL.LR_HORIZON_ITERS`, MASKDINO_COCO.md §4.1 — two failed attempts read as a broken loss).
+      Plus a fourth, mid-run: **the scratch purge ate the reference venv** and surfaced as
+      `UnidentifiedImageError` on a perfectly good COCO jpg (MASKDINO_COCO.md §6.1). Resumed from
+      `/cluster/work` at zero cost; the 40 000 eval is the only casualty.
+- [ ] **6i. Move the MaskDINO reference venv off scratch.** `$MASKDINO_ROOT/myenv` has now been
+      purged once mid-run (6g) and the project's own `myenv/` once before (2026-08-07, CLAUDE.md).
+      Rebuilding in place restarts the 15-day clock but guarantees a repeat. `$HOME` is not purged
+      and has ~15 GB headroom against a ~6 GB venv. Cost: `MASKDINO_ROOT`/venv paths are hardcoded
+      in `slurm/coco_transplant.sh`, `slurm/train_maskdino_upstream.sh`,
+      `tests/test_maskdino_upstream_control.py` and docs/MASKDINO.md §7.6 — so it is a small
+      rename plus a §7.6 re-verification, not a one-liner. Decide before the next long run.
 - [ ] **6h. Optional second control: upstream's OWN recipe** (finetuned backbone, LSJ@1024, same
       87 948 iters, ~3 days). 6g alone cannot separate "our recipe" from "our implementation" — it
       pins the two together. This run pins the **recipe** cost, so the pair brackets the 46.1 gap
