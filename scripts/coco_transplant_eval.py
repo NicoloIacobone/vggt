@@ -60,7 +60,7 @@ Usage
     sbatch slurm/coco_transplant.sh
 
 Must run under the reference env (detectron2 + pycocotools + the compiled MSDeformAttn op):
-    /cluster/scratch/niacobone/MaskDINO/myenv/bin/python
+    /cluster/home/niacobone/MaskDINO/myenv/bin/python
 """
 
 import argparse
@@ -70,7 +70,7 @@ import os
 import sys
 from pathlib import Path
 
-MASKDINO_ROOT = os.environ.get("MASKDINO_ROOT", "/cluster/scratch/niacobone/MaskDINO")
+MASKDINO_ROOT = os.environ.get("MASKDINO_ROOT", "/cluster/home/niacobone/MaskDINO")
 COCO_ROOT = os.environ.get("COCO_ROOT", "/cluster/scratch/niacobone")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

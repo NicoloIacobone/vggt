@@ -80,6 +80,12 @@ upstream run in the same environment to the same tolerance. It says our implemen
 faithful. It says nothing about VGGT, ScanNet, or 3D consistency — the backbone, the dataset and
 the task are all upstream's there. Never quote it next to a ScanNet number.
 
+**Since 2026-08-12 the port is certified on the *training* path too** (`docs/MASKDINO_COCO.md` §6
+row 2): upstream MaskDINO's own code, trained under our recipe, lands at **34.55 segm AP against
+our `resnet50` arm's 34.3**. §7.6's certificate covered inference only and explicitly excluded
+`matcher.py`, `criterion.py` and DN generation; those three are now corroborated end to end. Still
+not a project result, and still belongs in no table here.
+
 ## 2. Single-frame protocol — the comparison that matters
 
 | Model | Scenes | val mIoU | val AP50 | val AP75 | val mAP |
@@ -413,6 +419,25 @@ vertices**, both seeds.
 **What this changed in the wording:** the "single run against a single control" caveat is retired,
 and the AP column is downgraded from a lead to a tie with FAST3DIS — see §5's wording note.
 
+### 5.3 Stacking the two identity mechanisms — a measured NEGATIVE (todo 2f, 2026-08-12)
+
+`--anchor_3d` (§5.2) and bundle width 8→16 (§6) each act on `bundle_id_switch` and each pay on the
+3D ruler. Run **together** (job 9979913, one flag against 9668639) they do not compose. Both
+bridges, all knobs default, 312 scenes, 17.42 frames/scene, 0 failures — mechanism and diagnostics
+in `docs/MASKDINO.md` §8.5:
+
+| checkpoint | unposed 18-class | unposed **agnostic** | posed 18-class | posed **agnostic** |
+|---|---|---|---|---|
+| **`--anchor_3d` S=8** | **0.038 / 0.112 / 0.360** | **0.042 / 0.138 / 0.504** | **0.104 / 0.257 / 0.504** | **0.109 / 0.304 / 0.677** |
+| S=16, 20 ep | 0.032 / 0.115 / 0.414 | 0.029 / 0.104 / 0.458 | 0.088 / 0.260 / 0.572 | 0.081 / 0.252 / 0.644 |
+| 2f = both | 0.032 / 0.109 / 0.353 | 0.041 / 0.139 / 0.504 | 0.082 / 0.236 / 0.501 | 0.098 / 0.297 / 0.679 |
+
+A tie on the unposed class-agnostic column (±0.001, an order of magnitude inside the 0.009 seed
+spread of §5.2) and a loss on the other three. **No headline moves: `--anchor_3d` alone remains the
+row §8.2 quotes.** The signature is over-pruning — 2f keeps the fewest queries of any checkpoint
+(82.2) and votes *fewer* vertices than `--anchor_3d` (0.155 vs 0.177), so it prunes harder and
+covers less.
+
 ## 6. Official 1201/312 split — first runs (2026-08-02)
 
 **A new ruler, on purpose.** Train = the full official ScanNet v2 train split (1201 scenes,
@@ -443,8 +468,17 @@ steps (~ the N=490 recipe budget of 29.4k), warmup 2, eval every epoch on all 31
 | 〃 | per-bundle (val pinned to 8 views) | 0.541 | 0.544 | 0.331 | 0.324 |
 | … S=16, b2, 20 ep (9668652) | per-frame | 0.627 | **0.669** | 0.476 | 0.453 |
 | 〃 | per-bundle — **16-view ruler, not comparable** | 0.561 | 0.594 | 0.356 | 0.351 |
+| … **S=16 + `--anchor_3d`** (9979913, todo 2f) | per-frame | 0.616 | 0.646 | 0.466 | 0.442 |
+| 〃 | per-bundle (val pinned to 8 views) | 0.527 | 0.536 | 0.314 | 0.314 |
 | … `--seed 1` replicate of the control (9901125) | per-bundle | 0.542 | 0.534 | — | — |
 | … `--seed 1` replicate of `--anchor_3d` (9901124) | per-bundle | 0.531 | 0.536 | — | — |
+
+The 2f row is the **only** one in this table that stacks two winners, and it is *negative*:
+against its one-flag control 9668639 it loses 0.016 per-bundle and 0.016 per-frame AP50 (~1.8× the
+§6.1 seed spread) while `bundle_id_switch` improves only 0.385 → 0.375, inside the spread.
+**The 3D ruler agrees** — 2f ties `--anchor_3d` alone on the unposed class-agnostic column
+(0.041 / 0.139 / 0.504 vs 0.042 / 0.138 / 0.504) and loses on the other three (§5.3). The two
+identity mechanisms do not compose; `--anchor_3d` alone stays the checkpoint to quote.
 
 ### 6.1 Seed variance — the number every Δ in this file must be read against (2026-08-07)
 
@@ -516,6 +550,25 @@ alone cannot see what a 3D anchor does. Off by default; costs +15 % training tim
 - The multi-frame `checkpoint_best_bundle.pth`
   (`output/maskdino_sf_list1201_mf_20260802_133826/`) is the leak-free checkpoint the 3D ruler
   (§5) has been waiting for.
+
+### 6.2 Class-agnostic baseline on the official split (2026-08-10, job 10287578)
+
+The reference row for the multi-dataset workstream — ScanNet-only, **`--class_agnostic`**, so that
+"more data helped" can be told apart from "the taxonomy got easier". Same official 1201/312 split,
+`--multi_frame --feature_mode bundle`, S=8, 16 epochs. Full context and the mixture it exists to
+baseline: **docs/MULTIDATASET.md**.
+
+| run | per-frame mIoU / AP50 | per-bundle mIoU / AP50 | `id_switch` ↓ | `view_consistency` ↑ |
+|---|---|---|---|---|
+| class-**aware** control, 12 ep (9386666) | 0.623 / 0.650 | 0.529 / 0.525 | 0.498 | 0.717 |
+| class-**agnostic**, 16 ep (10287578) | 0.657 / 0.658 | 0.536 / **0.505** | 0.509 | 0.692 |
+
+Not a like-for-like cell (12 vs 16 epochs, one class vs 18), and **never quotable against §2/§3/§6
+rows** — it is the anchor for MULTIDATASET.md's rows and nothing else. Two things it does say:
+collapsing the taxonomy costs little on this ruler (−0.020 per-bundle AP50, ~2× the seed spread),
+and the run **had not converged** — `bundle_AP50` climbs monotonically to the last epoch
+(0.487 → 0.495 → 0.496 → 0.505), so any mixture compared against it needs the same or a longer
+budget.
 
 ## 7. Cross-dataset matrix — the same ruler on four benchmarks (todo 6d, 2026-08-09)
 
@@ -694,6 +747,7 @@ input modality. The image-only baseline in SegVGGT's own table, OneFormer3D†, 
 | multi-frame, official split (headline) | 0.023 / 0.067 / 0.268 | 0.060 / 0.156 / 0.408 | **2.3× AP50** |
 | `--anchor_3d` | 0.038 / 0.112 / 0.360 | 0.104 / 0.257 / 0.504 | 2.3× |
 | S=16, 20 epochs | 0.032 / 0.115 / 0.414 | **0.088 / 0.260 / 0.572** | 2.3× |
+| S=16 + `--anchor_3d` (todo 2f, §5.3) | 0.032 / 0.109 / 0.353 | 0.082 / 0.236 / 0.501 | 2.2× |
 | *oracle — GT rendered through the posed bridge* | — | *0.828 / 0.948 / 0.974* | ceiling of the ~17-frame budget |
 | SegVGGT (published) | — | 0.504 / 0.717 / 0.870 | — |
 

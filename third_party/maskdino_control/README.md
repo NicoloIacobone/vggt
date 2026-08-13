@@ -4,7 +4,7 @@ The control arm of `docs/MASKDINO_COCO.md` §6. It trains **upstream's** MaskDIN
 **our** recipe, so §6's comparison stops leaning on a checkpoint we never trained.
 
 Everything here lives in this repo and points at the pristine clone at
-`/cluster/scratch/niacobone/MaskDINO` from outside. **Do not edit the clone** — `docs/MASKDINO.md`
+`/cluster/home/niacobone/MaskDINO` from outside. **Do not edit the clone** — `docs/MASKDINO.md`
 §7.6 (the weight-transplant equivalence check) depends on it being untouched.
 
 | file | contents |
@@ -54,7 +54,7 @@ nothing is lost but the eval scheduled at the crash step.
 ```bash
 bash third_party/maskdino_control/build_ops.sh                      # once
 python third_party/maskdino_control/make_overfit_root.py --n 64     # once
-/cluster/scratch/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
+/cluster/home/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
 
 sbatch --time=4:00:00 --export=ALL,GATE=1 slurm/train_maskdino_upstream.sh   # the gate
 sbatch slurm/train_maskdino_upstream.sh                                      # the run

@@ -50,7 +50,7 @@ VGGT backbone and see whether a state-of-the-art detection-style decoder breaks 
 hand-rolled baseline head hit (val mIoU 0.367 / honest val[grid] AP50 0.199). Constraint:
 **single-frame only** for now.
 
-Reference implementation read for the port: `/cluster/scratch/niacobone/MaskDINO`
+Reference implementation read for the port: `/cluster/home/niacobone/MaskDINO`
 (IDEA-Research MaskDINO, `maskdino/modeling/{transformer_decoder,pixel_decoder,criterion,matcher}`).
 
 The head it replaced is retired to `legacy/` but stays runnable — it is the baseline every number
@@ -971,6 +971,87 @@ failures, all knobs default). All rows 18-class, and class-agnostic in brackets 
    class-aware one, like every non-anchored checkpoint (§9.11).
 4. The posed re-run of 9668639 reproduced a pre-existing on-disk JSON exactly
    (0.083 / 0.216 / 0.488) — the pipeline's determinism, re-confirmed on a second checkpoint.
+
+### 8.5 The two identity mechanisms together — `--anchor_3d` + `--num_frames 16` (todo 2f, job 9979913, 2026-08-08)
+
+§8.3 and §8.4 each found the *same* signature — bundle AP50 flat or mildly up, `bundle_id_switch`
+sharply down, `bundle_num_matched` unmoved — and each paid on the 3D ruler. They had never been
+run together. Job 9979913 is **the 8.4 recipe plus one flag**: `--num_frames 16
+--eval_num_frames 8`, b2, jitter 0.2, 12 epochs, seed 0, `--anchor_3d`. Its `config.json` differs
+from 9668639's in `anchor_3d` alone, so the comparison is one-flag in both directions (against
+9668639 for the anchor, against 9634920 for the width).
+
+| run | per-frame mIoU / AP50 | per-bundle mIoU / AP50 | `view_consistency` ↑ | `id_switch` ↓ | `num_matched` |
+|---|---|---|---|---|---|
+| control S=8, no anchor (9386666) | 0.623 / 0.650 | 0.529 / 0.525 | 0.717 | 0.498 | 14.1 |
+| `--anchor_3d` S=8 (9634920) | 0.611 / 0.641 | 0.524 / 0.527 | 0.723 | 0.409 | 14.0 |
+| **S=16**, no anchor (9668639) | **0.627 / 0.662** | **0.549 / 0.552** | **0.726** | 0.385 | 14.0 |
+| **S=16 + `--anchor_3d`** (**9979913**) | 0.616 / 0.646 | 0.527 / 0.536 | 0.722 | **0.375** | 14.1 |
+
+Best per-frame AP50 of 9979913 is 0.648 @ epoch 11; every figure above is epoch 12, its
+best-bundle epoch. Val pinned to 8-view bundles in both S=16 rows, so all four cells are the same
+ruler.
+
+**Reading 1 — on the 2D ruler the two mechanisms do NOT compose.** Stacking them lands at
+`id_switch` 0.375 against width-alone's 0.385: a −0.010 improvement, *inside* the control arm's
+own seed-to-seed spread on that metric (0.498 vs 0.471, §8.3 / RESULTS.md §6.1). Meanwhile
+per-bundle AP50 falls 0.552 → 0.536 and per-frame 0.662 → 0.646, both −0.016, i.e. ~1.8× the
+0.009 seed spread. So the combination costs measurable AP and buys no measurable identity **over
+the wider bundle alone** — the anchor's −0.089 `id_switch` at S=8 does not survive being added on
+top of the width's −0.113. The natural explanation is that both act on one axis and that axis is
+near its floor at this scale; the run does not distinguish that from a plain optimisation
+interaction, and it was not designed to.
+
+**Reading 2 — the AP cost is the anchor's, unchanged by width.** Against its own one-flag control
+9668639 the anchor costs −0.016 per-frame AP50 here and cost −0.009 at S=8 (§8.3) — the same sign
+and roughly the same size, so the +15 % training-time price documented in §8.3 buys nothing extra
+at S=16 either. `view_consistency` and `num_matched` are flat across all four rows, as everywhere
+in this section.
+
+Cost: 11 h 36 on an A100 80 GB, ~230 GB feature cache — the §8.4 sizing, unchanged.
+
+#### Reading 3 — the 3D ruler agrees: stacking costs, it never gains (jobs 10477399 / 10477400, 2026-08-12)
+
+§8.3's lesson is that `bundle_AP50` at S=8 is a *poor proxy* for the 3D ruler — `--anchor_3d` was
+flat on it and worth +67 % 3D AP50 — so a 2D-negative row could not settle 2f. Both bridges were
+therefore run on `checkpoint_best_bundle.pth`, all knobs default, val-312, **17.42 frames/scene and
+0 failures, identical to every row below** (the per-scene frame counts match the reference runs
+scene for scene, so this is like-for-like by construction).
+
+| checkpoint | unposed 18-class | unposed **agnostic** | posed 18-class | posed **agnostic** | kept q | voted | annot |
+|---|---|---|---|---|---|---|---|
+| control S=8 (9386666) | 0.023 / 0.067 / 0.268 | 0.013 / 0.050 / 0.320 | 0.060 / 0.156 / 0.408 | 0.039 / 0.122 / 0.483 | 97.6 | 0.153 | 0.635 |
+| **`--anchor_3d` S=8** (9634920) | **0.038 / 0.112 / 0.360** | **0.042 / 0.138 / 0.504** | **0.104 / 0.257 / 0.504** | **0.109 / 0.304 / 0.677** | 89.0 | **0.177** | **0.666** |
+| S=16, 12 ep (9668639) | 0.033 / 0.098 / 0.336 | 0.023 / 0.080 / 0.391 | 0.083 / 0.216 / 0.488 | 0.064 / 0.190 / 0.572 | 96.4 | 0.149 | 0.629 |
+| S=16, 20 ep (9668652) | 0.032 / 0.115 / 0.414 | 0.029 / 0.104 / 0.458 | 0.088 / 0.260 / 0.572 | 0.081 / 0.252 / 0.644 | 95.2 | 0.151 | 0.629 |
+| **2f, S=16 + `--anchor_3d`** (9979913) | 0.032 / 0.109 / 0.353 | 0.041 / 0.139 / 0.504 | 0.082 / 0.236 / 0.501 | 0.098 / 0.297 / 0.679 | **82.2** | 0.155 | 0.643 |
+
+`voted` / `annot` are mean `voted_vertex_frac` / `annotated_assigned_frac` in the **unposed** run.
+
+**The verdict, and it is consistent in all four columns.** Against `--anchor_3d` alone, 2f is a
+dead heat where the two are closest and *below* everywhere else: unposed class-agnostic
+0.041 / 0.139 / 0.504 vs 0.042 / 0.138 / 0.504 — differences of ±0.001, an order of magnitude
+inside the 0.009 seed spread — while posed class-agnostic loses 0.109 → 0.098 AP and
+0.304 → 0.297 AP50, and **both** class-aware columns lose clearly (unposed AP 0.038 → 0.032, posed
+AP 0.104 → 0.082). Stacking the two identity mechanisms buys nothing on the ruler that is most
+sensitive to identity, at 2× the wall clock and an A100 instead of a 4090. **`--anchor_3d` alone
+remains the checkpoint to quote (RESULTS.md §8.2); 2f changes no headline.**
+
+**The mechanism, from the diagnostics.** 2f pushes the "fewer, cleaner instances" signature
+further than any other row — **82.2 kept queries**, the fewest of the five — but its coverage does
+not follow: 0.155 voted vertices against `--anchor_3d`'s 0.177, and 0.643 annotated-assigned
+against 0.666. It prunes harder *and* covers less. That is the cost showing up in the one place
+§9.6 said would bind: the vote. Both flags reduce the query set; run together they over-prune.
+
+**Method note worth keeping.** In §8.3 the 2D reading *mispredicted* the 3D outcome (flat
+`bundle_AP50`, +67 % 3D AP50). Here the 2D reading **held** — 2D-negative, 3D-negative. So
+"`bundle_AP50` is a poor proxy" stays true as a warning against deciding from it, but it is not a
+systematic inversion to be relied on in the other direction either. The only way to know is to run
+the 3D ruler, which is why this run was worth its 1.5 h even though it closed a door.
+
+Not re-swept: §9.8.1's lifting knobs are checkpoint-dependent and would likely lift 2f as they
+lifted `--anchor_3d` (+0.047 class-agnostic AP50), but a tuned row cannot rescue an untuned tie —
+the comparison above is untuned on both sides, which is what makes it single-variable.
 
 ## 9. The 3D ruler — official ScanNet 3D instance benchmark (docs/todo.md 1d, 2026-08-01)
 

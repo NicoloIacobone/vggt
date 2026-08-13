@@ -25,9 +25,24 @@ DEFAULT_SCANS_ROOT = os.environ.get(
 
 
 def resolve_scene_dirs(spec: str, scans_root: str) -> List[str]:
-    """Accept comma-separated scene names (resolved under scans_root/<name>/raw_data) or paths."""
+    """
+    Accept comma-separated scene names (resolved under scans_root/<name>/raw_data) or paths.
+
+    `@<file>` reads the list from a file instead, one entry per line (commas still work inside
+    it). **This is not a convenience — past ~2000 absolute paths there is no other way.** Linux
+    caps a SINGLE argv entry at `MAX_ARG_STRLEN` = 128 KB regardless of the total `ARG_MAX`, and
+    the multi-dataset mixture's 3520 absolute paths are ~211 KB: job 10480614 died at
+    `execve` with "Argument list too long" *after* staging 117 GB (docs/MULTIDATASET.md §7.2).
+    A file also leaves the exact scene list in the run directory, which is the provenance a
+    3520-scene mixture needs anyway.
+    """
+    if spec.startswith("@"):
+        path = Path(spec[1:])
+        if not path.is_file():
+            raise ValueError(f"scene list file not found: {path}")
+        spec = path.read_text()
     dirs = []
-    for token in [t.strip() for t in spec.split(",") if t.strip()]:
+    for token in [t.strip() for t in spec.replace("\n", ",").split(",") if t.strip()]:
         p = Path(token)
         if not p.exists():
             p = Path(scans_root) / token / "raw_data"

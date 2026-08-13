@@ -205,10 +205,61 @@ def test_patch_token_positions_and_gather():
     print("✅ confidence-weighted patch pooling + order-preserving gather OK\n")
 
 
+def test_scene_list_from_a_file():
+    """
+    `@<file>` scene lists (docs/MULTIDATASET.md §7.2). Linux caps ONE argv entry at 128 KB
+    whatever ARG_MAX says, so the 3520-scene mixture's ~211 KB of paths cannot be an argument —
+    job 10480614 died at execve after staging 117 GB. Comma strings must keep working unchanged.
+    """
+    import tempfile
+    from train.common import resolve_scene_dirs
+    print("=== Testing @file scene lists ===")
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        made = []
+        for name in ("a", "b", "c"):
+            d = td / name / "raw_data"
+            d.mkdir(parents=True)
+            made.append(str(d))
+
+        # 1. the old form is untouched
+        assert resolve_scene_dirs(",".join(made), str(td)) == made
+        assert resolve_scene_dirs("a,b,c", str(td)) == made          # names under scans_root
+
+        # 2. one entry per line
+        lst = td / "scenes.txt"
+        lst.write_text("\n".join(made) + "\n")
+        assert resolve_scene_dirs(f"@{lst}", str(td)) == made
+
+        # 3. blank lines and commas inside the file are both tolerated
+        lst.write_text(f"{made[0]}\n\n{made[1]},{made[2]}\n")
+        assert resolve_scene_dirs(f"@{lst}", str(td)) == made
+
+        # 4. an empty file is an empty list, not a crash (a mixture without ScanNet has no val)
+        empty = td / "empty.txt"
+        empty.write_text("")
+        assert resolve_scene_dirs(f"@{empty}", str(td)) == []
+
+        # 5. a missing file names itself rather than being read as a scene called "@..."
+        try:
+            resolve_scene_dirs(f"@{td / 'nope.txt'}", str(td))
+            raise AssertionError("missing scene-list file did not raise")
+        except ValueError as exc:
+            assert "nope.txt" in str(exc)
+
+        # 6. the size that motivated it: 3520 paths is past the argv cap, and still resolves
+        big = td / "big.txt"
+        big.write_text("\n".join(made * 1200))
+        assert len(",".join(made * 1200)) > 131072, "fixture must exceed MAX_ARG_STRLEN"
+        assert len(resolve_scene_dirs(f"@{big}", str(td))) == 3600
+    print("✅ @file scene lists: files, commas, blanks, empty, missing, past the argv cap\n")
+
+
 if __name__ == "__main__":
     test_frame_targets_builder()
     test_frame_targets_out_of_range_class()
     test_perframe_metrics()
     test_overfit_single_frame()
     test_patch_token_positions_and_gather()
+    test_scene_list_from_a_file()
     print("All test_maskdino_train tests passed! ✅")

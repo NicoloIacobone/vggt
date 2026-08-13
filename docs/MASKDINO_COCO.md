@@ -5,10 +5,11 @@ beats the frozen R50 control by +4.4 AP** (38.8 vs 34.3), and **`vggt` trails `d
 −1.2 AP** (37.7 vs 38.8 final), both reaching ceiling-constrained final steps after converging
 late — see §6.
 
-A fourth arm is **in flight** (job 10094393): **upstream's own MaskDINO under this recipe**, which
-turns §6's "distance to 46.1" from an inference against a released checkpoint into a measurement,
-and is the first check of the port's **training** path. It passed the §4.1 gate at 52.1 AP.
-See `third_party/maskdino_control/README.md`; §6 reading 2 is marked PENDING until it lands.
+A fourth arm **completed 2026-08-12**: **upstream's own MaskDINO under this recipe**, which turns
+§6's "distance to 46.1" from an inference against a released checkpoint into a measurement, and is
+the first check of the port's **training** path. It landed at **34.55 segm AP against our own
+`resnet50` arm's 34.3** — so the recipe costs ~11.6 AP and our matcher/criterion/DN are
+corroborated end to end. See `third_party/maskdino_control/README.md` and §6 reading 2 / §6.1.
 
 **The question (supervisor-facing).** Every number in `docs/MASKDINO.md` compares our port against
 *our own* ScanNet baselines. `docs/MASKDINO.md` §7.6 proved the port reproduces upstream's COCO
@@ -251,7 +252,7 @@ COCO lives at `/cluster/scratch/niacobone/coco` (train2017 + val2017 + instances
 `/cluster/work/igp_psr/yuxchen/coco.zip`). **Global scratch is purged after 15 days** — re-extract
 from that zip if it has vanished.
 
-## 6. Results (2026-08-01 — all three arms complete; upstream control row pending)
+## 6. Results (2026-08-12 — all three arms AND the upstream control complete)
 
 Final full-val2017 numbers at step 87 948 (12 epochs), from each run's `summary.json`
 (`final` block; the `best` interval checkpoint is noted separately).
@@ -270,7 +271,7 @@ Final full-val2017 numbers at step 87 948 (12 epochs), from each run's `summary.
 | arm | segm AP | AP50 | AP75 | APs | APm | APl | box AP | ceiling | best interval AP **(1000 img)** |
 |---|---|---|---|---|---|---|---|---|---|
 | upstream R50, finetuned, 50 ep — **released checkpoint, our inference** (§7.6) | 46.1 | — | — | — | — | — | 51.5 | 92.0 | — |
-| **upstream MaskDINO, THIS recipe** (frozen R50, 12 ep, 518 squash) — job 10094393 | *running* | | | | | | | ~92 | |
+| **upstream MaskDINO, THIS recipe** (frozen R50, 12 ep, 518 squash) — jobs 10094393 → 10279969 → 10427048 | **34.5** | 54.6 | 36.5 | 13.1 | 36.5 | 57.2 | 38.3 | ~92 | 36.9 @85k |
 | `resnet50` frozen, 12 ep | 34.3 | 54.1 | 36.2 | 14.3 | 36.1 | 53.6 | 38.2 | ~92 | 36.7 @80k |
 | `vggt` frozen, 12 ep | 37.659 | 59.384 | 39.512 | 15.253 | 41.555 | 58.524 | 42.065 | 84.2 | 39.7 @75k |
 | `dinov2` frozen, 12 ep | **38.8** | 64.8 | 39.6 | 14.8 | 43.0 | 65.1 | 45.9 | 84.2 | **41.3 @85k** |
@@ -291,51 +292,72 @@ Three readings, the first two already firm:
    that row as COCO-only ("clean models that do not use extra detection data or tricks") — only
    its Swin-L 54.5 row uses Objects365 — so extra data is *not* part of the gap.
    **Row 2 removes the confound**: upstream's own code, our recipe, every axis we control matched
-   (`third_party/maskdino_control/`). Until it lands, do not quote a number for the cost of our
-   recipe. **[PENDING — job 10094393.]**
+   (`third_party/maskdino_control/`). **LANDED 2026-08-12 at 34.55 segm AP** — so the answer is
+   **the recipe costs ~11.6 AP** (46.1 → 34.5), and it is now a measurement, not an inference.
+   Everything below the 46.1 row is that recipe: frozen backbone, 12 epochs, squash@518.
 
-   Row 2 is also the first **training**-path check of the port. §7.6 certifies inference only and
-   explicitly excludes `matcher.py`, `criterion.py` and DN generation. If row 2 lands near our
-   `resnet50` arm's 34.3, those three modules are corroborated end to end. **If it lands far
-   above 34.3, our training path has a bug** — say so loudly rather than reporting the gap as a
-   recipe cost. First evidence already in: on the §4.1 overfit gate the two implementations track
-   each other point-for-point (0.275 / 22.4 / 52.1 vs 0.002 / 23.4 / 54.3), which is what
-   agreement between independent loss paths looks like — and §6.1 now extends that agreement to
-   15 000 steps of real COCO training, within ±0.85 AP at every matched step.
+   Row 2 is also the first **training**-path check of the port, and it passes. §7.6 certifies
+   inference only and explicitly excludes `matcher.py`, `criterion.py` and DN generation; the
+   stated failure criterion was "if row 2 lands far above our `resnet50` arm's 34.3, our training
+   path has a bug". It landed at **34.55 against 34.3 — Δ +0.25 AP**, with the per-metric spread
+   equally small (AP50 +0.5, AP75 +0.3, box AP +0.1) and only `APl` moving materially (+3.6, with
+   `APs` −1.2 the other way: upstream's mapper favours large objects slightly, ours small ones).
+   **Two independently written matchers, criteria and DN generators converge to a quarter of an AP
+   over 87 948 steps of real COCO training.** Those three modules are corroborated end to end, and
+   the §4.1 gate (52.1 vs 54.3) plus the full matched-step curve in §6.1 say the same thing three
+   ways. No bug to report.
 3. **VGGT's 3D pretraining costs ~1–1.6 AP on 2D semantics at identical token geometry.** Best
    checkpoint: `vggt` 39.7 @75k vs `dinov2` 41.3 @85k; final step: 37.659 vs 38.8. Both arms
    start wide apart (14.1 vs 23.4 at overfit-gate), converge gradually through mid-training, and
    diverge in the endgame — `vggt` plateaus at 75k while `dinov2` climbs to 85k. The gap
    reflects 3D domain shift, not token scarcity: both arms beat the frozen R50 control's 34.3.
 
-### 6.1 Reading the control row before it finishes — the matched-step curve
+### 6.1 The matched-step curve — the control against our arms, step for step
 
-Row 2 costs ~41 h (87 948 steps at 1.69 s/iter, so one self-resubmit), but it does not have to be
-finished to answer the question it exists for. Its periodic evals use **our arms' protocol
-exactly** — every 5000 steps, the same first 1000 val2017 images — so a control point can be laid
-against the column below at the same step from its first eval onward, ~3 h in.
+Row 2's periodic evals use **our arms' protocol exactly** — every 5000 steps, the same first 1000
+val2017 images — so every control point can be laid against the columns below at the same step.
+This was written to be readable before the run finished; it is now the complete curve.
 
-`segm AP` on the 1000-image periodic split (`num_images == 1000` in each run's `metrics.jsonl`):
+`segm AP` on the 1000-image periodic split (`num_images == 1000` in each run's `metrics.jsonl`;
+`metrics.json` for the control):
 
 | step | `resnet50` frozen | `vggt` frozen | `dinov2` frozen | upstream control | Δ vs `resnet50` |
 |---|---|---|---|---|---|
-| 5 000 | 17.48 | 13.42 | 25.35 | **17.10** | −0.37 |
+| 5 000 | 17.48 | 13.42 | 25.35 | **17.10** | −0.38 |
 | 10 000 | 22.77 | 21.17 | 32.27 | **23.61** | +0.84 |
-| 15 000 | 25.85 | — | — | **26.12** | +0.27 |
+| 15 000 | 25.85 | 26.47 | 34.01 | **26.12** | +0.27 |
 | 20 000 | 27.80 | 28.76 | 35.84 | **28.55** | +0.75 |
-| 25 000 | 29.70 | — | — | **29.95** | +0.25 |
-| 30 000 | 31.25 | — | — | **31.59** | +0.34 |
-| 35 000 | 32.73 | — | — | **32.50** | −0.23 |
-| 40 000 | 33.26 | 35.78 | 39.06 | *(eval lost — see below)* | |
-| best | 36.66 @80k | 39.73 @75k | 41.33 @85k | | |
+| 25 000 | 29.70 | 31.31 | 37.12 | **29.95** | +0.25 |
+| 30 000 | 31.25 | 32.76 | 37.20 | **31.59** | +0.34 |
+| 35 000 | 32.73 | 34.15 | 37.76 | **32.50** | −0.23 |
+| 40 000 | 33.26 | 35.78 | 39.06 | *(eval lost — see below)* | — |
+| 45 000 | 33.89 | 36.94 | 38.99 | **33.84** | −0.05 |
+| 50 000 | 34.99 | 38.05 | 39.32 | **34.88** | −0.11 |
+| 55 000 | 35.00 | 37.81 | 39.83 | **35.03** | +0.03 |
+| 60 000 | 35.68 | 38.59 | 40.45 | **35.76** | +0.08 |
+| 65 000 | 35.67 | 38.56 | 41.02 | **36.10** | +0.43 |
+| 70 000 | 35.99 | 39.28 | 41.07 | **36.65** | +0.66 |
+| 75 000 | 36.46 | 39.73 | 41.05 | **36.64** | +0.18 |
+| 80 000 | 36.66 | 39.53 | 41.06 | **36.86** | +0.20 |
+| 85 000 | 36.50 | 39.53 | 41.33 | **36.92** | +0.42 |
+| best | 36.66 @80k | 39.73 @75k | 41.33 @85k | **36.92 @85k** | +0.26 |
+| **final, full 5000 img** | **34.3** | **37.66** | **38.8** | **34.55** | **+0.25** |
 
-**Interim, at iter 40k of 87 948 (2026-08-10).** The two implementations agree to
-**within ±0.85 AP at all seven matched steps so far** (mean Δ +0.26, sign changing), with no sign
-of drift — on independently written matchers, criteria and DN generation, over 35 000 steps of
-COCO. Together with the §4.1
-gate (52.1 vs 54.3) that is the corroboration §6 reading 2 asks for, arriving well before the run
-ends. Nothing here is quotable as a result: these are 1000-image periodic numbers and the row-2
-figure is the full-5000 final.
+**Complete, 2026-08-12.** The two implementations agree to **within ±0.84 AP at all 16 matched
+steps** (mean Δ **+0.23**, sign changing four times, no drift with training length), and the two
+finals agree to **+0.25 AP**. That is independently written matchers, criteria and DN generation
+converging over 88 000 steps of real COCO — the corroboration §6 reading 2 asks for, delivered on
+the axis it asked for it.
+
+Two secondary confirmations fall out of the same table. **The control reproduces the population
+offset** flagged in the §6 warning box: 36.92 (1000 img) → 34.55 (5000 img) = **−2.37**, against
+−2.36 / −2.07 / −2.53 for `resnet50` / `vggt` / `dinov2`. A fourth arm, built to the same split on
+purpose, lands on the same offset — the "~2 AP drop at the last step" is protocol, definitively,
+not late-training regression. And **both R50 curves plateau in the same place** (ours 36.66 @80k
+then down to 36.50; the control 36.92 @85k, flat from 80k), so even the endgame shape matches.
+
+Nothing in the periodic columns is quotable as a result: they are 1000-image numbers. The row-2
+figure and the last line of this table are the full-5000 finals.
 
 **The 40 000 eval is missing, and the reason is worth knowing before it eats a run of yours.**
 The scratch purge took the **reference venv** mid-run (`/cluster/scratch/niacobone/MaskDINO/myenv`
@@ -362,10 +384,30 @@ Two traps in the rebuild itself: `install.sh` **cannot run on a CPU node** as wr
 visible and `TORCH_CUDA_ARCH_LIST` unset, torch's `_get_cuda_arch_flags` returns an empty list and
 `arch_list[-1] += '+PTX'` raises `IndexError`) — export `TORCH_CUDA_ARCH_LIST="8.0;8.6"` first,
 which also fixes the sm_86-only build the clone shipped with. And rebuilding **in place** on
-scratch is the right unblock (it preserves every path §7.6 and `coco_transplant.sh` hardcode, and
-restarts the 15-day clock) but not a fix: the durable answer is moving that venv off scratch.
+scratch was the right unblock mid-run but not a fix.
+
+**The durable fix landed 2026-08-12 (todo 6i): the whole clone now lives at
+`/cluster/home/niacobone/MaskDINO`**, which is not purged. Every path in this file, in
+`third_party/maskdino_control/` and in the two slurm drivers points there; `MASKDINO_ROOT` still
+overrides. The one thing a move used to break silently — the configs' absolute `_BASE_` into the
+clone, and the overfit gate's *relative* base on top of it — is now re-rooted at `MASKDINO_ROOT`
+by `config_paths.py::resolve_base`, which raises rather than falling back to detectron2 defaults.
+The scratch path above is left as written: it is where the incident happened.
 
 **`resnet50` is the column to read row 2 against** — it is the same frozen ResNet-50 under the same
-recipe, so the two differ only by implementation. Agreement corroborates our `matcher.py`,
-`criterion.py` and DN generation end to end; the §4.1 gate already agrees (52.1 vs 54.3). A control
-landing *far above* `resnet50` is a bug in our training path, not a recipe cost — §6 reading 2.
+recipe, so the two differ only by implementation. That test has now run to completion and
+**agreement is the verdict** (+0.25 AP final, ±0.84 at every matched step): our `matcher.py`,
+`criterion.py` and DN generation are corroborated end to end, and the 46.1 → 34.5 distance is a
+recipe cost, not a bug — §6 reading 2.
+
+**Job ledger for row 2** — one run, four SLURM ids, because the driver self-resubmits at the time
+limit and each segment resumes from `last_checkpoint` on `/cluster/work`:
+
+| job | wall | reached iter | note |
+|---|---|---|---|
+| 10094393 | 22 h 31 | 33 004 | 2026-08-09, first segment |
+| **10228029** | 4 h 27 | 39 999 | **FAILED** — the scratch purge below, 6 992 iters after the damage |
+| 10279969 | 22 h 32 | 73 376 | resumed from 39 999; the 40 000 eval is the only casualty |
+| 10427048 | 10 h 22 | **87 948** | finished 2026-08-12 07:47, ran the full-5000 final |
+
+`summary.json` in `output/maskdino_upstream_matched_20260809_015551/` is the row-2 source.

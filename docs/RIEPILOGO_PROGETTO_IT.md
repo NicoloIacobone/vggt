@@ -44,6 +44,12 @@ Questo è l'errore più facile da fare nel progetto. Ogni numero appartiene a un
 | **3D ufficiale ScanNet** | istanze 3D sulla nuvola di punti del benchmark, evaluator ufficiale | `RESULTS.md` §5 |
 | **COCO** | verifica di correttezza della porta, non un risultato del progetto | `docs/MASKDINO_COCO.md` |
 
+Dal 2026-08-12 la verifica della porta copre **anche il percorso di training**, non solo
+l'inferenza: il codice originale di MaskDINO, allenato con la *nostra* ricetta, arriva a 34.55 AP
+contro i 34.3 del nostro braccio equivalente (Δ +0.25, `MASKDINO_COCO.md` §6). Matcher, criterion e
+denoising sono quindi corroborati end-to-end, e il divario verso i 46.1 del checkpoint rilasciato
+da upstream è **costo della ricetta (~11.6 AP)**, misurato e non più dedotto.
+
 ## 4. Risultati principali
 
 **2D, split ufficiale 1201/312** (il righello onesto, `RESULTS.md` §6):

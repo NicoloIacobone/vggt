@@ -3,7 +3,7 @@
 # _BASE_ is upstream's own COCO instance-segmentation config, unedited, in the pristine clone.
 # EVERY key below is one of the axes docs/MASKDINO_COCO.md §2 lists as a deviation of our arms
 # from upstream's recipe. Anything not listed here is upstream's value, on purpose.
-_BASE_: /cluster/scratch/niacobone/MaskDINO/configs/coco/instance-segmentation/maskdino_R50_bs16_50ep_3s.yaml
+_BASE_: /cluster/home/niacobone/MaskDINO/configs/coco/instance-segmentation/maskdino_R50_bs16_50ep_3s.yaml
 
 MODEL:
   BACKBONE:

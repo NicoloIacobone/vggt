@@ -6,7 +6,7 @@
 #   sbatch slurm/coco_transplant.sh              # full 5000-image val2017, both modes
 #   sbatch --export=ALL,LIMIT=500 slurm/coco_transplant.sh
 #
-# Runs under the REFERENCE env (/cluster/scratch/niacobone/MaskDINO/myenv: py3.9 + torch 1.10 +
+# Runs under the REFERENCE env (/cluster/home/niacobone/MaskDINO/myenv: py3.9 + torch 1.10 +
 # detectron2 0.6 + pycocotools + the compiled MSDeformAttn op), NOT the project's myenv/.
 # That torch build supports sm_37..sm_86 only, so this must land on a 3090 / A100 —
 # an RTX 4090 (sm_89) or RTX PRO 6000 (sm_120) will fail with "no kernel image is available".
@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-MASKDINO_ROOT=/cluster/scratch/niacobone/MaskDINO
+MASKDINO_ROOT=/cluster/home/niacobone/MaskDINO
 cd /cluster/scratch/niacobone/vggt
 
 export PYTHONUNBUFFERED=1

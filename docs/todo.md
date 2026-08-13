@@ -212,18 +212,36 @@ In effort order — each step also de-risks the next:
       the VAL bundle width so `bundle_*` stays on the 8-view ruler the 0.525 baseline was
       measured on; without it, widening training silently changes what the metric measures.
 
-- [~] **2f. Combine `--anchor_3d` with `--num_frames 16` — RUNNING (job 9979913).** The two
+- [x] **2f. Combine `--anchor_3d` with `--num_frames 16` — CLOSED 2026-08-12, NEGATIVE on every
+      ruler.** (Trained job 9979913; scored in 3D by jobs 10477399 / 10477400.) (docs/MASKDINO.md §8.5, RESULTS.md §6.) The two
       winners of 2d and 2e both act on `bundle_id_switch` and both pay on the 3D ruler, and they
-      have never been run together. Config = the 2e recipe plus `--anchor_3d`; A100 80 GB, ~13 h.
-      **Two attempts lost to a broken venv, not to the code** (jobs 9901119, 9973805): scratch's
-      15-day purge had eaten torch's `.py` sources while leaving the `.pyc` — see the warning in
-      `CLAUDE.md`. Env rebuilt 2026-08-07, all 13 CPU tests green, resubmitted.
-      **Worth fixing regardless:** the optimizer is constructed *after* the ~4.5 h feature-caching
-      pass (`scripts/train_maskdino.py:313`), so any error there costs the whole cache — 9901119
-      died exactly that way. Building it first would turn this class of failure into a
-      one-minute one.
-      When it lands: score it on the 3D ruler in **both** transfer modes, and re-sweep the lifting
-      knobs (§9.8.1 showed they are checkpoint-dependent — do not reuse the 0.15 m value blindly).
+      had never been run together. Config = the 2e recipe plus `--anchor_3d`, one flag against
+      9668639; A100 80 GB, 11 h 36.
+      **They do not compose on the 2D ruler**: per-bundle AP50 0.552 → **0.536** and per-frame
+      0.662 → **0.646** (both −0.016, ~1.8× the 0.009 seed spread) while `id_switch` improves only
+      0.385 → **0.375**, *inside* the control arm's own seed spread on that metric (0.027). So the
+      anchor's −0.089 `id_switch` at S=8 does not survive being stacked on the width's −0.113 —
+      one axis, near its floor — and the run costs measurable AP for it.
+      **The 3D ruler was the arbiter and it agrees** (docs/MASKDINO.md §8.5 reading 3, RESULTS.md
+      §5.3; both bridges, default knobs, 312 scenes, 17.42 frames, 0 failures). Against
+      `--anchor_3d` alone: a dead heat on the unposed class-agnostic column
+      (0.041 / 0.139 / 0.504 vs 0.042 / 0.138 / 0.504, ±0.001 — an order of magnitude inside the
+      0.009 seed spread) and a **loss** on the other three (posed agnostic 0.109 → 0.098 AP;
+      unposed class-aware 0.038 → 0.032; posed class-aware 0.104 → 0.082). Signature:
+      **over-pruning** — 2f keeps the fewest queries of any checkpoint (82.2) yet votes *fewer*
+      vertices than `--anchor_3d` (0.155 vs 0.177). Both flags shrink the query set; together they
+      shrink it past the point the vote can pay for.
+      **Consequences.** `--anchor_3d` alone stays the checkpoint to quote (RESULTS.md §8.2) — no
+      headline moves. And the §8.3 caution reads more precisely now: `bundle_AP50` mispredicted the
+      3D outcome there and predicted it correctly here, so it is unreliable in *both* directions,
+      not systematically inverted. Knobs were deliberately NOT re-swept: a tuned row cannot rescue
+      an untuned tie, and untuned-on-both-sides is what makes the comparison single-variable.
+      **Two earlier attempts were lost to a broken venv, not to the code** (jobs 9901119, 9973805):
+      scratch's 15-day purge had eaten torch's `.py` sources while leaving the `.pyc` — see the
+      warning in `CLAUDE.md`. Env rebuilt 2026-08-07, all 13 CPU tests green, resubmitted.
+      **Still worth fixing:** the optimizer is constructed *after* the ~4.5 h feature-caching pass
+      (`scripts/train_maskdino.py:313`), so any error there costs the whole cache — 9901119 died
+      exactly that way. Building it first would turn this class of failure into a one-minute one.
 
 - [x] **2g. Seed variance — DONE 2026-08-07** (jobs 9901124 / 9901125, RESULTS.md §6.1,
       docs/MASKDINO.md §8.3). Both arms of the 2d comparison re-trained with `--seed 1`.
@@ -244,10 +262,19 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 
 ## 4. Watching
 
+**One run open as of 2026-08-12: job 10484000, the multi-dataset mixture.** Everything else once
+listed here has landed:
+
 - (todo 2d fully landed — jobs 9634920 / 9670882 / 9670883. A regression re-run of the control
   under current code was submitted as 9848637 and **cancelled**; it is not needed, because the
   drift question is closed from the commit diff instead — see 2d.)
-- **Job 9973805** — todo 2f, `--anchor_3d` + `--num_frames 16` (see 2f above). The one open run.
+- (todo 2f fully closed 2026-08-12 — jobs 9979913 / 10477399 / 10477400 → 2f. Negative.)
+- **Job 10484000** — the multi-dataset mixture, 3520 scenes (docs/MULTIDATASET.md §7/§8). The one
+  open run. Two scale-only driver bugs preceded it, both fixed and both regression-tested:
+  a SIGPIPE under the inherited `set -e` (§7.1) and the 128 KB argv cap (§7.2).
+- (todo 6g's control landed 2026-08-12, jobs 10094393 → 10279969 → 10427048 → 6g.)
+- (the multi-dataset baseline landed 2026-08-10, job 10287578 → docs/MULTIDATASET.md §6; the
+  smoke run 10287385 **failed on a driver bug** → MULTIDATASET.md §7.1.)
 - (Everything else previously listed here landed on 2026-08-07: the 3D ruler on 2e's winners
   → 2e; the lifting-knob sweep on the `--anchor_3d` checkpoint → §9.8.1, worth **+0.047**
   class-agnostic AP50, far more than the +0.016 it was worth on the old checkpoint; seed
@@ -326,7 +353,8 @@ the parts that are cheap.
 
 Everything in §1 made our *evaluation* placeable. This makes the *training setting* placeable, and
 completes the evaluation to every benchmark the competitors report on. Full plan and budget lines:
-the approved plan file; the audit itself: `docs/TRAINING_COMPARABILITY.md`.
+the approved plan file; the audit itself: `docs/TRAINING_COMPARABILITY.md`; the multi-dataset
+training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
 
 - [x] **6a. The training × evaluation audit — DONE 2026-08-07** (`docs/TRAINING_COMPARABILITY.md`).
       Three findings that reshape the rest: **SegVGGT trains on the same official 1201 split we do**
@@ -402,25 +430,59 @@ the approved plan file; the audit itself: `docs/TRAINING_COMPARABILITY.md`.
       *worst* probe frame, which **failed ScanNet itself** — 3/312 val scenes carry one drifted
       probe up to 64.7 cm while no scene median exceeds 9.6 cm. It now fails on the scene median
       and reports single-frame outliers. A rule that fails the reference dataset is the wrong rule.
-- [ ] **6e. `--class_agnostic` training mode.** Needed to train on any dataset without the ScanNet
-      taxonomy; also the setting FAST3DIS and IGGT report in. Defaults off.
-- [ ] **6f. InsScene-15K arm** (IGGT's own training data, Apache-2.0). **Download DONE 2026-08-08**
+- [x] **6e. `--class_agnostic` training mode — DONE 2026-08-10** (`docs/MULTIDATASET.md` §3, 13 CPU
+      checks in `tests/test_class_agnostic.py`). Needed to train on any dataset without the ScanNet
+      taxonomy; also the setting FAST3DIS and IGGT report in. **One rule, no second flag: a
+      one-class head means class-agnostic** — `build_frame_targets` reads `num_classes == 1` off
+      `head_config`, keeps every instance instead of dropping the ones it cannot name, and
+      collapses the label, so training and all three scorers share one code path and a *checkpoint
+      alone* decides how its GT is built. Defaults off; every published number stays class-aware.
+      **Measured 2026-08-10** (job 10287578, MULTIDATASET.md §6, RESULTS.md §6.2): collapsing the
+      taxonomy costs −0.020 per-bundle AP50 with `id_switch`/`view_consistency` unmoved — the head
+      was not leaning on the 18-way class head for instance separation, which is the premise the
+      whole 6f arm rests on.
+- [~] **6f. InsScene-15K arm** (IGGT's own training data, Apache-2.0). **Download DONE 2026-08-08**
       (job 10106802): the full mirror is on work at `dataset/insscene15k/`, 522.07 GB / **1565**
       files (not ~120 — `processed_infinigen` is 1468 small per-scene zips, `processed_re10k` 44,
       `processed_scannetpp_v2` 53), shards untouched (never unzipped), `README.md` alongside with
       licence/date/manifest sha256. Re-checked at mirror time: still **no Aria/ASE directory**
       upstream, so this remains a **partial replication** by construction, not by our choice — an
       ASE arm is out of scope and permanently so: 9.2 TB *and* the sampled scene list is
-      unpublished. The arm itself (unzip-on-demand loader, training run) is still open work.
-- [~] **6g. Upstream MaskDINO trained under OUR recipe** — **IN FLIGHT, job 10094393**
-      (2026-08-08). Built as `third_party/maskdino_control/` (own README); driver
+      unpublished.
+      **The 2D supervision turned out to be already there — no rendering needed** (this reverses
+      `docs/TRAINING_COMPARABILITY.md` §4's assumption): `processed_scannetpp_v2` ships
+      `refined_ins_ids`, `processed_infinigen` ships `ObjectSegmentation`, ids are global per scene
+      in both, and `processed_re10k` has none and is skipped. **BUILD DONE 2026-08-10** (job
+      10286143, 1 h 42): `dataset/insscene2d/insscene2d_scannetpp.tar.zst` (1.28 GB, **853**
+      scenes — the 50 `nvs_sem_val` dropped, they contain all 49 scenes of our ScanNet++ eval
+      column) + `insscene2d_infinigen.tar.zst` (2.14 GB, **1466** sub-scenes, room shell dropped by
+      name). Loader `data/instance_map_dataset.py`, driver `slurm/train_maskdino_multi.sh`, 71 new
+      CPU checks, all documented in **`docs/MULTIDATASET.md`** — that file is this item's home.
+      **STILL OPEN: the mixture has never been trained.** The end-to-end smoke (job 10287385) died
+      in 2 minutes on a **driver bug, not on the data** — `slurm/stage_dataset.sh` is sourced and
+      carries `set -euo pipefail`, so the `CAP_*` line `[ "$CAP" -gt 0 ] && LIST=$(echo "$LIST" |
+      head -n "$CAP")` aborts the job by SIGPIPE once the list exceeds the 64 KB pipe buffer
+      (ScanNet++'s 853 paths fit, Infinigen's 1466 do not). Reproduced; it only fires when `CAP_*`
+      is set. Fix, re-smoke, then run the mixture with **at least** the baseline's 16-epoch budget
+      (it had not converged) — MULTIDATASET.md §7.1 and §8.
+- [x] **6g. Upstream MaskDINO trained under OUR recipe — DONE 2026-08-12, and it AGREES**
+      (docs/MASKDINO_COCO.md §6 row 2 + §6.1; jobs 10094393 → 10228029 → 10279969 → 10427048,
+      87 948 iters). Built as `third_party/maskdino_control/` (own README); driver
       `slurm/train_maskdino_upstream.sh`; tests `tests/test_maskdino_upstream_control.py` (5/5, needs
       the **reference** env). 8 axes moved to our values, 22 asserted still at upstream's.
       **§4.1 gate PASSED: segm AP 52.1 @600 vs our `resnet50` arm's 54.3** — the two implementations
-      track each other point-for-point, which is already first evidence for `matcher.py`,
-      `criterion.py` and DN generation. Remaining: fill §6 row 2 and rewrite reading 2 (marked
-      PENDING there) when `summary.json` appears. ~42 h at 1.70 s/iter, batch 16 peaks at 23.9 GB,
-      so it self-resubmits once. Three things this cost, all recorded where they bite:
+      track each other point-for-point, which was the first evidence for `matcher.py`,
+      `criterion.py` and DN generation.
+      **RESULT: 34.55 segm AP on full val2017 against our `resnet50` arm's 34.3 — Δ +0.25**, with
+      ±0.84 AP at all 16 matched periodic steps (mean +0.23, sign changing) and the same
+      1000→5000-image population offset (−2.37 vs our −2.36). The stated failure criterion ("far
+      above 34.3 = a bug in our training path") did **not** fire: two independently written
+      matchers, criteria and DN generators converge to a quarter of an AP over 88 k steps of real
+      COCO. **Two things this licenses:** the port is now certified on the *training* path, not
+      just inference (§7.6 excluded exactly those three modules), and **the 46.1 → 34.5 distance is
+      a measured recipe cost (~11.6 AP), not an inference against a differently-trained model.**
+      ~42 h at 1.70 s/iter, batch 16 peaks at 23.9 GB, so it self-resubmits. Three things this cost,
+      all recorded where they bite:
       the clone's MSDeformAttn `.so` is **sm_86-only** and upstream's bare `except:` turns a wrong
       arch into a silent ~10× slowdown (`build_ops.sh`, and an unwrapped kernel call at startup);
       torch 1.10 **rejects** `PYTORCH_CUDA_ALLOC_CONF=expandable_segments`; and a 600-step gate
@@ -429,13 +491,27 @@ the approved plan file; the audit itself: `docs/TRAINING_COMPARABILITY.md`.
       Plus a fourth, mid-run: **the scratch purge ate the reference venv** and surfaced as
       `UnidentifiedImageError` on a perfectly good COCO jpg (MASKDINO_COCO.md §6.1). Resumed from
       `/cluster/work` at zero cost; the 40 000 eval is the only casualty.
-- [ ] **6i. Move the MaskDINO reference venv off scratch.** `$MASKDINO_ROOT/myenv` has now been
-      purged once mid-run (6g) and the project's own `myenv/` once before (2026-08-07, CLAUDE.md).
-      Rebuilding in place restarts the 15-day clock but guarantees a repeat. `$HOME` is not purged
-      and has ~15 GB headroom against a ~6 GB venv. Cost: `MASKDINO_ROOT`/venv paths are hardcoded
-      in `slurm/coco_transplant.sh`, `slurm/train_maskdino_upstream.sh`,
-      `tests/test_maskdino_upstream_control.py` and docs/MASKDINO.md §7.6 — so it is a small
-      rename plus a §7.6 re-verification, not a one-liner. Decide before the next long run.
+- [x] **6i. Move the MaskDINO reference venv off scratch — DONE 2026-08-12.** `$MASKDINO_ROOT/myenv`
+      had been purged once mid-run (6g) and the project's own `myenv/` once before (2026-08-07,
+      CLAUDE.md); rebuilding in place restarts the 15-day clock but guarantees a repeat.
+      **The WHOLE clone moved, not just the venv** — `/cluster/scratch/niacobone/MaskDINO` →
+      **`/cluster/home/niacobone/MaskDINO`** (4.9 GB, 21 102 files; $HOME is at 34.6/45 GB and
+      112 k/450 k files after, both comfortable). The clone's own `.py` sources and the sm_80+86
+      `MultiScaleDeformableAttention.so` sit under the same 15-day rule as the venv, so splitting
+      them would have left half the problem. Verified before deleting the original: identical file
+      counts, and a checksum `rsync -nc` differing on exactly the 43 `myenv/bin/` scripts whose
+      shebang/`VIRTUAL_ENV` were rewritten (129 bytes = 43 × 3 chars, the path shortening).
+      No `.so` carried an RPATH into scratch. `tests/test_maskdino_upstream_control.py` passes
+      6/6 under the moved venv, which is the §7.6 re-verification this item asked for.
+      **What made it more than a rename**, and is now fixed so the next move IS one: the control
+      configs inherit upstream's own COCO yaml by **absolute path**, and the overfit gate inherits
+      *that* by a relative path — so a moved clone breaks the §4.1 gate one level below where you
+      look. `third_party/maskdino_control/config_paths.py::resolve_base` re-roots a dead absolute
+      `_BASE_` at `$MASKDINO_ROOT`, following the relative chain, never editing the yaml on disk,
+      and raising rather than silently falling back to detectron2 defaults. Wired into
+      `train_control.py::setup` and the reference test; 23 CPU checks in
+      `tests/test_maskdino_control_paths.py`, which runs under the **project** venv (the module is
+      stdlib-only on purpose).
 - [ ] **6h. Optional second control: upstream's OWN recipe** (finetuned backbone, LSJ@1024, same
       87 948 iters, ~3 days). 6g alone cannot separate "our recipe" from "our implementation" — it
       pins the two together. This run pins the **recipe** cost, so the pair brackets the 46.1 gap

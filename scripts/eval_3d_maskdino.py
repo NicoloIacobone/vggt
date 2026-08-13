@@ -170,6 +170,28 @@ def default_out_path(ckpt_path: Path, args, parser) -> Path:
 
 # ------------------------------------------------------------------------------------------
 
+def label_setting(dataset, head_config):
+    """
+    Is this run class-aware? It takes BOTH the dataset and the checkpoint to say so.
+
+    `train/datasets3d.py` knows whether the *benchmark* has our 19-class taxonomy. It cannot know
+    whether the *head* does: a `--class_agnostic` checkpoint (docs/MULTIDATASET.md §3) carries one
+    class, so its single logit means "object", not ScanNet class 1.
+
+    Left to the dataset alone the failure is **silent and total**, not merely mislabelled. The
+    index arithmetic above sends every query of a one-class head to dataset class 1, and
+    `SCANNET_IDX_TO_NYU40[1]` is **wall** (nyu40 1) — which `drop_wall_floor_predictions` then
+    filters out. Every query, every scene: 0 kept, AP 0.000 / 0.000 / 0.000, and nothing in the
+    log saying why. Surviving that, an 18-class table would still be printed for a head that
+    cannot name a class.
+
+    Returns (class_aware_run, agnostic_head). When `agnostic_head`, the nyu40 label is an artefact
+    rather than a prediction, so the wall/floor filter must be skipped too.
+    """
+    agnostic_head = int(head_config.get("num_classes", 19)) == 1
+    return bool(dataset.class_aware) and not agnostic_head, agnostic_head
+
+
 def load_model(ckpt_path: Path, device: str):
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     if "head_config" not in ckpt or "head_state_dict" not in ckpt:
@@ -270,10 +292,13 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
     cls_idx = cls_idx + 1                                              # 1..19 dataset classes
     nyu40 = torch.as_tensor([SCANNET_IDX_TO_NYU40[int(c)] for c in cls_idx],
                             device=score.device)
+    class_aware_run, agnostic_head = label_setting(ds, model.head.head_config)
     keep = score >= args.min_score
-    if ds.drop_wall_floor_predictions:
+    if ds.drop_wall_floor_predictions and not agnostic_head:
         # not benchmark classes on this dataset — the prediction filter mirrors the GT
-        # taxonomy (train/datasets3d.py), which is what keeps the comparison single-variable
+        # taxonomy (train/datasets3d.py), which is what keeps the comparison single-variable.
+        # Skipped for a one-class head: `nyu40` is then an artefact of the index arithmetic
+        # above, not a prediction, so filtering on it would drop queries at random.
         keep = keep & (nyu40 > 2)
     keep_idx = torch.nonzero(keep).squeeze(1)
     keep_idx = keep_idx[score[keep_idx].argsort(descending=True)][:args.eval_topk]
@@ -283,10 +308,10 @@ def run_scene(model, train_args: Dict, scene: str, scene_frames_dir: Path, gt3d:
                           "seconds": round(time.time() - t0, 1)}}
     q_score = score[keep_idx].cpu().numpy()
     q_label = nyu40[keep_idx].cpu().numpy()
-    if not ds.class_aware:
-        # this dataset's taxonomy is not ours: every surviving query is emitted under the
-        # evaluator's single collapsed label, exactly as `collapse_preds_to_class_agnostic`
-        # would do on ScanNetv2 (train/datasets3d.py)
+    if not class_aware_run:
+        # either this dataset's taxonomy is not ours, or the head has only one class: every
+        # surviving query is emitted under the evaluator's single collapsed label, exactly as
+        # `collapse_preds_to_class_agnostic` would do on ScanNetv2 (train/datasets3d.py)
         q_label = np.full_like(q_label, AGNOSTIC_LABEL_ID)
 
     pixel_query = np.stack([
@@ -397,6 +422,12 @@ def main():
           f"checkpoint {ckpt_path.name} "
           f"(multi_frame={train_args.get('multi_frame', False)}, "
           f"feature_mode={train_args.get('feature_mode', 'single')})")
+    class_aware_run, agnostic_head = label_setting(ds, model.head.head_config)
+    if agnostic_head:
+        print("checkpoint has a ONE-CLASS head (--class_agnostic, docs/MULTIDATASET.md §3): "
+              "scored class-agnostic whatever the dataset. No 18-class table is produced for "
+              "it — a one-class head cannot name a benchmark class, and printing one would be "
+              "a fabrication.")
     if not ds.class_aware:
         print(f"{ds.name} is CLASS-AGNOSTIC only: its taxonomy is not our 19 ScanNet "
               f"classes, so labels are collapsed on BOTH sides and only the class-agnostic "
@@ -430,7 +461,7 @@ def main():
             failed.append(scene)
             print(f"[{i + 1}/{len(scenes)}] {scene} FAILED:\n"
                   + "".join(traceback.format_exc().splitlines(keepends=True)[-6:]), flush=True)
-        if ds.class_aware:
+        if class_aware_run:
             gt2pred, pred2gt = assign_instances_for_scan(scene, preds, gt3d["gt_ids"],
                                                          MIN_REGION_SIZE)
             matches[scene] = {"gt": gt2pred, "pred": pred2gt}
@@ -444,7 +475,7 @@ def main():
         matches_ca[scene] = {"gt": ca_gt, "pred": ca_pred}
 
     avgs, diag17 = None, None
-    if ds.class_aware:
+    if class_aware_run:
         avgs = compute_averages(evaluate_matches(matches, OVERLAPS, MIN_REGION_SIZE),
                                 OVERLAPS)
         diag17 = seventeen_class_mean(avgs)
@@ -452,14 +483,14 @@ def main():
                                OVERLAPS)
     agnostic = {k: float(avgs_ca[k]) for k in ("all_ap", "all_ap_50%", "all_ap_25%")}
 
-    if ds.class_aware:
+    if class_aware_run:
         print("\nOfficial 18-class ScanNet 3D instance benchmark (the headline):")
         print(format_results(avgs))
         print(f"\n17-common-class diagnostic (our head cannot predict otherfurniture): "
               f"AP {diag17['all_ap']:.3f}  AP50 {diag17['all_ap_50%']:.3f}  "
               f"AP25 {diag17['all_ap_25%']:.3f}")
     print(f"\nclass-agnostic (labels ignored — FAST3DIS's / IGGT's setting"
-          f"{', and the only column this dataset has' if not ds.class_aware else ', NOT the headline'}): "
+          f"{', and the only column this run has' if not class_aware_run else ', NOT the headline'}): "
           f"AP {agnostic['all_ap']:.3f}  AP50 {agnostic['all_ap_50%']:.3f}  "
           f"AP25 {agnostic['all_ap_25%']:.3f}")
     if failed:
@@ -474,7 +505,10 @@ def main():
         "checkpoint": str(ckpt_path),
         "dataset": ds.name,
         "dataset_note": ds.note,
-        "class_aware": ds.class_aware,
+        "class_aware": class_aware_run,
+        "dataset_class_aware": ds.class_aware,
+        # a one-class head forces the agnostic setting even on ScanNetv2 (`label_setting`)
+        "class_agnostic_head": agnostic_head,
         "protocol": "official ScanNet 3D instance evaluator (docs/MASKDINO.md §9) over "
                     f"{ds.name}; NOT comparable to any 2D-protocol number",
         "transfer_mode": args.transfer_mode,

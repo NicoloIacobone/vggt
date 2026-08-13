@@ -48,7 +48,10 @@ import time
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-MASKDINO_ROOT = os.environ.get("MASKDINO_ROOT", "/cluster/scratch/niacobone/MaskDINO")
+sys.path.insert(0, str(_HERE))
+from config_paths import maskdino_root, resolve_base  # noqa: E402  (stdlib-only, no detectron2)
+
+MASKDINO_ROOT = maskdino_root()
 # ops_build/ holds MultiScaleDeformableAttention rebuilt for sm_80+sm_86 (see build_ops.sh).
 # It must precede site-packages, whose copy is sm_86-only and would make upstream's bare
 # `except:` in MSDeformAttn.forward fall back to the slow pytorch core on an A100.
@@ -211,7 +214,10 @@ def setup(args):
     add_deeplab_config(cfg)
     add_maskdino_config(cfg)
     add_control_config(cfg)
-    cfg.merge_from_file(args.config_file)
+    # resolve_base, not args.config_file: the yaml inherits upstream's own COCO config by
+    # absolute path into the clone, and the clone moves (docs/todo.md 6i). No-op while that
+    # path is valid. config_paths.py explains why this is not just an edit to the yaml.
+    cfg.merge_from_file(resolve_base(args.config_file))
     cfg.merge_from_list(args.opts)
     cfg.DATASETS.TRAIN = (TRAIN_DATASET,)
     # DATASETS.TEST drives the PERIODIC eval hook only; the final eval overrides it with the full

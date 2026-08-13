@@ -27,8 +27,13 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
 - `docs/COMMANDS.md` — the full command catalogue (tests, training, 3D ruler, COCO, dataset
   rebuilds) with the caveats each one needs.
 - `docs/MASKDINO_COCO.md` — the COCO backbone-swap study. Contains the **mask-resolution ceiling
-  measurement** (§1) — read it before proposing anything that depends on mask or token resolution.
+  measurement** (§1) — read it before proposing anything that depends on mask or token resolution —
+  and the **upstream-MaskDINO control** (§6, complete 2026-08-12): trained under our recipe it lands
+  at 34.55 AP vs our own arm's 34.3, which certifies our matcher/criterion/DN on the *training*
+  path and prices the recipe at ~11.6 AP against upstream's released 46.1.
 - `docs/DATASET.md` — GT provenance, the tars, mask conventions, how a job gets the data.
+- `docs/MULTIDATASET.md` — the multi-dataset training arm (ScanNet + ScanNet++ + Infinigen,
+  `--class_agnostic`). Its rows are **class-agnostic** and never comparable to RESULTS' §2/§3/§6.
 - `docs/todo.md` — open work only.
 - `docs/RELATED_WORK.md` — competitor landscape & positioning. Read before framing any result as a
   contribution.
@@ -63,6 +68,9 @@ accumulate in the repo root.
 # Tests — standalone scripts, not pytest; all CPU-only, no backbone weights needed.
 for t in tests/test_*.py; do python "$t"; done
 bash tests/test_train_maskdino_sh_lists.sh          # slurm scene-list logic, DRY_RUN
+bash tests/test_train_maskdino_multi_sh.sh          # …the multi-dataset driver, incl. errexit
+# exception: tests/test_maskdino_upstream_control.py needs the REFERENCE env
+/cluster/home/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
 
 # Training (the entry point)
 sbatch slurm/train_maskdino.sh                      # 50 scenes, ~20k steps

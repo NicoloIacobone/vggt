@@ -5,7 +5,7 @@ CPU tests for the upstream-MaskDINO control arm (third_party/maskdino_control/).
 Unlike every other test in tests/, this one runs under the REFERENCE env, not the project's
 myenv/ — it needs detectron2 0.6:
 
-    /cluster/scratch/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
+    /cluster/home/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
 
 What it protects. The whole value of the control row is that ONLY the listed axes differ from
 upstream. A silently-wrong squash, a schedule that is cosine-ish rather than ours, or a yaml key
@@ -29,7 +29,7 @@ import numpy as np
 import torch
 
 REPO = Path(__file__).resolve().parent.parent
-MASKDINO_ROOT = os.environ.get("MASKDINO_ROOT", "/cluster/scratch/niacobone/MaskDINO")
+MASKDINO_ROOT = os.environ.get("MASKDINO_ROOT", "/cluster/home/niacobone/MaskDINO")
 sys.path.insert(0, MASKDINO_ROOT)
 sys.path.insert(0, str(REPO))
 
@@ -38,6 +38,7 @@ from detectron2.projects.deeplab import add_deeplab_config              # noqa: 
 from maskdino import add_maskdino_config                                # noqa: E402
 
 from third_party.maskdino_control.config import add_control_config      # noqa: E402
+from third_party.maskdino_control.config_paths import resolve_base      # noqa: E402
 from third_party.maskdino_control.lr import matched_lr_lambda           # noqa: E402
 from third_party.maskdino_control.squash_mapper import CocoSquashDatasetMapper  # noqa: E402
 
@@ -51,7 +52,9 @@ def load_cfg(path):
     add_deeplab_config(cfg)
     add_maskdino_config(cfg)
     add_control_config(cfg)
-    cfg.merge_from_file(str(path))
+    # Same resolution the trainer uses, so this test keeps checking the config the run gets even
+    # after the clone moves (docs/todo.md 6i). Its own semantics are in tests/test_maskdino_control_paths.py.
+    cfg.merge_from_file(resolve_base(str(path)))
     return cfg
 
 

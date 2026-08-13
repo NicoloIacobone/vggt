@@ -42,7 +42,7 @@
 
 set -euo pipefail
 
-MASKDINO_ROOT=/cluster/scratch/niacobone/MaskDINO
+MASKDINO_ROOT=/cluster/home/niacobone/MaskDINO
 REPO=/cluster/scratch/niacobone/vggt
 cd "$REPO"
 

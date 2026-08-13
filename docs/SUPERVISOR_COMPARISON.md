@@ -142,12 +142,29 @@ modules are ours (6 + 9 ported deformable-attention instances), and perturbing a
 *inside our decoder* by 1.05× moves the score (55.702 → 55.608 AP on a 10-image subset). Identical
 numbers therefore mean equivalence, not a silent fallback to upstream code.
 
-**Scope.** Certified: deformable attention (encoder and decoder), the deformable encoder stack and
-its reference points, two-stage query selection, DAB anchors, iterative box refinement,
-mask-enhanced box init, the prediction heads. Not exercised by this route (training-only or
-project-specific): the matcher, the criterion, denoising query generation, the multi-frame module,
-and the VGGT feature pyramid. Those rest on the unit tests (perfect-prediction zero loss,
-synthetic overfit).
+**Scope.** Certified by the route above: deformable attention (encoder and decoder), the
+deformable encoder stack and its reference points, two-stage query selection, DAB anchors,
+iterative box refinement, mask-enhanced box init, the prediction heads. Not exercised by it
+(training-only or project-specific): the matcher, the criterion, denoising query generation, the
+multi-frame module, and the VGGT feature pyramid.
+
+**The training path is now certified too (2026-08-12).** The route above drives *upstream's
+weights* through our modules, so it never touches the loss. A second control closes that hole:
+upstream MaskDINO's own code, **trained from scratch under our recipe** (frozen R50, 12 epochs,
+squash@518, 87 948 iterations) against our own `resnet50` arm under the same recipe.
+
+| COCO val2017, 5000 images, trained not loaded | segm AP | AP50 | box AP |
+|---|---|---|---|
+| upstream MaskDINO's code, our recipe | 34.55 | 54.6 | 38.3 |
+| **our port, same recipe** | **34.3** | 54.1 | 38.2 |
+
+**Δ = +0.25 segm AP**, and ±0.84 AP at all 16 matched intermediate evaluations (mean +0.23, sign
+changing). Two independently written matchers, criteria and denoising-query generators converging
+to a quarter of an AP over 88 000 steps of real training is what those three modules needed, and
+they now rest on that rather than on unit tests alone. It also prices the recipe: upstream's
+released 50-epoch finetuned checkpoint scores 46.1, so **freezing the backbone and training 12
+epochs at 518 px costs ~11.6 AP** — a measurement now, not an inference against a
+differently-trained model. Details: `docs/MASKDINO_COCO.md` §6.
 
 **Do not put this next to a ScanNet number.** The backbone, dataset and task are all upstream's
 here. It says our implementation of MaskDINO is faithful, and nothing more.

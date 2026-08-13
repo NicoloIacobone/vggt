@@ -180,6 +180,22 @@ The geometry check fails on a scene's **median** probe frame, not its worst: 3 o
 stay under 6 cm. Those are reported as outliers, not failures — a rule that fails the reference
 dataset is the wrong rule.
 
+### 2.4 The 2D **training** tars from InsScene-15K (docs/todo.md 6f) — see docs/MULTIDATASET.md
+
+Everything above is ScanNet GT or 3D **evaluation** GT. There is a second family, built 2026-08-10
+under `dataset/insscene2d/`, that supplies extra **2D training** supervision outside ScanNet's
+taxonomy:
+
+| Tar | Contents |
+|---|---|
+| `insscene2d_scannetpp.tar.zst` (1.28 GB) | **853** ScanNet++ scenes from IGGT's InsScene-15K mirror, re-encoded to `<scene>/{color/*.jpg, instance/*.png, manifest.json}` at 518. The 50 `nvs_sem_val` scenes are **excluded** — they contain all 49 scenes of the §2.1 eval column. |
+| `insscene2d_infinigen.tar.zst` (2.14 GB) | **1466** Infinigen sub-scenes, same layout; the room shell (`wall`/`floor`/`ceiling`/`exterior`) dropped by name, since every evaluator counts those as false positives. |
+
+Different layout, different purpose, **one class only**: these have no ScanNet taxonomy, so they
+can only be trained with `--class_agnostic`. Provenance, the two exclusions, the id-globality
+verification, the build and the runs are all in **`docs/MULTIDATASET.md`** — this entry exists so
+that a reader of the tar list knows they are here and why they are not in the table above.
+
 ## 3. Mask conventions (both GTs)
 
 - uint8 `{0, 255}` PNGs at the scene's color-camera resolution (1296×968; 640×480 for the 9

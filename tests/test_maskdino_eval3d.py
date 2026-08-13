@@ -641,6 +641,37 @@ def test_evaluator_class_agnostic():
     print("✅ class-agnostic = same official logic, labels collapsed onto one class\n")
 
 
+def test_label_setting_takes_the_head_into_account():
+    """
+    A one-class (--class_agnostic) checkpoint must force class-agnostic scoring even on
+    ScanNetv2 — otherwise its single logit is read as ScanNet class 1 and an 18-class table
+    gets printed for a head that cannot name a class (docs/MULTIDATASET.md §3).
+    """
+    print("=== Testing label_setting (dataset x head) ===")
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from eval_3d_maskdino import label_setting
+    from train.datasets3d import get_dataset
+
+    scannetv2, replica = get_dataset("scannetv2"), get_dataset("replica")
+    assert scannetv2.class_aware and not replica.class_aware, "fixture assumption"
+
+    # the 19-class head: unchanged behaviour on both kinds of dataset
+    assert label_setting(scannetv2, {"num_classes": 19}) == (True, False)
+    assert label_setting(replica, {"num_classes": 19}) == (False, False)
+    # a head_config that predates the key is a 19-class head, not an agnostic one
+    assert label_setting(scannetv2, {}) == (True, False)
+
+    # the one-class head: agnostic everywhere, and it says so
+    assert label_setting(scannetv2, {"num_classes": 1}) == (False, True)
+    assert label_setting(replica, {"num_classes": 1}) == (False, True)
+
+    # the wall/floor prediction filter is keyed to nyu40 labels the agnostic head does not
+    # produce, so the flag that disables it must be the second element, not the first
+    _, agnostic = label_setting(scannetv2, {"num_classes": 1})
+    assert agnostic is True
+    print("✅ one-class heads force the agnostic setting; 19-class runs are unchanged\n")
+
+
 def test_script_helpers():
     print("=== Testing eval_3d_maskdino script helpers ===")
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -767,6 +798,7 @@ if __name__ == "__main__":
     test_evaluator_iou_half()
     test_evaluator_false_positive()
     test_evaluator_class_agnostic()
+    test_label_setting_takes_the_head_into_account()
     test_script_helpers()
     test_out_path_names_the_knobs()
     test_end_to_end_synthetic()

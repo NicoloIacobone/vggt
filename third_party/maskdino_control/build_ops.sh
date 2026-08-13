@@ -18,7 +18,7 @@
 # CUDA 11.3's nvcc needs a pre-GCC11 host compiler, which only stack/2025-06 exposes.
 set -euo pipefail
 
-REPO=${MASKDINO_ROOT:-/cluster/scratch/niacobone/MaskDINO}
+REPO=${MASKDINO_ROOT:-/cluster/home/niacobone/MaskDINO}
 OPS="$REPO/maskdino/modeling/pixel_decoder/ops"
 OUT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ops_build"
 TMP=$(mktemp -d)

@@ -84,6 +84,13 @@ PYTHON=myenv/bin/python
 # `build_scene_dataset` picks the loader per directory, so the three sources are one flat list.
 cap_of() { eval "echo \${CAP_$(echo "$1" | tr '[:lower:]' '[:upper:]'):-0}"; }
 
+# NEVER `echo "$LIST" | head -n N` here. `stage_dataset.sh` is SOURCED above and carries
+# `set -euo pipefail`, so this whole driver runs under errexit: once `head` has its N lines it
+# exits, `echo` takes SIGPIPE, pipefail propagates 141, and — being the final command of an
+# `&&` list — it is not exempt from errexit. The job then dies silently, mid scene-list, with
+# nothing in the .err. That is exactly how job 10287385 died (docs/MULTIDATASET.md §7.1), and it
+# only bites once the list outgrows the 64 KB pipe buffer, so it looks data-dependent.
+# `head -n N <<< "$LIST"` has no pipe and no writer to kill.
 TRAIN_PARTS=()
 for SRC in $SOURCES; do
     CAP=$(cap_of "$SRC")
@@ -91,18 +98,17 @@ for SRC in $SOURCES; do
         IDS=$(grep -vE '^\s*$' data/splits/scannetv2_train.txt | sort -u)
         [ -d "${SCANNET_ROOT:-/nonexistent}" ] && \
             IDS=$(comm -12 <(echo "$IDS") <(ls "$SCANNET_ROOT" | sort))
-        [ "$CAP" -gt 0 ] && IDS=$(echo "$IDS" | head -n "$CAP")
-        LIST=$(echo "$IDS" | sed "s|^|${SCANNET_ROOT}/|; s|$|/raw_data|")
+        [ "$CAP" -gt 0 ] && IDS=$(head -n "$CAP" <<< "$IDS")
+        LIST=$(sed "s|^|${SCANNET_ROOT:-}/|; s|$|/raw_data|" <<< "$IDS")
     else
         LIST=$(find "$STAGE/insscene2d/$SRC" -mindepth 1 -maxdepth 1 -type d | sort)
-        [ "$CAP" -gt 0 ] && LIST=$(echo "$LIST" | head -n "$CAP")
+        [ "$CAP" -gt 0 ] && LIST=$(head -n "$CAP" <<< "$LIST")
     fi
-    N=$(echo "$LIST" | grep -c . || true)
+    N=$(grep -c . <<< "$LIST" || true)
     echo "[cfg] $SRC: $N train scenes"
     TRAIN_PARTS+=("$LIST")
 done
-TRAIN=$(printf '%s\n' "${TRAIN_PARTS[@]}" | grep -c . >/dev/null; \
-        printf '%s\n' "${TRAIN_PARTS[@]}" | grep . | paste -sd, -)
+TRAIN=$(printf '%s\n' "${TRAIN_PARTS[@]}" | { grep . || true; } | paste -sd, -)
 N_TRAIN=$(tr ',' '\n' <<< "$TRAIN" | grep -c .)
 
 # Val: the official ScanNet v2 312, unchanged across every mixture (see the header).
@@ -110,8 +116,8 @@ if [[ " $SOURCES " == *" scannet "* ]]; then
     VAL_IDS=$(grep -vE '^\s*$' data/splits/scannetv2_val.txt | sort -u)
     [ -d "${SCANNET_ROOT:-/nonexistent}" ] && \
         VAL_IDS=$(comm -12 <(echo "$VAL_IDS") <(ls "$SCANNET_ROOT" | sort))
-    [ "${CAP_VAL:-0}" -gt 0 ] && VAL_IDS=$(echo "$VAL_IDS" | head -n "${CAP_VAL}")
-    VAL=$(echo "$VAL_IDS" | sed "s|^|${SCANNET_ROOT}/|; s|$|/raw_data|" | paste -sd, -)
+    [ "${CAP_VAL:-0}" -gt 0 ] && VAL_IDS=$(head -n "${CAP_VAL}" <<< "$VAL_IDS")
+    VAL=$(sed "s|^|${SCANNET_ROOT:-}/|; s|$|/raw_data|" <<< "$VAL_IDS" | paste -sd, -)
 else
     VAL=""
 fi
@@ -136,13 +142,24 @@ if [ -n "${DRY_RUN:-}" ]; then
     echo "[dry-run] first train entries:"; tr ',' '\n' <<< "$TRAIN" | head -3
     echo "[dry-run] last train entries:";  tr ',' '\n' <<< "$TRAIN" | tail -3
     echo "[dry-run] first val entry:";     tr ',' '\n' <<< "$VAL" | head -1
+    # the contract the 3520-scene mixture needs: lists reach python as FILES, never as argv
+    echo "[dry-run] scene lists: @$RUN/train_scenes.txt @$RUN/val_scenes.txt"
+    echo "[dry-run] train list bytes: $(printf '%s' "$TRAIN" | wc -c) (argv cap is 131072)"
     exit 0
 fi
 
 mkdir -p "$RUN"
+# The lists go in as FILES, not as one giant argv entry. Linux caps a single argument at
+# MAX_ARG_STRLEN = 128 KB whatever ARG_MAX says, and the full mixture's 3520 absolute paths are
+# ~211 KB: job 10480614 died at execve with "Argument list too long" AFTER staging 117 GB
+# (docs/MULTIDATASET.md §7.2). It also leaves the exact scene list in the run dir as provenance.
+tr ',' '\n' <<< "$TRAIN" | grep . > "$RUN/train_scenes.txt"
+tr ',' '\n' <<< "$VAL"   | grep . > "$RUN/val_scenes.txt" || true
+echo "[cfg] scene lists written to $RUN/{train,val}_scenes.txt"
+
 $PYTHON scripts/train_maskdino.py \
     --scans_root "${SCANNET_ROOT:-$STAGE}" \
-    --train_scenes "$TRAIN" --val_scenes "$VAL" \
+    --train_scenes "@$RUN/train_scenes.txt" --val_scenes "@$RUN/val_scenes.txt" \
     --class_agnostic \
     --multi_frame --feature_mode bundle \
     --num_frames 8 --batch_frames 8 --eval_batch_frames 8 \

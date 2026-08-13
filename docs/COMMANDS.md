@@ -56,6 +56,18 @@ python tests/test_coco_maskdino.py    # COCO track: both pixel-decoder pyramid m
                                       # round-trip, GT helpers, instance inference + RLE, overfit
 bash tests/test_train_maskdino_sh_lists.sh  # slurm scene-list logic via DRY_RUN: numeric-range
                                       # back-compat, TRAIN_LIST/VAL_LIST split files, filtering
+bash tests/test_train_maskdino_multi_sh.sh  # the multi-dataset driver's lists + CAP_*. Its
+                                      # regression check runs the script under errexit on purpose:
+                                      # DRY_RUN skips the sourced `set -e`, so a plain dry run
+                                      # cannot see a silent-abort bug (MULTIDATASET.md §7.1)
+python tests/test_maskdino_control_paths.py  # keeps the COCO control runnable after the upstream
+                                      # clone moves: _BASE_ re-rooting at $MASKDINO_ROOT (todo 6i)
+```
+
+One test does **not** run under `myenv/` — it needs detectron2 0.6, i.e. the reference env:
+
+```bash
+/cluster/home/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
 ```
 
 ---
@@ -262,8 +274,8 @@ sm ≤ 86 (3090/A100) because that torch build predates Ada.
 
 ```bash
 sbatch slurm/coco_transplant.sh                                # both modes, 5000 imgs, ~32 min
-LD_LIBRARY_PATH=/cluster/scratch/niacobone/MaskDINO/myenv/lib/python3.9/site-packages/torch/lib \
-  /cluster/scratch/niacobone/MaskDINO/myenv/bin/python scripts/coco_transplant_eval.py \
+LD_LIBRARY_PATH=/cluster/home/niacobone/MaskDINO/myenv/lib/python3.9/site-packages/torch/lib \
+  /cluster/home/niacobone/MaskDINO/myenv/bin/python scripts/coco_transplant_eval.py \
   --mode ours --limit 10          # CPU-runnable smoke test; --mode baseline is the control
 ```
 
@@ -292,7 +304,7 @@ upstream clone is imported and never edited, so `docs/MASKDINO.md` §7.6 stays r
 ```bash
 bash third_party/maskdino_control/build_ops.sh                   # ONCE: MSDeformAttn for sm_80
 python third_party/maskdino_control/make_overfit_root.py --n 64  # ONCE: the gate's COCO root
-/cluster/scratch/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
+/cluster/home/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
 
 sbatch --time=4:00:00 --export=ALL,GATE=1 slurm/train_maskdino_upstream.sh  # §4.1 gate, must be >40
 sbatch slurm/train_maskdino_upstream.sh                                     # 87 948 iters, A100 80GB
