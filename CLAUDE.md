@@ -20,6 +20,9 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
 
 ### Docs — read in this order
 
+- `RESTORE.md` — **read first if this repo was restored from the 2026-08-13 backup zip.**
+  What the archive holds and what it does not, the venv rebuild, and the hardcoded
+  `/cluster/...` paths you must re-root before anything runs.
 - `docs/MASKDINO.md` — **the primary document.** Architecture, deviations from upstream MaskDINO,
   the protocols, the evaluation rules, the multi-frame mechanisms.
 - `docs/RESULTS.md` — **every number, one home.** Read §1 before quoting anything: per-frame,
