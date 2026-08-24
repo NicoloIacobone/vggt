@@ -25,7 +25,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-OUT=/cluster/work/igp_psr/niacobone/distillation/output
+OUT=${OUT:-/cluster/work/igp_psr/niacobone/distillation/output}
 declare -A RUN=(
     [mf]=maskdino_sf_list1201_mf_20260802_133826
     [anchor3d]=maskdino_sf_list1201_mf_anchor3d_20260804_171436
@@ -36,11 +36,28 @@ CKPTS=${CKPTS:-"mf anchor3d s16"}
 DATASETS=${DATASETS:-"scannetv2 scannet200 scannetpp replica"}
 MODES=${MODES:-"unproject gt_projection"}
 
+# A CKPTS entry is either one of the keys above, or — for arms that postdate this file, e.g.
+# the multi-dataset runs of docs/MULTIDATASET.md — a run directory (absolute, or a name under
+# $OUT) or an explicit .pth. The keys stay so the three published rows keep their short names.
 for c in $CKPTS; do
     run=${RUN[$c]:-}
-    [ -n "$run" ] || { echo "unknown checkpoint key '$c' (${!RUN[*]})"; exit 1; }
-    ckpt=$OUT/$run/checkpoint_best_bundle.pth
-    [ -f "$ckpt" ] || { echo "missing checkpoint $ckpt"; exit 1; }
+    if [ -n "$run" ]; then      ckpt=$OUT/$run/checkpoint_best_bundle.pth; tag=$c
+    elif [ -f "$c" ];  then     ckpt=$c;                             tag=$(basename "$(dirname "$c")")
+    elif [ -d "$c" ];  then     ckpt=$c/checkpoint_best_bundle.pth;  tag=$(basename "$c")
+    elif [ -d "$OUT/$c" ]; then ckpt=$OUT/$c/checkpoint_best_bundle.pth; tag=$c
+    else echo "unknown checkpoint '$c' — not a key (${!RUN[*]}), a run dir or a .pth"; exit 1; fi
+    # SLURM job names are the only place the key is read back, so keep the tag short and safe.
+    # A run dir's identity lives in its TAIL (`..._n3520_a3d_e12_<timestamp>`), so drop the
+    # timestamp and the shared `maskdino_` prefix and keep the last 28 chars, not the first.
+    tag=${tag#maskdino_}
+    tag=$(printf '%s' "$tag" | sed -E 's/_[0-9]{8}_[0-9]{6}$//' | tr -c 'A-Za-z0-9_' '_')
+    [ ${#tag} -gt 28 ] && tag=${tag: -28}
+    if [ ! -f "$ckpt" ]; then
+        # A dry run is for reading the sbatch lines, so a missing checkpoint is a warning there
+        # and a hard error in a real submission.
+        [ "${DRY_RUN:-0}" = 1 ] && echo "WARNING: missing checkpoint $ckpt" \
+                               || { echo "missing checkpoint $ckpt"; exit 1; }
+    fi
     for d in $DATASETS; do
         for m in $MODES; do
             extra=""
@@ -49,7 +66,7 @@ for c in $CKPTS; do
             # splits that list on whitespace, so `EXTRA_ARGS=--transfer_mode gt_projection`
             # inside it makes sbatch read "gt_projection" as the script name and die.
             # `--export=ALL` propagates the submitting environment, which carries it intact.
-            cmd=(sbatch --job-name="eval3d_${c}_${d}_${m:0:2}"
+            cmd=(sbatch --job-name="eval3d_${tag}_${d}_${m:0:2}"
                  --export=ALL,DATASET=$d,CHECKPOINT=$ckpt
                  slurm/eval_3d_maskdino.sh)
             if [ "${DRY_RUN:-0}" = 1 ]; then

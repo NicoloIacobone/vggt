@@ -10,6 +10,12 @@ subset run can never leak into the matrix), and prints one row per
 
     myenv/bin/python scripts/collect_eval3d_matrix.py            # markdown
     myenv/bin/python scripts/collect_eval3d_matrix.py --json     # the raw cells
+    myenv/bin/python scripts/collect_eval3d_matrix.py \
+        --run 'B ScanNet=maskdino_multi_scannet_n1201_a3d_e35_20260821_201002' --only
+
+`--run LABEL=DIR` (repeatable) adds a run the file does not name — the multi-dataset arms of
+`docs/MULTIDATASET.md` §10 postdate it — and `--only` drops the three built-in rows so the two
+blocks are never printed as one table. DIR is a name under the output root or an absolute path.
 """
 
 import argparse
@@ -47,9 +53,26 @@ def fmt(t):
     return "—" if t is None else " / ".join(f"{x:.3f}" for x in t)
 
 
-def collect():
+def parse_runs(pairs, only: bool):
+    """`LABEL=DIR` pairs -> the RUNS mapping to scan. Insertion order is the table's row order."""
+    runs = {} if only else dict(RUNS)
+    for pair in pairs or []:
+        if "=" not in pair:
+            raise SystemExit(f"--run wants LABEL=DIR, got {pair!r}")
+        label, _, run = pair.partition("=")
+        label, run = label.strip(), run.strip()
+        if not label or not run:
+            raise SystemExit(f"--run wants a non-empty LABEL and DIR, got {pair!r}")
+        runs[label] = run
+    if not runs:
+        raise SystemExit("--only was given without any --run")
+    return runs
+
+
+def collect(runs=None):
+    runs = RUNS if runs is None else runs
     cells = {}
-    for label, run in RUNS.items():
+    for label, run in runs.items():
         for path in sorted((OUT / run).glob("eval3d_*.json")):
             try:
                 d = json.loads(path.read_text())
@@ -73,8 +96,13 @@ def collect():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--run", action="append", metavar="LABEL=DIR",
+                    help="add a run the file does not name; repeatable")
+    ap.add_argument("--only", action="store_true",
+                    help="scan ONLY the --run entries, dropping the three built-in rows")
     args = ap.parse_args()
-    cells = collect()
+    runs = parse_runs(args.run, args.only)
+    cells = collect(runs)
     if args.json:
         print(json.dumps({" | ".join(k): v for k, v in cells.items()}, indent=2))
         return 0
@@ -82,7 +110,7 @@ def main():
     print("| checkpoint | dataset | scenes | views/scene | unposed (`unproject`) | "
           "posed (`gt_projection`) |")
     print("|---|---|---|---|---|---|")
-    for label in RUNS:
+    for label in runs:
         for ds in DATASETS:
             up = cells.get((label, ds, "unproject"))
             gp = cells.get((label, ds, "gt_projection"))
@@ -92,12 +120,12 @@ def main():
             print(f"| {label} | {ds} | {any_cell['scenes']} | {any_cell['frames']} | "
                   f"{fmt(up and up['class_agnostic'])} | {fmt(gp and gp['class_agnostic'])} |")
     print("\nAP / AP50 / AP25, CLASS-AGNOSTIC (the only setting all four datasets share).")
-    missing = [f"{lab} x {ds} x {m}" for lab in RUNS for ds in DATASETS for m in MODES
+    missing = [f"{lab} x {ds} x {m}" for lab in runs for ds in DATASETS for m in MODES
                if (lab, ds, m) not in cells]
     if missing:
         print(f"\nmissing {len(missing)} cell(s): " + ", ".join(missing))
     print("\nclass-aware ScanNetv2 (the headline ruler, §5), for reference:")
-    for label in RUNS:
+    for label in runs:
         for m in MODES:
             c = cells.get((label, "scannetv2", m))
             if c and c["class_aware"]:

@@ -72,6 +72,7 @@ accumulate in the repo root.
 for t in tests/test_*.py; do python "$t"; done
 bash tests/test_train_maskdino_sh_lists.sh          # slurm scene-list logic, DRY_RUN
 bash tests/test_train_maskdino_multi_sh.sh          # …the multi-dataset driver, incl. errexit
+bash tests/test_eval_3d_matrix_sh.sh                # …the cross-dataset eval grid, DRY_RUN
 # exception: tests/test_maskdino_upstream_control.py needs the REFERENCE env
 /cluster/home/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
 

@@ -274,34 +274,9 @@ def main():
     trainable = sum(p.numel() for p in model.head.parameters() if p.requires_grad)
     print(f"Trainable head parameters: {trainable:,}")
 
-    print("\n=== Caching frozen-backbone features ===")
-    train_scenes = prepare_scenes(model, train_dirs, args, device, "train")
-    val_scenes = prepare_scenes(model, val_dirs, args, device, "val")
-    if args.multi_frame:
-        # One sample = one bundle of --num_frames frames, sharing a query set.
-        train_samples = bundle_index(train_scenes)
-        step_size = args.batch_bundles
-        print(f"Training samples (bundles with >=1 instance): {len(train_samples)} "
-              f"x {args.num_frames} frames")
-        if args.eval_num_frames and args.eval_num_frames != args.num_frames:
-            print(f"  val bundles pinned to {args.eval_num_frames} frames "
-                  f"(--eval_num_frames): bundle_* stays on the {args.eval_num_frames}-view "
-                  f"ruler while training sees {args.num_frames}")
-    else:
-        train_samples = frame_index(train_scenes)
-        step_size = args.batch_frames
-        print(f"Training samples (frames with >=1 instance): {len(train_samples)}")
-    # Evenly-spaced subset of train scenes for the diagnostic train metric (see
-    # --eval_train_scenes): eval must not scale with the training-set size.
-    if 0 < args.eval_train_scenes < len(train_scenes):
-        idx = np.linspace(0, len(train_scenes) - 1, args.eval_train_scenes).round().astype(int)
-        train_eval_scenes = [train_scenes[i] for i in sorted(set(idx.tolist()))]
-    else:
-        train_eval_scenes = train_scenes
-    print(f"Train scenes scored at each eval: {len(train_eval_scenes)}/{len(train_scenes)}")
-    if not train_samples:
-        raise SystemExit("No training frames with ground-truth instances — check the GT tree.")
-
+    # Built BEFORE the feature cache on purpose: caching a 3520-scene mixture takes ~3 h,
+    # and an error in any of these constructors used to surface only after it (job 9901119
+    # died exactly that way, docs/todo.md 2f). Nothing here reads the cache.
     matcher = HungarianMatcher(cost_class=args.class_weight, cost_mask=args.mask_weight,
                                cost_dice=args.dice_weight, cost_box=args.box_weight,
                                cost_giou=args.giou_weight, num_points=args.matcher_num_points)
@@ -334,6 +309,34 @@ def main():
             scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         start_epoch = int(ckpt.get("epoch", 0))
         print(f"✓ Resumed from {args.resume} at epoch {start_epoch}")
+
+    print("\n=== Caching frozen-backbone features ===")
+    train_scenes = prepare_scenes(model, train_dirs, args, device, "train")
+    val_scenes = prepare_scenes(model, val_dirs, args, device, "val")
+    if args.multi_frame:
+        # One sample = one bundle of --num_frames frames, sharing a query set.
+        train_samples = bundle_index(train_scenes)
+        step_size = args.batch_bundles
+        print(f"Training samples (bundles with >=1 instance): {len(train_samples)} "
+              f"x {args.num_frames} frames")
+        if args.eval_num_frames and args.eval_num_frames != args.num_frames:
+            print(f"  val bundles pinned to {args.eval_num_frames} frames "
+                  f"(--eval_num_frames): bundle_* stays on the {args.eval_num_frames}-view "
+                  f"ruler while training sees {args.num_frames}")
+    else:
+        train_samples = frame_index(train_scenes)
+        step_size = args.batch_frames
+        print(f"Training samples (frames with >=1 instance): {len(train_samples)}")
+    # Evenly-spaced subset of train scenes for the diagnostic train metric (see
+    # --eval_train_scenes): eval must not scale with the training-set size.
+    if 0 < args.eval_train_scenes < len(train_scenes):
+        idx = np.linspace(0, len(train_scenes) - 1, args.eval_train_scenes).round().astype(int)
+        train_eval_scenes = [train_scenes[i] for i in sorted(set(idx.tolist()))]
+    else:
+        train_eval_scenes = train_scenes
+    print(f"Train scenes scored at each eval: {len(train_eval_scenes)}/{len(train_scenes)}")
+    if not train_samples:
+        raise SystemExit("No training frames with ground-truth instances — check the GT tree.")
 
     run_dir = Path(args.save_checkpoint).parent if args.save_checkpoint else None
     metrics_path = run_dir / "metrics.jsonl" if run_dir else None

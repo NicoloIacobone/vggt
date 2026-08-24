@@ -262,16 +262,28 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 
 ## 4. Watching
 
-**One run open as of 2026-08-12: job 10484000, the multi-dataset mixture.** Everything else once
-listed here has landed:
+**One run open as of 2026-08-22: arm A-long (11498642), with its matrix chained on `afterok`.**
+The three data-scaling arms and their 24-cell matrix have landed — docs/MULTIDATASET.md §10.3/§10.4,
+docs/RESULTS.md §6.4/§7.5. Everything else once listed here has landed too:
 
 - (todo 2d fully landed — jobs 9634920 / 9670882 / 9670883. A regression re-run of the control
   under current code was submitted as 9848637 and **cancelled**; it is not needed, because the
   drift question is closed from the commit diff instead — see 2d.)
 - (todo 2f fully closed 2026-08-12 — jobs 9979913 / 10477399 / 10477400 → 2f. Negative.)
-- **Job 10484000** — the multi-dataset mixture, 3520 scenes (docs/MULTIDATASET.md §7/§8). The one
-  open run. Two scale-only driver bugs preceded it, both fixed and both regression-tested:
-  a SIGPIPE under the inherited `set -e` (§7.1) and the 128 KB argv cap (§7.2).
+- (the 24-cell cross-dataset matrix landed 2026-08-22, jobs 11498511–11498543, 0 failures →
+  docs/RESULTS.md §7.5. It is the deliverable of 6f and it reverses §10.3's ScanNet reading.)
+- **Job 11498642 — arm A-long**, the 3520-scene mixture at 24 epochs / 84 480 steps, with its own
+  matrix chained on `afterok`. Needed because A was the **only** arm that had not converged at the
+  matched 42 k-step budget (best epoch = last, still +0.010/epoch), so its −0.075 per-bundle AP50
+  against arm C is an upper bound on Infinigen's cost, not a measurement (§10.3 reading 2).
+- (the three data-scaling arms landed 2026-08-22 — jobs 11435332 / 11435335 / 11435338, gated on
+  smoke 11434972 → docs/MULTIDATASET.md §10.3. Their first chain jobs 11436321/23/24 failed on a
+  `$0`-in-SLURM bug in `slurm/chain_eval3d_matrix.sh`, now fixed and regression-tested; the matrix
+  was submitted by hand → §10.1.)
+- (job 10484000, the first mixture, landed 2026-08-12 and was scored in 3D on 2026-08-13 by
+  10596569 → docs/MULTIDATASET.md §9, docs/RESULTS.md §6.3. Two scale-only driver bugs preceded
+  it, both fixed and both regression-tested: a SIGPIPE under the inherited `set -e` (§7.1) and the
+  128 KB argv cap (§7.2).)
 - (todo 6g's control landed 2026-08-12, jobs 10094393 → 10279969 → 10427048 → 6g.)
 - (the multi-dataset baseline landed 2026-08-10, job 10287578 → docs/MULTIDATASET.md §6; the
   smoke run 10287385 **failed on a driver bug** → MULTIDATASET.md §7.1.)
@@ -281,6 +293,15 @@ listed here has landed:
   variance → 2g.)
 
 ## 5. Lifting quality — the new binding constraint (opened 2026-08-03 by §9.6)
+
+**SHARPENED 2026-08-22 by the data-scaling matrix (docs/RESULTS.md §7.5).** Out of domain the
+unposed bridge scores **0.000 for every arm** — 1201, 2054 and 3520 training scenes alike — while
+the same checkpoints gain +59 % / +70 % AP50 on ScanNet++ / Replica under the *posed* bridge. The
+registration diagnostics are identical across arms to three decimals (ICP inliers 0.963 / 0.924 /
+0.660, camera RMS 0.097 / 0.116 / 0.143 m) because they depend only on **VGGT's frozen cameras**.
+So out of domain this workstream is not one lever among several: **it is the only one**, and no
+amount of 2D supervision substitutes for it. That makes 5c (registration) the item with the
+clearest evidence behind it, not 5b.
 
 On the 3D ruler the decoder is no longer what limits us: AP25 ≈ 4× AP50, median camera-centre
 RMS after Sim(3) is 0.14 m, and only ~16 % of mesh vertices get a vote. 5a bounded what knobs can
@@ -458,13 +479,32 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       column) + `insscene2d_infinigen.tar.zst` (2.14 GB, **1466** sub-scenes, room shell dropped by
       name). Loader `data/instance_map_dataset.py`, driver `slurm/train_maskdino_multi.sh`, 71 new
       CPU checks, all documented in **`docs/MULTIDATASET.md`** — that file is this item's home.
-      **STILL OPEN: the mixture has never been trained.** The end-to-end smoke (job 10287385) died
-      in 2 minutes on a **driver bug, not on the data** — `slurm/stage_dataset.sh` is sourced and
-      carries `set -euo pipefail`, so the `CAP_*` line `[ "$CAP" -gt 0 ] && LIST=$(echo "$LIST" |
-      head -n "$CAP")` aborts the job by SIGPIPE once the list exceeds the 64 KB pipe buffer
-      (ScanNet++'s 853 paths fit, Infinigen's 1466 do not). Reproduced; it only fires when `CAP_*`
-      is set. Fix, re-smoke, then run the mixture with **at least** the baseline's 16-epoch budget
-      (it had not converged) — MULTIDATASET.md §7.1 and §8.
+      **THE MIXTURE IS TRAINED — job 10484000, done 2026-08-12, scored in 3D 2026-08-13**
+      (docs/MULTIDATASET.md §9, docs/RESULTS.md §6.3). Two driver bugs that only exist at full
+      scale preceded it and are both fixed and regression-tested: the `CAP_*` SIGPIPE under the
+      `set -e` inherited from the sourced `slurm/stage_dataset.sh` (§7.1) and the 128 KB
+      `MAX_ARG_STRLEN` argv cap (§7.2).
+      **Result: at a step-matched budget the mixture LOSES on the ScanNet val ruler** (per-bundle
+      AP50 0.434 vs the ScanNet-only baseline's 0.505) — arithmetic, not a surprise: 1201 of 3520
+      scenes are ScanNet, so 6 epochs give each ScanNet scene 6 passes against 16, a 2.7× cut in
+      exposure to the domain val is drawn from. Matching *total* steps does not match what predicts
+      the ScanNet number, and the run had not converged either.
+      **The three data-scaling arms LANDED 2026-08-22** (docs/MULTIDATASET.md §10.3,
+      docs/RESULTS.md §6.4): same recipe + `--anchor_3d`, matched ~42 k steps, only the mixture
+      moves. On the ScanNet val ruler **adding real ScanNet++ is free** (per-bundle AP50 0.548 →
+      0.554, inside the 0.009 seed spread) and **adding synthetic Infinigen costs 0.075** — but A
+      is the only arm that had not converged, so read that as an upper bound and wait for A-long
+      (11498642).
+      **THE MATRIX LANDED 2026-08-22** (24 cells, 0 failures; docs/RESULTS.md §7.5,
+      docs/MULTIDATASET.md §10.4) **and it reverses the ScanNet reading**: C ⇄ B is flat in domain
+      and **+59 % AP50 on ScanNet++ / +70 % on Replica** under the posed bridge. More data buys
+      exactly what the ScanNet val ruler could not see — score a data arm on the matrix, never on
+      the val ruler. **Every out-of-domain UNPOSED cell is still 0.000 for every arm**, with ICP
+      inliers and camera RMS identical across arms to three decimals, because they depend only on
+      VGGT's frozen cameras: out of domain the binding constraint is the backbone's geometry, and
+      no amount of 2D supervision substitutes for it (→ §5 below, sharpened).
+      **STILL OPEN: arm A-long** (11498642, running, matrix chained) — until it lands, the
+      defensible multi-dataset setting is **C, ScanNet + ScanNet++**.
 - [x] **6g. Upstream MaskDINO trained under OUR recipe — DONE 2026-08-12, and it AGREES**
       (docs/MASKDINO_COCO.md §6 row 2 + §6.1; jobs 10094393 → 10228029 → 10279969 → 10427048,
       87 948 iters). Built as `third_party/maskdino_control/` (own README); driver

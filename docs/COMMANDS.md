@@ -60,6 +60,10 @@ bash tests/test_train_maskdino_multi_sh.sh  # the multi-dataset driver's lists +
                                       # regression check runs the script under errexit on purpose:
                                       # DRY_RUN skips the sourced `set -e`, so a plain dry run
                                       # cannot see a silent-abort bug (MULTIDATASET.md §7.1)
+bash tests/test_eval_3d_matrix_sh.sh   # the cross-dataset eval grid (§4.1): the 4x2 cells, the
+                                      # three ways a checkpoint may be named, and the chain job
+                                      # run the way SLURM runs it (spooled copy, foreign cwd)
+python tests/test_collect_eval3d_matrix.py  # the §7 collector: default-cell filter, --run/--only
 python tests/test_maskdino_control_paths.py  # keeps the COCO control runnable after the upstream
                                       # clone moves: _BASE_ re-rooting at $MASKDINO_ROOT (todo 6i)
 ```
@@ -234,6 +238,31 @@ sbatch --export=ALL,DATASET=scannetpp,CHECKPOINT=<run_dir>/checkpoint_best_bundl
     slurm/eval_3d_maskdino.sh
 bash slurm/eval_3d_matrix.sh                 # the whole 3 ckpt x 4 dataset x 2 mode grid
 DRY_RUN=1 bash slurm/eval_3d_matrix.sh       # …print the sbatch lines instead
+CKPTS=<run_dir> bash slurm/eval_3d_matrix.sh # …the same grid for one arbitrary run
+```
+
+`CKPTS` takes either one of the three short keys the script defines for the published rows
+(`mf`, `anchor3d`, `s16`) or, for anything newer — e.g. the multi-dataset arms of
+`docs/MULTIDATASET.md` §10 — a run directory (absolute, or a name under the output root) or an
+explicit `.pth`. Checked by `bash tests/test_eval_3d_matrix_sh.sh`, DRY_RUN only, no cluster.
+
+To score a training run that has not finished yet — its directory carries a timestamp minted when
+the job *starts*, so it cannot be named at submit time — chain the grid onto it instead:
+
+```bash
+sbatch --dependency=afterok:<train job> --export=ALL,TRAIN_JOB=<train job> \
+    slurm/chain_eval3d_matrix.sh
+```
+
+Collect the finished cells into the §7 table. `--run LABEL=DIR` (repeatable) adds a run the
+collector does not name; `--only` drops the three built-in rows so two blocks are never printed as
+one table. It keeps **only** cells run at defaults, so a tuned sweep can never leak in.
+
+```bash
+myenv/bin/python scripts/collect_eval3d_matrix.py
+myenv/bin/python scripts/collect_eval3d_matrix.py --only \
+    --run 'B ScanNet=maskdino_multi_scannet_n1201_a3d_e35_20260821_201002'
+myenv/bin/python tests/test_collect_eval3d_matrix.py   # its CPU checks
 ```
 
 **The three non-default datasets are CLASS-AGNOSTIC only** — their taxonomies are not our 19

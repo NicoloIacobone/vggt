@@ -38,6 +38,18 @@ more data". A 20-epoch run reaches per-frame **0.669**, the best on the official
 
 **And since 2026-08-03 there is a number that IS comparable to the literature** — see §5.
 
+**Since 2026-08-22 the model is also trained on more than ScanNet** — a *separate,
+class-agnostic* block that must never be read next to the class-aware tables above
+(`docs/RESULTS.md` §6.4/§7.5, `docs/MULTIDATASET.md`). Three runs at a matched ~42 k-step budget,
+one recipe, differing only in the training mixture. Adding **ScanNet++** (2054 scenes, real,
+same domain) is **free on ScanNet and worth +59 % AP50 zero-shot on ScanNet++ and +70 % on
+Replica** on the 3D benchmark's posed bridge. Adding synthetic **Infinigen** (3520 scenes) costs
+in domain and helps only on Replica — the other synthetic dataset; that arm had not converged and
+is being re-run. The negative result is as useful: **out of domain the unposed bridge stays 0.000
+whatever we train on**, because registration depends only on VGGT's frozen cameras — identical
+across all three arms to three decimals. Out of domain the backbone's geometry binds, not the
+decoder and not the data.
+
 ---
 
 ## 2. MaskDINO vs the baseline head

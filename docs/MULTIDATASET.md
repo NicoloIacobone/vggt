@@ -150,8 +150,10 @@ shrinks it.
 ## 6. The baseline — ScanNet-only, class-agnostic (job 10287578, 2026-08-10)
 
 **The mixture's reference row, and the only training this workstream has produced so far.** Official
-1201/312 split, `--class_agnostic --multi_frame --feature_mode bundle`, S=8, b2, jitter 0.2, 16
-epochs, 6 h 26. Also in `docs/RESULTS.md` §6.2 — that is its home for cross-referencing; the
+1201/312 split, `--class_agnostic --multi_frame --feature_mode bundle`, S=8, **b1** and
+**jitter off** — the driver's defaults, and the two together are one fact: with
+`--bundles_per_scene 1` only bundle 0 is ever cached and bundle 0 is *never* jittered
+(`prepare_scenes`), so `--color_jitter` is inert at b1. 16 epochs = **19 216 steps**, 6 h 26. Also in `docs/RESULTS.md` §6.2 — that is its home for cross-referencing; the
 reading is here.
 
 | run | per-frame mIoU / AP50 | per-bundle mIoU / AP50 | `id_switch` ↓ | `view_consistency` ↑ |
@@ -162,11 +164,14 @@ reading is here.
 Best per-frame is epoch 13 (0.657 / 0.658), best bundle is epoch 16 (0.505).
 `checkpoint_best_bundle.pth` is the one a mixture run must be compared against.
 
-**Reading 1 — collapsing the taxonomy is nearly free on this ruler.** −0.020 per-bundle AP50
-against the class-aware control, ~2× the 0.009 seed spread, with `id_switch` and
-`view_consistency` essentially unmoved. The head was never leaning on the 18-way class head for
-its instance separation, which is the premise the whole workstream rests on. Note the row is not
-like-for-like (12 vs 16 epochs), so read it as "small", not as a measured Δ.
+**Reading 1 — collapsing the taxonomy is nearly free on this ruler, and the −0.020 is an upper
+bound, not a measurement.** The gap to the class-aware control is ~2× the 0.009 seed spread with
+`id_switch` and `view_consistency` essentially unmoved, so the head was never leaning on the 18-way
+class head for its instance separation — the premise the whole workstream rests on. But the row is
+confounded **three** ways, not one: one class vs 18, 16 vs 12 epochs, **and b1 vs b2** — the control
+ran `--bundles_per_scene 2 --color_jitter 0.2`, i.e. 28 824 steps over 16 views/scene against this
+row's 19 216 over 8. Two of the three push this row *down*, so −0.020 is the most the collapse can
+cost, and probably more than it does. Read it as "small", never as a measured Δ.
 
 **Reading 2 — it had NOT converged, and that constrains every comparison built on it.**
 `bundle_AP50` climbs monotonically to the last epoch: 0.487 → 0.495 → 0.496 → **0.505** at epochs
@@ -187,7 +192,8 @@ prevent.
 | end-to-end smoke run (job 10287385) | FAILED 2026-08-10 — §7.1, a driver bug, not the data |
 | 〃 re-run after the §7.1 fix (job **10479399**) | **PASSED 2026-08-12** — see below |
 | first uncapped mixture attempt (job 10480614) | FAILED 2026-08-12 — §7.2, the argv cap; lists right, `execve` too long |
-| the full mixture run (job **10484000**) | **LAUNCHED 2026-08-12** after the §7.2 fix |
+| the full mixture run (job **10484000**) | **DONE 2026-08-12** after the §7.2 fix — §9 |
+| the three data-scaling arms (§10) | launched 2026-08-21 |
 
 **What the smoke established** (18 scenes, 6 per source, 2 epochs, 10 min): the driver reaches the
 end; staging unpacks all three sources; the dispatcher reports
@@ -269,29 +275,193 @@ cap. It is not broken, but it has the same ceiling — and unlike §7.1 it fails
 
 - [x] Score a class-agnostic **ScanNet-only** run — done, §6.
 - [x] Fix the `CAP_*` SIGPIPE — done 2026-08-12, §7.1.
-- [ ] Run the mixture, then the 3D ruler (`docs/MASKDINO.md` §9) on it in both transfer modes.
-      **Budget: match STEPS, not epochs.** The driver's auto schedule gives 6 epochs × 3520 =
-      21 120 steps against the baseline's 16 × 1201 = 19 216 — already comparable, which is the
-      point (§5, "hold the gradient-step budget near the 1201-scene runs'"). Reading §6.2's "it
-      had not converged" as "give the mixture more epochs" would confound data with compute.
-      **Memory is the binding constraint, not the GPU:** the baseline peaked at **135 GB RSS for
-      1513 scenes** (≈ 89 MB/scene incl. GT, not the 45 MB of features alone), so 3520 + 312
-      scenes projects to **≈ 340 GB** — past the script's 16 × 16 GB = 256 GB. Override at submit
-      time (`sbatch --cpus-per-task=26 --mem-per-cpu=16384`, 416 GB) on an `eu-a65` node; do not
-      change the script's default, which is sized for the 1201-scene arm.
-      **The 3D ruler is ready for a one-class checkpoint** (done 2026-08-12, was open here):
-      `scripts/eval_3d_maskdino.py::label_setting` derives the label setting from the dataset
-      **and** `head_config`, so a `num_classes == 1` head is scored class-agnostic even on
-      ScanNetv2, the nyu40-keyed wall/floor prediction filter is skipped for it, and no 18-class
-      table is written. **Without it the failure would have been silent and total**: the head's
-      single logit is read as dataset class 1, `SCANNET_IDX_TO_NYU40[1]` is **wall**, and the
-      wall/floor prediction filter drops wall — so every query of every scene would have been
-      discarded and the run would have reported AP 0.000 / 0.000 / 0.000 with no error. Covered by
-      `tests/test_maskdino_eval3d.py::test_label_setting_takes_the_head_into_account`; 19-class
-      runs are bit-for-bit unchanged.
-      Note `scripts/eval_3d_maskdino.py` maps predicted labels to ScanNet ids; a 1-class
-      checkpoint must be scored class-agnostic, which the evaluator already supports but does not
-      yet *force* from `head_config`.
-- [ ] Per-source ablation: is the gain ScanNet++ (real, same domain) or Infinigen (synthetic,
-      512×288 upsampled to 518)? The mixture alone cannot say. `SOURCES='scannet scannetpp'` is
-      the first arm.
+- [x] **Run the mixture at a step-matched budget, then the 3D ruler on it — done 2026-08-12/13,
+      §9. It LOST on the ScanNet ruler, and §9 says why that was the wrong budget.**
+- [~] **The three data-scaling arms at ~42 k steps each — launched 2026-08-21, §10.** The
+      per-source ablation (`SOURCES='scannet scannetpp'`: is the gain ScanNet++ the real
+      same-domain data, or Infinigen the synthetic one?) is arm **C** of that set, so it is no
+      longer a separate item.
+- [ ] The cross-dataset 3D matrix (`docs/RESULTS.md` §7) on the arms — 4 benchmarks × 2 bridges,
+      `CKPTS=<run dir> bash slurm/eval_3d_matrix.sh`. **That table, not the ScanNet val ruler, is
+      what the extra data is for** (§9 reading 3).
+
+**Sizing, once, for every arm** (measured, not projected): the feature cache is the binding
+constraint and it is **not** the GPU. The 1201-scene baseline peaked at **135 GB RSS for 1513
+scenes** and the 3520-scene mixture at **274 GB for 3832** — ≈ 71–89 MB per cached bundle including
+GT, not the 45 MB of features alone. So override the script's default (16 × 16 GB = 256 GB, sized
+for the 1201-scene arm) at submit time rather than editing it: `--cpus-per-task=26` (416 GB) for
+the full mixture, 20 (320 GB) for ScanNet+ScanNet++, the default for ScanNet alone.
+
+**The 3D ruler is ready for a one-class checkpoint** (done 2026-08-12):
+`scripts/eval_3d_maskdino.py::label_setting` derives the label setting from the dataset **and**
+`head_config`, so a `num_classes == 1` head is scored class-agnostic even on ScanNetv2, the
+nyu40-keyed wall/floor prediction filter is skipped for it, and no 18-class table is written.
+**Without it the failure would have been silent and total**: the head's single logit is read as
+dataset class 1, `SCANNET_IDX_TO_NYU40[1]` is **wall**, and the wall/floor prediction filter drops
+wall — so every query of every scene would have been discarded and the run would have reported
+AP 0.000 / 0.000 / 0.000 with no error. Covered by
+`tests/test_maskdino_eval3d.py::test_label_setting_takes_the_head_into_account`; 19-class runs are
+bit-for-bit unchanged.
+
+## 9. The first mixture, measured (job 10484000, 2026-08-12; 3D by job 10596569, 2026-08-13)
+
+3520 train scenes (1201 + 853 + 1466), the §6 recipe unchanged except the schedule: **6 epochs =
+21 120 steps** against the baseline's 19 216, i.e. the step-matched budget §8 asked for. Same val
+(official ScanNet 312, class-agnostic), same S=8/b1, `--anchor_3d` **off**. 6 h 50 wall, 26 CPUs,
+274 GB peak RSS, 0 failures.
+
+| run | steps | per-frame mIoU / AP50 | per-bundle mIoU / AP50 | `id_switch` ↓ | `view_consistency` ↑ |
+|---|---|---|---|---|---|
+| ScanNet-only baseline, 16 ep (10287578) | 19 216 | 0.641 / **0.656** | 0.536 / **0.505** | **0.509** | **0.692** |
+| **mixture 3520, 6 ep (10484000)** | 21 120 | 0.639 / 0.629 | 0.508 / 0.434 | 0.621 | 0.671 |
+
+3D ruler, ScanNetv2 val-312, unposed, defaults, class-agnostic (the only setting a one-class head
+has): **AP 0.008 / AP50 0.026 / AP25 0.240**, against the ScanNet-only class-**aware**
+`--anchor_3d` checkpoint's 0.042 / 0.138 / 0.504 in the same setting (`docs/RESULTS.md` §7.2).
+
+**Reading 1 — at matched steps the mixture loses on the ScanNet ruler, and that is arithmetic, not
+a surprise.** Only 1201 of 3520 scenes are ScanNet, so 6 epochs give each ScanNet scene **6 passes
+against the baseline's 16** — 7 206 ScanNet steps against 19 216, a **2.7× cut in exposure to the
+domain the val set is drawn from**. Matching *total* steps therefore does not match the thing that
+predicts the ScanNet val number. §8's "match STEPS, not epochs" is right about not confounding data
+with compute and wrong about the budget being sufficient: both must rise.
+
+**Reading 2 — it had not converged either.** `bundle_AP50` climbs 0.286 → 0.376 → **0.434** over
+the last three epochs, steeper than the baseline was at *its* end. The 6-epoch schedule ran the
+cosine to 5e-6 on a curve that was still moving.
+
+**Reading 3 — the ScanNet val ruler is the wrong place to look for what this data buys.** The
+mixture's whole purpose is the columns where a ScanNet-only head scores **0.000** — ScanNet++ and
+Replica unposed (`docs/RESULTS.md` §7.2, finding 3). Nothing in this run addresses that, because
+only the ScanNetv2 cell was ever scored. The next arms fix both halves: budget (§10) and evaluation
+(§8, the matrix).
+
+## 10. The data-scaling arms (launched 2026-08-21)
+
+Three runs, **one recipe, one ruler, one budget**, differing only in the training mixture — the
+shape `docs/TRAINING_COMPARABILITY.md` §2 says the field expects, and the first table in this
+project able to say what multi-dataset training is worth.
+
+| arm | train sources | scenes | epochs | steps | job |
+|---|---|---|---|---|---|
+| **A** | ScanNet + ScanNet++ + Infinigen | 3520 | 12 | 42 240 | 11435332 |
+| **B** | ScanNet only | 1201 | 35 | 42 035 | 11435335 |
+| **C** | ScanNet + ScanNet++ | 2054 | 20 | 41 080 | 11435338 |
+| **A-long** | = A, run to convergence | 3520 | 24 | 84 480 | 11498642 |
+
+Recipe, identical across the three: `--class_agnostic --multi_frame --feature_mode bundle
+--anchor_3d`, S=8, b1, 300 queries, lr 1e-4, warmup 2, val = official ScanNet 312.
+
+**Why ~42 k steps and not the 21 k of §9.** Twice §9's budget, so arm A gets 12 passes over each
+ScanNet scene where §9 gave 6, and arms B/C get the same *total* gradient steps as A rather than
+the same epochs. Step-matching cannot flatter B: every arm keeps `checkpoint_best_bundle.pth`,
+selected on val, so a longer schedule can only raise the number an arm reports.
+
+**Why `--anchor_3d` on all three.** It is the strongest 3D mechanism measured anywhere in this
+project (+67 % AP50, `docs/MASKDINO.md` §8.3) and the arms exist to produce 3D benchmark rows. It
+is held **constant**, so it confounds nothing inside this block — but it does mean no arm here is a
+one-flag comparison against §6 or §9, both of which ran without it.
+
+**A ⇄ B is the data claim; A ⇄ C and C ⇄ B split it by source** — C ⇄ B adds real, same-domain
+ScanNet++, A ⇄ C adds synthetic Infinigen. Read them only after the matrix (§8), never off the
+ScanNet val ruler alone (§9 reading 3).
+
+### 10.1 What the three arms are gated on, and what they chain into
+
+**Gate: smoke 11434972** (18 scenes, 6 per source, 2 epochs, `--anchor_3d`). `--anchor_3d` had
+never been run against the instance-map loader — it runs VGGT's frozen **point head** over the
+cached bundle, which is dataset-agnostic by construction but had no evidence behind it. The smoke
+cached all three sources with it, the loss fell (257.9 → 236.6 over 4 steps) and the checkpoint
+carries `anchor_3d: True`, `num_classes: 1` and the Δ(xyz, log r) head. The three arms were
+submitted `--dependency=afterok` on it, so a failure would have cancelled them instead of burning
+~38 GPU-hours.
+
+**Chain: `slurm/chain_eval3d_matrix.sh`** submits the 4 datasets × 2 bridges of `docs/RESULTS.md`
+§7 for an arm the moment it finishes. It exists because the run directory carries a timestamp
+minted when the training job *starts*, so the matrix cannot be named at submit time; the chain
+reads it back out of the training log's `scene lists written to …` line. One chain per arm
+(11436321 / 11436323 / 11436324), `afterok`, 24 cells in total.
+
+**Those three chain jobs FAILED in 10 s and the matrix was submitted by hand instead** — a bug in
+the chain script, not in the arms: it opened with `cd "$(dirname "$0")/.."`, but **SLURM spools the
+batch script**, so inside a job `$0` is `…/slurm_script` and that cd lands nowhere near the repo
+("no log for job … under slurm/logs"). Fixed to the hardcoded `REPO`, like every other SLURM driver
+here. The DRY_RUN test could not see it because it ran *from* the repo, where the wrong cd is
+harmless; `tests/test_eval_3d_matrix_sh.sh` now runs a **copy** of the script from a foreign cwd,
+which is the shape SLURM gives it — verified red against the old line.
+
+### 10.2 Two fixes this arm forced, both already in
+
+- **The optimizer is now built BEFORE the feature cache** (`scripts/train_maskdino.py`). Caching
+  the 3520-scene mixture takes ~3 h and the matcher/criterion/optimizer/scheduler used to be
+  constructed after it, so a typo in any of them cost the whole pass — how job 9901119 died
+  (`docs/todo.md` 2f, which asked for exactly this). Nothing in that block reads the cache.
+- **`slurm/eval_3d_matrix.sh` takes a run directory**, not only its three hard-coded keys, so an
+  arm that postdates the file can be scored without editing it
+  (`bash tests/test_eval_3d_matrix_sh.sh`, DRY_RUN, 15 checks incl. the chain).
+
+**One submission trap checked rather than assumed.** `--export=ALL,SOURCES='scannet scannetpp
+infinigen',…` survives intact: Slurm splits that list on **commas**, not whitespace, and the shell
+quoting keeps it one argv word. (The whitespace warning in `slurm/eval_3d_matrix.sh` is about the
+*unquoted* form, where the shell — not sbatch — splits the word and the remainder is read as the
+script name.) Verified with a 2-minute probe job before the arms were left to run.
+
+### 10.3 The 2D result (all three done 2026-08-22)
+
+Official ScanNet 312 val, class-agnostic, `checkpoint_best_bundle.pth` (selected on val
+`bundle_AP50`). Same ruler for all three — only the training mixture moves.
+
+| arm | scenes | steps | best ep | per-frame mIoU / AP50 | per-bundle mIoU / AP50 | `id_switch` ↓ | `view_consistency` ↑ | wall |
+|---|---|---|---|---|---|---|---|---|
+| **B** ScanNet only | 1201 | 42 035 | 25/35 | 0.654 / 0.675 | 0.557 / 0.548 | **0.441** | 0.707 | 13 h 16 |
+| **C** + ScanNet++ | 2054 | 41 080 | 19/20 | **0.659 / 0.677** | **0.568 / 0.554** | 0.472 | **0.714** | 11 h 34 |
+| **A** + Infinigen | 3520 | 42 240 | **12/12** | 0.630 / 0.628 | 0.521 / 0.479 | 0.531 | 0.693 | 9 h 50 |
+| (§6 reference: ScanNet only, 16 ep, no `--anchor_3d`) | 1201 | 19 216 | 16/16 | 0.641 / 0.656 | 0.536 / 0.505 | 0.509 | 0.692 | 6 h 26 |
+
+**Reading 1 — adding real, same-domain ScanNet++ is free on this ruler; adding synthetic Infinigen
+is not.** C − B = **+0.006** per-bundle AP50, *inside* the 0.009 seed spread (`docs/RESULTS.md`
+§6.1), i.e. neutral, with `view_consistency` its best anywhere in this block. A − C = **−0.075**,
+eight times the spread.
+
+**Reading 2 — but only A failed to converge, so −0.075 is an upper bound on Infinigen's cost, not
+a measurement of it.** B is flat over its last six epochs (0.534 … 0.544, peak 0.548 at epoch 25 of
+35) and C nearly so (0.541 / 0.530 / 0.554 / 0.549 over 17–20); **A's best epoch is its last**, and
+its curve is still climbing ~+0.010/epoch (0.454 → 0.469 → 0.479). At a matched *step* budget the
+2.9×-larger mixture gets 2.9× fewer passes over any one scene, which is §9 reading 1 again one
+level up. **Arm A-long (24 epochs, 84 480 steps, job 11498642) settles it** — and extending only A
+is what convergence requires, not favouritism, precisely because B and C are already flat.
+
+**Reading 3 — `--anchor_3d` plus a real step budget is worth +0.043 to the ScanNet-only
+class-agnostic row**, 0.505 (§6) → 0.548, with `id_switch` 0.509 → 0.441. Two variables at once,
+so not attributable; recorded because §6's row is what MULTIDATASET rows used to be read against
+and B now replaces it as the control.
+
+**Reading 4 — none of this is the deliverable.** Every row above is scored on ScanNet, which is
+in-domain for all three arms. What the extra data was bought for is the cross-dataset matrix, where
+a ScanNet-only head scores 0.000 unposed on ScanNet++ and Replica — §10.4.
+
+### 10.4 The cross-dataset matrix on the arms — the answer (2026-08-22)
+
+24 cells, 0 failed scenes, jobs 11498511–11498543. **The table lives in `docs/RESULTS.md` §7.5**;
+what it means for this workstream is here. A-long's own matrix is chained to job 11498642.
+
+**More data buys exactly what the ScanNet ruler could not see.** §10.3 called C ⇄ B a tie
+(+0.006 per-bundle AP50, inside the seed spread). On the benchmarks the mixture exists for, the
+same pair is **+59 % AP50 on ScanNet++** (0.043 vs 0.027) and **+70 % on Replica** (0.080 vs
+0.047) under the posed bridge, while staying flat in domain. So the workstream's premise holds —
+but only under one of the two bridges, and the ScanNet val ruler was actively misleading about it.
+**Score a data arm on the matrix, never on the val ruler.**
+
+**And it says where the ceiling is.** Every out-of-domain **unposed** cell is still 0.000 for every
+arm. The registration diagnostics are identical across the three arms to three decimals (ICP
+inliers 0.963 / 0.924 / 0.660, camera RMS 0.097 / 0.116 / 0.143 m on ScanNetv2 / ScanNet++ /
+Replica) because they depend only on **VGGT's frozen cameras**, which head-only training cannot
+touch. The 2D masks improved measurably and the unposed number did not leave zero.
+**Out of domain the binding constraint is the frozen backbone's geometry, not the decoder and not
+the training data** — which is `docs/todo.md` §5's lifting workstream, now with a much sharper
+statement of what it must fix and evidence that no amount of supervision substitutes for it.
+
+**Infinigen is the odd one out.** Arm A is below B and C on all six ScanNet/ScanNet200 cells and on
+ScanNet++, but takes Replica's AP50 and AP25 — the one benchmark that is, like Infinigen, synthetic
+renders. A had not converged, so its in-domain deficit is an upper bound; A-long settles it. Until
+then the defensible multi-dataset setting is **C: ScanNet + ScanNet++, 2054 scenes**.
