@@ -2,15 +2,18 @@
 Build a 2D instance-segmentation training set out of the InsScene-15K mirror (todo 6f).
 
 InsScene-15K already ships per-frame instance annotations, so NOTHING is rendered here: this is
-a selection + re-encoding pass. Two of its three subsets can supervise our head; the third
-cannot, and that is a property of the data, not a choice:
+a selection + re-encoding pass. All three of its subsets can supervise our head — but not with
+the same kind of label, and that difference must travel with every number:
 
   processed_scannetpp_v2   903 scenes, `images/` + `refined_ins_ids/` (int16 per-pixel ids,
                            **globally consistent across the frames of a scene** — verified: two
                            adjacent frames of 00777c41d4 share 34 of 34 ids). USED.
   processed_infinigen      1466 sub-scene zips, `Image/` + `ObjectSegmentation/` (int64 ids that
                            index `Objects/*.json`, so every instance has a NAME). USED.
-  processed_re10k          `rgb/` + `cam/` only — no instance annotation of any kind. SKIPPED.
+  processed_re10k          5127 scenes with `sam2_results/<scene>/auto_masks.json` — SA-V
+                           masklets, COCO-RLE per frame, ids persistent across the whole clip.
+                           USED, but the masks are **SAM2 output, not ground truth**: every row
+                           trained on this must say "SAM2-supervised" (docs/MULTIDATASET.md §1.3).
 
 Output, one directory per scene, already at the trainer's input resolution:
 
@@ -22,12 +25,16 @@ Output, one directory per scene, already at the trainer's input resolution:
 views by global instance id (CLAUDE.md, "the batch dimension is FRAMES"), so a per-frame
 relabelling would destroy exactly the signal the bundle GT is built on.
 
-**Two exclusions worth reading before quoting any number trained on this:**
+**Three exclusions worth reading before quoting any number trained on this:**
 
 1. `--exclude_scenes` drops ScanNet++ scenes from the build. The mirror contains ALL 49 scenes of
    our ScanNet++ evaluation column (docs/RESULTS.md §7), so training on it unfiltered would leak
    the entire zero-shot benchmark. The job script passes the official `nvs_sem_val` list.
-2. Infinigen labels the room shell as ordinary instances (`<room>/N.wall|floor|ceiling|exterior`,
+2. RE10K's SAM2 masks are unnamed, so its room shell can only be dropped by AREA. Measured over
+   60 scenes: the median instance is 0.2 % of the frame and p99 is 22 %, so a scene-wide cap at
+   **30 %** removes 0.5 % of instances and 0 % of the labelled pixels of the median scene, while
+   the 0.20 cap that also looked plausible costs 22 % of them (docs/MULTIDATASET.md §1.4).
+3. Infinigen labels the room shell as ordinary instances (`<room>/N.wall|floor|ceiling|exterior`,
    measured at 21 %, 17 % and 32 % of one frame). ScanNet's benchmark excludes wall/floor and our
    Replica GT excludes the room shell (docs/DATASET.md §2.2), so they are dropped here too, BY
    NAME rather than by an area heuristic — the ids index `Objects/*.json`, which names them.
@@ -37,6 +44,7 @@ Usage (see slurm/build_insscene2d.sh for the cluster driver):
     python slurm/build_insscene2d.py --source scannetpp --out $TMPDIR/build --frames 32 \
         --exclude_scenes data/splits/scannetpp_nvs_sem_val.txt
     python slurm/build_insscene2d.py --source infinigen --out $TMPDIR/build --frames 32
+    python slurm/build_insscene2d.py --source re10k --out $TMPDIR/build --frames 32
 """
 
 from __future__ import annotations
@@ -49,12 +57,13 @@ import sys
 import time
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from slurm.coco_rle import decode_counts, masklets_to_instance_map, rle_area  # noqa: E402
 from slurm.insscene_shards import SplitZipReader, scene_ids  # noqa: E402
 
 DEFAULT_MIRROR = Path("/cluster/work/igp_psr/niacobone/distillation/dataset/insscene15k")
@@ -65,6 +74,11 @@ MAX_INSTANCE_ID = 65535          # the on-disk map is uint16
 # Infinigen's room shell, dropped to match the ScanNet benchmark and our Replica GT.
 SHELL_RE = re.compile(r"\.(wall|floor|ceiling|exterior)s?$", re.IGNORECASE)
 INFINIGEN_FRAME_RE = re.compile(r"_(\d+)_\d+_\d+_\d+\.(npy|png|jpg|json|npz)$")
+
+# RE10K's SAM2 masks are unnamed, so the room shell can only go by area. 0.30 of the frame,
+# averaged over the kept frames of a scene — measured, not assumed: docs/MULTIDATASET.md §1.4.
+RE10K_MAX_AREA_FRAC = 0.30
+RE10K_MASK_DIR = "sam2_results"  # a SIBLING of the scene dirs, which is why it was missed once
 
 
 # --------------------------------------------------------------------------------------------
@@ -273,11 +287,148 @@ def build_infinigen(mirror: Path, out: Path, frames: int, limit: Optional[int],
 
 
 # --------------------------------------------------------------------------------------------
+# processed_re10k — one split zip, SAM2 masklets in a SIBLING top-level directory
+# --------------------------------------------------------------------------------------------
+
+def re10k_frame_stems(members: Iterable[str]) -> Dict[str, List[str]]:
+    """
+    Every scene's rgb stems in **numeric** order — never lexicographic. Indexed once, not per
+    scene: the central directory holds 1.22 M names and rescanning it 5127 times costs half an
+    hour on its own.
+
+    `masklet` is indexed by frame POSITION; `rgb/` is keyed by a timestamp stem. Those stems are
+    8 OR 9 digits long (307 821 vs 287 683 across the mirror), so a lexicographic sort puts every
+    9-digit stem before every 8-digit one and silently misaligns the masks in the **107 scenes**
+    that mix the two widths. Sorting by int is the whole fix, and it is the reason this helper
+    exists rather than a `sorted()` at the call site.
+    """
+    out: Dict[str, List[str]] = {}
+    for name in members:
+        parts = name.split("/")
+        if len(parts) == 4 and parts[0] == "processed_re10k" and parts[2] == "rgb" \
+                and parts[3].endswith(".png"):
+            out.setdefault(parts[1], []).append(parts[3][:-4])
+    for scene, stems in out.items():
+        if not all(stem.isdigit() for stem in stems):
+            raise ValueError(f"{scene}: non-numeric rgb stem")
+        stems.sort(key=int)
+    return out
+
+
+def re10k_keep_ids(masklet: Sequence, picked: Sequence[int], frame_px: int,
+                   max_area_frac: float) -> Tuple[set, int]:
+    """
+    Masklet indices that are not room shell, by AREA — SAM2's masks carry no names.
+
+    An instance is dropped when its area **averaged over the kept frames** exceeds
+    `max_area_frac` of the frame. Averaging over the scene rather than thresholding per frame is
+    deliberate: a per-frame rule would make an instance flicker in and out of the GT, and the
+    multi-frame head re-links instances across views by id, so a flickering id is worse than
+    either keeping or dropping it outright.
+
+    Returns the ids to keep (1-based, as `masklets_to_instance_map` writes them) and the number
+    of `None` masklet entries seen, which the report carries as a data-quality counter.
+    """
+    if not picked:
+        return set(), 0
+    n_obj = len(masklet[picked[0]])
+    area = np.zeros(n_obj, dtype=np.int64)
+    missing = 0
+    for j in picked:
+        for index, rle in enumerate(masklet[j]):
+            if rle is None:
+                missing += 1
+                continue
+            area[index] += rle_area(decode_counts(rle["counts"]))
+    limit = max_area_frac * frame_px * len(picked)
+    return {index + 1 for index in range(n_obj) if 0 < area[index] <= limit}, missing
+
+
+def build_re10k(mirror: Path, out: Path, frames: int, exclude: set, limit: Optional[int],
+                min_area_px: int, max_area_frac: float) -> dict:
+    reader = SplitZipReader(mirror / "processed_re10k", "processed_re10k")
+    print(f"[re10k] parsing the central directory of {reader.total / 2**30:.0f} GiB ...",
+          flush=True)
+    members = reader.members()
+    print(f"[re10k] {len(members)} entries", flush=True)
+
+    # The masks are a SIBLING of the scene dirs, `processed_re10k/sam2_results/<scene>/`, not a
+    # child of them — the original survey grouped by the depth-2 component and never saw them
+    # (docs/MULTIDATASET.md §1.3). 5127 of the 5138 rgb scenes have one; the rest cannot be used.
+    stems_by_scene = re10k_frame_stems(members)
+    with_masks = {name.split("/")[2] for name in members
+                  if name.startswith(f"processed_re10k/{RE10K_MASK_DIR}/")
+                  and name.endswith("/auto_masks.json")}
+    all_scenes = sorted(stems_by_scene)
+    scenes = [s for s in all_scenes if s in with_masks and s not in exclude]
+    print(f"[re10k] {len(all_scenes)} rgb scenes, {len(with_masks)} with masks, "
+          f"{len(scenes)} to build ({len(all_scenes) - len(with_masks)} unannotated, "
+          f"{len(exclude & set(all_scenes))} excluded)", flush=True)
+    if limit:
+        scenes = scenes[:limit]
+
+    report = {"source": "re10k", "supervision": "SAM2 auto-masks, NOT ground truth",
+              "unannotated_scenes": len(all_scenes) - len(with_masks),
+              "excluded_scenes": len(exclude & set(all_scenes)),
+              "max_area_frac": max_area_frac, "scenes": {}, "failed": {}}
+    for i, scene in enumerate(scenes, 1):
+        started = time.time()
+        try:
+            meta = json.loads(reader.read(
+                f"processed_re10k/{RE10K_MASK_DIR}/{scene}/auto_masks.json"))
+            height, width = int(meta["video_height"]), int(meta["video_width"])
+            masklet = meta["masklet"]
+            stems = stems_by_scene[scene]
+
+            # Frame <-> mask alignment is positional, so the two counts MUST agree. A scene where
+            # they do not is skipped and counted, never guessed at.
+            if not (len(stems) == len(masklet) == int(meta["video_frame_count"])):
+                raise ValueError(f"frame counts disagree: {len(stems)} rgb, {len(masklet)} "
+                                 f"masklet rows, video_frame_count {meta['video_frame_count']}")
+
+            picked = even_indices(len(stems), frames)
+            keep, missing = re10k_keep_ids(masklet, picked, height * width, max_area_frac)
+            per_frame, images, kept_stems = {}, {}, []
+            for j in picked:
+                stem = stems[j]
+                image = Image.open(io.BytesIO(
+                    reader.read(f"processed_re10k/{scene}/rgb/{stem}.png"))).convert("RGB")
+                if (image.height, image.width) != (height, width):
+                    raise ValueError(f"{stem}: rgb {image.size} vs masks ({width}, {height})")
+                ids = masklets_to_instance_map(
+                    [rle if index + 1 in keep else None for index, rle in enumerate(masklet[j])],
+                    height, width)
+                per_frame[stem] = resize_instance_map(ids)
+                images[stem] = image.resize((IMG_SIZE, IMG_SIZE), Image.BILINEAR)
+                kept_stems.append(stem)
+            if not kept_stems:
+                raise ValueError("no frame survived")
+            maps, table = remap_scene_ids(per_frame, min_area_px=min_area_px)
+            counters = write_scene(
+                out / "re10k" / scene, kept_stems, images, maps,
+                dict(source="insscene15k/processed_re10k", scene=scene,
+                     supervision="sam2", source_frames=len(stems),
+                     masklets=len(masklet[picked[0]]), shell_dropped_by_area=max_area_frac,
+                     none_masklet_entries=missing,
+                     id_table={str(k): v for k, v in table.items()}))
+            report["scenes"][scene] = dict(counters, missing=missing,
+                                           masklets=len(masklet[picked[0]]))
+            if i % 100 == 0 or i == 1:
+                print(f"[re10k {i}/{len(scenes)}] {scene}: {counters['frames']} frames, "
+                      f"{counters['instances']} instances of {len(masklet[picked[0]])} masklets, "
+                      f"{time.time() - started:.1f}s", flush=True)
+        except Exception as exc:                              # one bad scene must not stop 5000
+            report["failed"][scene] = f"{type(exc).__name__}: {exc}"
+            print(f"[re10k {i}/{len(scenes)}] {scene} FAILED: {exc}", flush=True)
+    return report
+
+
+# --------------------------------------------------------------------------------------------
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--source", choices=["scannetpp", "infinigen"], required=True)
+    parser.add_argument("--source", choices=["scannetpp", "infinigen", "re10k"], required=True)
     parser.add_argument("--mirror", type=Path, default=DEFAULT_MIRROR)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--frames", type=int, default=32,
@@ -287,6 +438,9 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=None, help="first N scenes (smoke tests)")
     parser.add_argument("--min_area_px", type=int, default=64,
                         help="drop instances smaller than this, summed over the kept frames")
+    parser.add_argument("--max_area_frac", type=float, default=RE10K_MAX_AREA_FRAC,
+                        help="re10k only: drop instances covering more than this fraction of the "
+                             "frame on average — the room-shell filter (default %(default)s)")
     args = parser.parse_args()
 
     exclude = set()
@@ -299,6 +453,9 @@ def main() -> int:
     if args.source == "scannetpp":
         report = build_scannetpp(args.mirror, args.out, args.frames, exclude, args.limit,
                                  args.min_area_px)
+    elif args.source == "re10k":
+        report = build_re10k(args.mirror, args.out, args.frames, exclude, args.limit,
+                             args.min_area_px, args.max_area_frac)
     else:
         report = build_infinigen(args.mirror, args.out, args.frames, args.limit, args.min_area_px)
 

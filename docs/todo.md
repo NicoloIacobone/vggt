@@ -262,9 +262,10 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 
 ## 4. Watching
 
-**One run open as of 2026-08-22: arm A-long (11498642), with its matrix chained on `afterok`.**
-The three data-scaling arms and their 24-cell matrix have landed — docs/MULTIDATASET.md §10.3/§10.4,
-docs/RESULTS.md §6.4/§7.5. Everything else once listed here has landed too:
+**One run open as of 2026-08-24: C-long (11632049), the step-matched control for A-long, with its
+matrix chained on `afterok`.** Everything else in the data-scaling set has landed —
+docs/MULTIDATASET.md §10.3/§10.4, docs/RESULTS.md §6.4/§7.5/§8.2. Everything else once listed here
+has landed too:
 
 - (todo 2d fully landed — jobs 9634920 / 9670882 / 9670883. A regression re-run of the control
   under current code was submitted as 9848637 and **cancelled**; it is not needed, because the
@@ -272,10 +273,14 @@ docs/RESULTS.md §6.4/§7.5. Everything else once listed here has landed too:
 - (todo 2f fully closed 2026-08-12 — jobs 9979913 / 10477399 / 10477400 → 2f. Negative.)
 - (the 24-cell cross-dataset matrix landed 2026-08-22, jobs 11498511–11498543, 0 failures →
   docs/RESULTS.md §7.5. It is the deliverable of 6f and it reverses §10.3's ScanNet reading.)
-- **Job 11498642 — arm A-long**, the 3520-scene mixture at 24 epochs / 84 480 steps, with its own
-  matrix chained on `afterok`. Needed because A was the **only** arm that had not converged at the
-  matched 42 k-step budget (best epoch = last, still +0.010/epoch), so its −0.075 per-bundle AP50
-  against arm C is an upper bound on Infinigen's cost, not a measurement (§10.3 reading 2).
+- **Job 11632049 — C-long**, ScanNet + ScanNet++ at 40 epochs / 82 160 steps: the **step-matched**
+  partner for A-long, which won every cell but had 2× the steps of the arms it beat. A-long ⇄
+  C-long is then both converged AND step-matched, and isolates what Infinigen contributes
+  (docs/MULTIDATASET.md §10.3 reading 2b).
+- (arm A-long landed 2026-08-23 — job 11498642, 18 h 47, matrix 11540891–11540905 chained and
+  green. It **flipped the sign of §10.3**: at 84 k steps the full 3520-scene mixture is the best
+  run of the block on every 2D axis AND takes all eight of its 3D cells → docs/RESULTS.md §7.5
+  finding 4, §8.2's extra-data row.)
 - (the three data-scaling arms landed 2026-08-22 — jobs 11435332 / 11435335 / 11435338, gated on
   smoke 11434972 → docs/MULTIDATASET.md §10.3. Their first chain jobs 11436321/23/24 failed on a
   `$0`-in-SLURM bug in `slurm/chain_eval3d_matrix.sh`, now fixed and regression-tested; the matrix
@@ -473,7 +478,7 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       **The 2D supervision turned out to be already there — no rendering needed** (this reverses
       `docs/TRAINING_COMPARABILITY.md` §4's assumption): `processed_scannetpp_v2` ships
       `refined_ins_ids`, `processed_infinigen` ships `ObjectSegmentation`, ids are global per scene
-      in both, and `processed_re10k` has none and is skipped. **BUILD DONE 2026-08-10** (job
+      in both, and `processed_re10k` is skipped — **not** for lack of annotation (it ships SAM2 masklets; corrected 2026-08-24, `docs/MULTIDATASET.md` §1.3) but because they are automatic, not GT. **BUILD DONE 2026-08-10** (job
       10286143, 1 h 42): `dataset/insscene2d/insscene2d_scannetpp.tar.zst` (1.28 GB, **853**
       scenes — the 50 `nvs_sem_val` dropped, they contain all 49 scenes of our ScanNet++ eval
       column) + `insscene2d_infinigen.tar.zst` (2.14 GB, **1466** sub-scenes, room shell dropped by
@@ -503,8 +508,50 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       inliers and camera RMS identical across arms to three decimals, because they depend only on
       VGGT's frozen cameras: out of domain the binding constraint is the backbone's geometry, and
       no amount of 2D supervision substitutes for it (→ §5 below, sharpened).
-      **STILL OPEN: arm A-long** (11498642, running, matrix chained) — until it lands, the
-      defensible multi-dataset setting is **C, ScanNet + ScanNet++**.
+      **A-LONG LANDED 2026-08-23 AND FLIPPED THE INFINIGEN SIGN.** At 84 480 steps the full
+      3520-scene mixture is the best run of the block on every 2D axis (per-bundle AP50 0.479 →
+      **0.604**, per-frame **0.704**, best `id_switch` 0.414) and takes **all eight** of its 3D
+      cells: unposed ScanNetv2 **0.057 / 0.166 / 0.516** (+20 % AP50 over the published
+      ScanNet-only `--anchor_3d` row and 1.5–2.0× the published class-agnostic cluster), and 2.5×
+      arm B's zero-shot AP50 on ScanNet++ and Replica. The larger the mixture, the more steps it
+      needs before it pays — a step-matched deficit is not evidence that data hurts.
+      **STILL OPEN: C-long** (11632049), the step-matched partner that separates "more data" from
+      "more compute" at the top end.
+
+- [~] **6j. RE10K as a FOURTH training source — SAM2-supervised, its own arm** (opened 2026-08-24,
+      `docs/MULTIDATASET.md` §1.3, §1.4, §11). **6f's "processed_re10k has no annotation" was
+      wrong**, and structurally so: the survey grouped member paths by their depth-2 component and
+      the masks live under a **sibling** top-level directory, `processed_re10k/sam2_results/`.
+      Re-read from the 43-part split zip (1 221 783 members, no unpacking): **5127 of 5138 scenes**
+      ship `auto_masks.json`, SA-V masklets, COCO-RLE per frame, **ids persistent across the whole
+      clip** — the property §1 requires, and the only source in the mirror that has it at this
+      scale, i.e. cheap `--multi_frame` identity supervision.
+      **The caveat that travels with every number: these are SAM2 output, not ground truth.** Say
+      **SAM2-supervised** in every row and never fold it into A/A-long's.
+      DONE: `slurm/coco_rle.py` (COCO compressed RLE in pure numpy — `pycocotools` is not in
+      `myenv` — verified against `pycocotools`' own output, 47 checks); `build_re10k` +
+      `--source re10k` + the room-shell measurement (39 checks); the training driver takes a 4th
+      source with **zero code change**, proved by 8 new checks in
+      `tests/test_train_maskdino_multi_sh.sh`. Three traps found and handled, all measured rather
+      than assumed: rgb stems are **8 OR 9 digits** so a lexicographic sort misaligns masks in 107
+      scenes; resolution is **per scene** (360×640, 540×960, 1080×1920); overlaps resolve
+      **smaller-instance-wins**; and the room-shell cap sits at **0.30 of the frame** (drops 0.5 %
+      of instances and 0 % of the median scene's labelled pixels, against 0.20's 21.8 %).
+      **No exclusion list is needed** — RE10K is not one of the four 3D benchmarks, so there is
+      nothing it can leak.
+      **KNOWN CONFOUND, measured and documented rather than papered over**: the area cap does NOT
+      make RE10K shell-free. SAM2 splits a wall or ceiling into sub-regions each under 30 %, and
+      there is no knee to cut at — border contact rises smoothly with area and even above 30 %
+      only two thirds of instances are shell-shaped, while a 0.10 cap would delete 60 % of the
+      labelled pixels. So arm D adds new scenes **and** shell supervision the other three sources
+      do not have. First hypothesis if it loses 3D AP with healthy 2D masks.
+      IN FLIGHT, chained `afterok` end to end: the build (**11641723**, ~3 h 15, ~10 GB tar) →
+      smoke 24 scenes/2 epochs (**11642515**) → **arm D** (**11642516**: 5020 scenes, 17 epochs =
+      85 340 steps, step-matched to A-long's 84 480, `--cpus-per-task=26`, ≈20 h) → the 4×2
+      matrix (**11642519**). The deliverable is the **matrix**, not the ScanNet val ruler (§10.4).
+      **Watch for the known trap**: arm D gives each ScanNet scene 17 passes against A-long's 24,
+      so if its best epoch is its last it has not converged and the number is an upper bound on the
+      cost, not a measurement — say so and run a longer one.
 - [x] **6g. Upstream MaskDINO trained under OUR recipe — DONE 2026-08-12, and it AGREES**
       (docs/MASKDINO_COCO.md §6 row 2 + §6.1; jobs 10094393 → 10228029 → 10279969 → 10427048,
       87 948 iters). Built as `third_party/maskdino_control/` (own README); driver

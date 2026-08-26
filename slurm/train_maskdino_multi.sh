@@ -1,14 +1,19 @@
 #!/bin/bash
 #
-# Multi-dataset training: ScanNet v2 + ScanNet++ + Infinigen, CLASS-AGNOSTIC (docs/todo.md 6e/6f).
+# Multi-dataset training: ScanNet v2 + ScanNet++ + Infinigen (+ RE10K), CLASS-AGNOSTIC
+# (docs/todo.md 6e/6f/6j).
 #
 #   sbatch slurm/train_maskdino_multi.sh                              # the full mixture
 #   sbatch --export=ALL,SOURCES='scannet scannetpp' slurm/train_maskdino_multi.sh
 #   sbatch --export=ALL,CAP_SCANNETPP=200,CAP_INFINIGEN=200 slurm/train_maskdino_multi.sh
+#   sbatch --export=ALL,SOURCES='scannet scannetpp infinigen re10k',CAP_RE10K=1500,EPOCHS=17 \
+#       --cpus-per-task=26 slurm/train_maskdino_multi.sh              # the SAM2-supervised arm
 #   DRY_RUN=1 bash slurm/train_maskdino_multi.sh                      # print the lists and exit
 #
 # Knobs (via --export=ALL,VAR=...):
-#   SOURCES         subset of "scannet scannetpp infinigen"   (default: all three)
+#   SOURCES         subset of "scannet scannetpp infinigen re10k"   (default: the first three —
+#                   re10k's masks are SAM2 output, not GT, so it is opt-in and its rows carry
+#                   that caveat: docs/MULTIDATASET.md §1.3)
 #   CAP_<SOURCE>    keep at most N scenes of that source, deterministic (default: all)
 #   CAP_VAL         keep at most N of the 312 val scenes — smoke runs only, it moves the ruler
 #   EPOCHS/WARMUP   override the derived schedule
@@ -27,9 +32,21 @@
 # ScanNet-ONLY run with --class_agnostic, not any published class-aware number
 # (docs/RESULTS.md §1).
 #
-# MEMORY. The trainer caches frozen VGGT features for every scene up front (~45 MB per 8-frame
-# bundle), so the cache is ~45 MB x scenes: ~54 GB for ScanNet's 1201 alone, ~160 GB for the full
-# 3520-scene mixture. That is what the CPU/mem request below buys; use CAP_* to shrink it.
+# MEMORY -- the binding constraint, and it is NOT the GPU. The trainer caches frozen VGGT
+# features plus GT for every scene up front. MEASURED, not projected: 135 GB peak RSS for 1513
+# scenes (the ScanNet-only arm) and 258 GiB for 3832 (arm A-long, job 11498642), i.e. ~69 MiB per
+# cached bundle. The default 16 x 16 GB = 256 GB is sized for the 1201-scene arm; OVERRIDE IT AT
+# SUBMIT TIME rather than editing this file:
+#     --cpus-per-task=20 (320 GB)  ScanNet + ScanNet++      ~2054 + 312 scenes
+#     --cpus-per-task=26 (416 GB)  the three-source mixture ~3520 + 312, and the CAP_RE10K=1500
+#                                  four-source arm at ~5020 + 312 (~360 GB, ~20 % headroom)
+# All four sources UNCAPPED is 8647 train scenes ~= 640 GB: ~40-44 CPUs, and it may not schedule.
+#
+# SCHEDULE. `EPOCHS` defaults to 20000/N_TRAIN clamped to [6, 40], which at a 5000-scene mixture
+# is the FLOOR of 6 and badly under-budgets it. Set EPOCHS explicitly for any large mixture: this
+# workstream read "more data hurts" off an under-budgeted run twice (docs/MULTIDATASET.md §9
+# reading 1, §10.3 reading 2). One step = one 8-frame bundle = one scene at b1, so
+# steps = N_TRAIN x EPOCHS; A-long's budget is 84 480.
 #
 #SBATCH --job-name=maskdino_multi
 #SBATCH --output=/cluster/scratch/niacobone/vggt/slurm/logs/maskdino_multi_%j.log
@@ -81,7 +98,7 @@ PYTHON=myenv/bin/python
 
 # ---- scene lists ------------------------------------------------------------------------
 # Every entry is an absolute path: `resolve_scene_dirs` takes paths as-is, and
-# `build_scene_dataset` picks the loader per directory, so the three sources are one flat list.
+# `build_scene_dataset` picks the loader per directory, so all the sources are one flat list.
 cap_of() { eval "echo \${CAP_$(echo "$1" | tr '[:lower:]' '[:upper:]'):-0}"; }
 
 # NEVER `echo "$LIST" | head -n N` here. `stage_dataset.sh` is SOURCED above and carries

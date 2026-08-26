@@ -24,7 +24,10 @@
 #   2. SOURCES selects a subset and val stays ScanNet-only;
 #   3. CAP_* under errexit survives a list far larger than the pipe buffer (the regression);
 #   4. CAP_VAL caps the val list, also under errexit;
-#   5. every emitted train path is absolute and comes from the right source.
+#   5. every emitted train path is absolute and comes from the right source;
+#   6. the lists reach python as @files, not argv (docs/MULTIDATASET.md §7.2);
+#   7. a FOURTH source (re10k) needs no code change — the driver globs $STAGE/insscene2d/$SRC
+#      for any non-scannet SRC, so this only has to prove it, including under CAP_RE10K.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 FAIL=0
@@ -38,15 +41,17 @@ grab() { sed -n "s/^\[dry-run\] $1: //p" <<< "$2"; }
 # capped list is ~90 KB — comfortably past the 64 KB pipe buffer the regression needs.
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$STAGE/insscene2d/scannetpp" "$STAGE/insscene2d/infinigen"
+mkdir -p "$STAGE/insscene2d/scannetpp" "$STAGE/insscene2d/infinigen" "$STAGE/insscene2d/re10k"
 for i in $(seq 1 40); do mkdir -p "$STAGE/insscene2d/scannetpp/scene_pp_$(printf '%04d' "$i")"; done
 for i in $(seq 1 1466); do
     mkdir -p "$STAGE/insscene2d/infinigen/scene_infinigen_sub_scene_$(printf '%06d' "$i")"
 done
+for i in $(seq 1 60); do mkdir -p "$STAGE/insscene2d/re10k/$(printf '%016x' "$i")"; done
 export TMPDIR="$STAGE"
 
 N_PP=40
 N_INF=1466
+N_RE=60
 N_SCANNET=$(grep -cvE '^\s*$' data/splits/scannetv2_train.txt)
 N_VAL_ALL=$(grep -cvE '^\s*$' data/splits/scannetv2_val.txt)
 
@@ -99,6 +104,25 @@ FIRST=$(grab "first train entries" "$OUT"; sed -n '/first train entries:/,/last 
 check "train entries are absolute paths" "3" "$(grep -c '^/' <<< "$FIRST")"
 LAST=$(sed -n '/last train entries:/,$p' <<< "$OUT" | grep '^/' | head -3)
 check "the last entries come from the last source" "3" "$(grep -c 'infinigen' <<< "$LAST")"
+
+# --- 7. the fourth source: re10k needs no code change in the driver -------------------------
+OUT=$(run SOURCES='scannet scannetpp infinigen re10k')
+check "re10k is listed like any other non-scannet source" "$N_RE" \
+      "$(sed -n 's/^\[cfg\] re10k: \([0-9]*\) .*/\1/p' <<< "$OUT")"
+check "the 4-source total is the sum of all four" \
+      "$((N_SCANNET + N_PP + N_INF + N_RE)) train scenes, $N_VAL_ALL val scenes" \
+      "$(sed -n 's/^\[cfg\] \(.*\) (ScanNet official val, class-agnostic)/\1/p' <<< "$OUT")"
+check "the run directory names all four sources" "1" \
+      "$(grep -c '^\[dry-run\] RUN=.*scannetscannetppinfinigenre10k_n' <<< "$OUT")"
+OUT=$(run_strict SOURCES='scannet scannetpp infinigen re10k' \
+      CAP_SCANNET=6 CAP_SCANNETPP=6 CAP_INFINIGEN=6 CAP_RE10K=6 CAP_VAL=4)
+check "CAP_RE10K caps re10k under errexit (the smoke recipe)" "6" \
+      "$(sed -n 's/^\[cfg\] re10k: \([0-9]*\) .*/\1/p' <<< "$OUT")"
+check "the 4-source smoke totals 24 train / 4 val" "24 train scenes, 4 val scenes" \
+      "$(sed -n 's/^\[cfg\] \(.*\) (ScanNet official val, class-agnostic)/\1/p' <<< "$OUT")"
+OUT=$(run SOURCES='scannet scannetpp infinigen re10k' CAP_SCANNET=3 CAP_SCANNETPP=3 CAP_INFINIGEN=3 CAP_RE10K=3)
+LAST=$(sed -n '/last train entries:/,$p' <<< "$OUT" | grep '^/' | head -3)
+check "with re10k last, the final entries come from re10k" "3" "$(grep -c '/re10k/' <<< "$LAST")"
 
 # --- 6. the lists must reach python as FILES (job 10480614: argv cap, MULTIDATASET.md §7.2) ----
 OUT=$(run)

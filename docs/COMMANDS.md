@@ -139,6 +139,34 @@ EXTRA_ARGS='--bundles_per_scene 2 --color_jitter 0.2' slurm/train_maskdino.sh
 DRY_RUN=1 TRAIN_LIST=... VAL_LIST=... bash slurm/train_maskdino.sh   # echo lists/schedule, no data
 ```
 
+### Multi-dataset arms (`slurm/train_maskdino_multi.sh`; docs/MULTIDATASET.md §5, §10, §11)
+
+A different driver, not a flag on the one above: it stages ScanNet **plus** one tar per
+instance-map source and passes the scene lists as `@files` (the 128 KB argv cap, §7.2). Val is
+always the official ScanNet 312, class-agnostic — **never move it**.
+
+**Two things must be set by hand at submit time**, and both have cost a run in this workstream:
+
+* `--cpus-per-task`, because the feature cache is the binding constraint and the script's default
+  is sized for 1201 scenes. Measured: **44 GB + 60 MB × scenes**. 20 → ScanNet+ScanNet++,
+  **26** → the 3520-scene mixture and the ~5020-scene four-source arm, 40–44 → all four uncapped.
+* `EPOCHS`, because the derived default is `20000/N_TRAIN` clamped to [6, 40] and returns the
+  **floor of 6** for any large mixture. One step = one 8-frame bundle = one scene at b1, so
+  steps = N_TRAIN × EPOCHS; A-long's budget is 84 480.
+
+```bash
+sbatch slurm/train_maskdino_multi.sh                                   # the 3-source mixture
+sbatch --export=ALL,SOURCES='scannet scannetpp',EPOCHS=40 --cpus-per-task=20 \
+    slurm/train_maskdino_multi.sh                                      # arm C-long
+sbatch --export=ALL,SOURCES='scannet scannetpp infinigen re10k',CAP_RE10K=1500,EPOCHS=17,\
+EXTRA_ARGS='--anchor_3d' --cpus-per-task=26 slurm/train_maskdino_multi.sh   # arm D (§11)
+DRY_RUN=1 SOURCES='scannet scannetpp infinigen re10k' bash slurm/train_maskdino_multi.sh
+```
+
+⚠ **Anything trained with `re10k` in `SOURCES` is SAM2-supervised** — its masks are model output,
+not ground truth. Label every row it produces and never fold it into the A/A-long row
+(docs/MULTIDATASET.md §1.3).
+
 ---
 
 ## 3. Full-resolution ruler (MASKDINO.md §6.5)
@@ -355,6 +383,22 @@ sbatch legacy/dataset_build/slurm/download_official_gt.sh
 sbatch legacy/dataset_build/slurm/extend_dataset_500.sh
 sbatch legacy/dataset_build/slurm/pack_official_gt.sh
 ```
+
+### InsScene-15K 2D training sets (docs/MULTIDATASET.md §2)
+
+Reads the mirror's split zips **without unpacking them**, builds node-local, ships one tar per
+source to `dataset/insscene2d/`. `re10k` is deliberately not in the default `SOURCES`.
+
+```bash
+sbatch slurm/build_insscene2d.sh                              # scannetpp + infinigen, 1 h 42
+sbatch --export=ALL,SOURCES=re10k slurm/build_insscene2d.sh   # +re10k, ~3 h 15, ~10 GB tar
+sbatch --export=ALL,SOURCES=re10k,LIMIT=20 slurm/build_insscene2d.sh          # smoke
+myenv/bin/python slurm/build_insscene2d.py --source re10k --out $TMPDIR/b --limit 5   # local
+```
+
+`--exclude_scenes data/splits/scannetpp_nvs_sem_val.txt` is passed for ScanNet++ **only**, and
+that asymmetry is the point: ScanNet++ is the one source that is both trained on and evaluated on.
+Infinigen and RE10K are not among the four benchmarks, so there is nothing they can leak.
 
 ### 1201-scene official-train extension (todo 1c; separate tar, does not touch the 500-scene one)
 

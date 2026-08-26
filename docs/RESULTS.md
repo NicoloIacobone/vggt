@@ -602,12 +602,23 @@ differing only in the training mixture; val is the official ScanNet 312 in all t
 | **B** (11435335) | ScanNet | 1201 | 42 035 | 0.654 / 0.675 | 0.557 / 0.548 | **0.441** | 0.707 |
 | **C** (11435338) | + ScanNet++ | 2054 | 41 080 | **0.659 / 0.677** | **0.568 / 0.554** | 0.472 | **0.714** |
 | **A** (11435332) | + Infinigen | 3520 | 42 240 | 0.630 / 0.628 | 0.521 / 0.479 | 0.531 | 0.693 |
+| **A-long** (11498642) | = A, converged | 3520 | 84 480 | **0.676 / 0.704** | **0.600 / 0.604** | **0.414** | **0.734** |
 
-**Real same-domain data is free here (C − B = +0.006, inside the 0.009 seed spread of §6.1);
-synthetic Infinigen costs −0.075 — but A is the only arm that had not converged** (its best epoch
-is its last, still climbing ~+0.010/epoch, while B is flat over its last six and C nearly so), so
-that −0.075 is an upper bound, not a measurement. Arm **A-long** (24 epochs, 84 480 steps, job
-11498642) settles it. Full reading: **docs/MULTIDATASET.md §10.3**.
+**At a matched step budget more data looks bad, and that reading was a budget artefact.** At 42 k
+steps real same-domain ScanNet++ is free (C − B = +0.006, inside §6.1's 0.009 spread) and synthetic
+Infinigen appears to cost −0.075 — but A was the only arm that had not converged (best epoch = its
+last, still ~+0.010/epoch, while B was flat over its last ten and C nearly so). **Doubling A's
+budget to 84 480 steps makes the full 3520-scene mixture the best run of the whole block on every
+2D axis**: per-bundle AP50 0.479 → **0.604** (+0.056 over C, 6× the seed spread), per-frame AP50
+**0.704**, and the best `id_switch` (0.414) and `view_consistency` (0.734) measured anywhere.
+A-long is itself converged (0.604 / 0.589 / 0.579 / 0.592 / 0.581 over its last five epochs).
+
+**The one caveat, and the run that closes it.** A-long is compared at *convergence*, not at matched
+steps — it had 2× the gradient steps of B and C. B is saturated (flat over 10 epochs, so more steps
+cannot rescue it) and C nearly so, but "more data" and "more compute" are not yet separated at the
+top end. **C-long** (2054 scenes, 40 epochs = 82 160 steps, job 11632049) is the step-matched
+control; A-long ⇄ C-long is then the clean measurement of what Infinigen contributes.
+Full reading: **docs/MULTIDATASET.md §10.3**.
 
 **Do not read this table as the result of the workstream.** Every cell is scored on ScanNet, which
 is in-domain for all three arms; what the extra data was bought for is §7's out-of-domain columns.
@@ -735,29 +746,36 @@ one for the comparison.
 - **No claim about 200-way or 84-way recognition.** The head has 19 ScanNet logits; those columns
   collapse labels on both sides by construction.
 
-### 7.5 The matrix on the data-scaling arms (2026-08-22, jobs 11498511–11498543)
+### 7.5 The matrix on the data-scaling arms (2026-08-22/23; jobs 11498511–11498543, 11540891–11540905)
 
 **The deliverable of the multi-dataset workstream** (docs/MULTIDATASET.md §10). Same ruler, same
-defaults, same evaluator as §7.2 — 24 cells, 0 failed scenes anywhere. The three arms differ
-**only** in the training mixture (§6.4); every one is `--class_agnostic --anchor_3d`, so all rows
-here are class-agnostic and none is fine-tuned on any benchmark. ScanNet++ and Replica are
-**zero-shot** for all three (the 50 `nvs_sem_val` scenes are excluded from the training tars at
+defaults, same evaluator as §7.2 — 32 cells, 0 failed scenes anywhere. The arms differ **only** in
+the training mixture and the step budget (§6.4); every one is `--class_agnostic --anchor_3d`, so
+all rows here are class-agnostic and none is fine-tuned on any benchmark. ScanNet++ and Replica are
+**zero-shot** for all of them (the 50 `nvs_sem_val` scenes are excluded from the training tars at
 build time, docs/MULTIDATASET.md §1.1); ScanNet200 is a relabelling of the ScanNet training domain.
 
 | arm | dataset | unposed (`unproject`) | posed (`gt_projection`) |
 |---|---|---|---|
-| **B** ScanNet 1201 | scannetv2 | 0.041 / **0.130** / 0.474 | 0.139 / 0.323 / **0.669** |
-| | scannet200 | 0.032 / **0.099** / 0.343 | 0.107 / 0.241 / 0.496 |
+| **B** ScanNet 1201 (42 k steps) | scannetv2 | 0.041 / 0.130 / 0.474 | 0.139 / 0.323 / 0.669 |
+| | scannet200 | 0.032 / 0.099 / 0.343 | 0.107 / 0.241 / 0.496 |
 | | scannetpp | 0.000 / 0.000 / 0.010 | 0.006 / 0.027 / 0.143 |
 | | replica | 0.000 / 0.000 / 0.004 | 0.014 / 0.047 / 0.211 |
-| **C** + ScanNet++ 2054 | scannetv2 | **0.042** / 0.129 / **0.480** | **0.140 / 0.327** / 0.668 |
-| | scannet200 | **0.033** / **0.099** / **0.345** | **0.109** / **0.243** / 0.502 |
-| | scannetpp | 0.000 / 0.000 / **0.016** | **0.012 / 0.043 / 0.234** |
-| | replica | 0.000 / 0.000 / 0.011 | **0.032** / 0.080 / 0.326 |
-| **A** + Infinigen 3520 | scannetv2 | 0.032 / 0.106 / 0.450 | 0.111 / 0.277 / 0.641 |
+| **C** + ScanNet++ 2054 (41 k steps) | scannetv2 | 0.042 / 0.129 / 0.480 | 0.140 / 0.327 / 0.668 |
+| | scannet200 | 0.033 / 0.099 / 0.345 | 0.109 / 0.243 / 0.502 |
+| | scannetpp | 0.000 / 0.000 / 0.016 | 0.012 / 0.043 / 0.234 |
+| | replica | 0.000 / 0.000 / 0.011 | 0.032 / 0.080 / 0.326 |
+| **A** + Infinigen 3520 (42 k steps) | scannetv2 | 0.032 / 0.106 / 0.450 | 0.111 / 0.277 / 0.641 |
 | | scannet200 | 0.030 / 0.090 / 0.342 | 0.097 / 0.220 / 0.500 |
 | | scannetpp | 0.000 / 0.000 / 0.011 | 0.007 / 0.029 / 0.232 |
-| | replica | 0.000 / 0.000 / **0.014** | 0.024 / **0.090 / 0.378** |
+| | replica | 0.000 / 0.000 / 0.014 | 0.024 / 0.090 / 0.378 |
+| **A-long** = A converged (84 k steps) | scannetv2 | **0.057 / 0.166 / 0.516** | **0.177 / 0.389 / 0.708** |
+| | scannet200 | **0.041 / 0.118 / 0.372** | **0.132 / 0.287 / 0.539** |
+| | scannetpp | **0.000 / 0.001 / 0.026** | **0.019 / 0.068 / 0.275** |
+| | replica | **0.000 / 0.000 / 0.036** | **0.040 / 0.119 / 0.480** |
+
+**A-long takes all 8 of its cells.** Bold marks that; the first three arms are shown unbolded so
+the 42 k-step block can still be read against itself.
 
 **1. Adding real, same-domain ScanNet++ is a strict improvement: free in domain, large out of it.**
 C vs B is flat on every ScanNetv2 and ScanNet200 cell (±0.004, inside §6.1's spread) and then
@@ -766,31 +784,41 @@ under the posed bridge, with AP25 +64 % and +55 %. This is the first measurement
 that more training data buys anything the ScanNet ruler cannot see — and §6.4 shows the ScanNet
 ruler called it a tie.
 
-**2. Out of domain the unposed bridge stays 0.000 for every arm, and no training data can move
-it.** The registration diagnostics are **identical across the three arms** to three decimals —
-ICP inliers 0.963 / 0.924 / 0.660 and camera RMS 0.097 / 0.116 / 0.143 m on
+**2. Out of domain the unposed bridge stays at zero AP50 whatever we train on.** Across all four
+arms every out-of-domain unposed cell is 0.000 / 0.000–0.001 / 0.004–0.036: even A-long, which
+gains 2.5× posed AP50 there, moves only AP25 (ScanNet++ 0.010 → 0.026, Replica 0.004 → 0.036) and
+leaves AP50 on the floor. The registration diagnostics are **identical across all four arms to
+three decimals** — ICP inliers 0.963 / 0.924 / 0.660 and camera RMS 0.097 / 0.116 / 0.143 m on
 ScanNetv2 / ScanNet++ / Replica — because they depend only on VGGT's frozen cameras, which no
-head-only training touches. Median annotated-vertex coverage out of domain collapses to
-0.21–0.31 unposed against 0.66–0.78 posed. §7.3 finding 4 said the feed-forward geometry fails
-first out of domain; this says it **binds absolutely**: the 2D masks improved and the number did
-not move off zero.
+head-only training touches. Median annotated-vertex coverage out of domain collapses to 0.21–0.31
+unposed against 0.66–0.78 posed. §7.3 finding 4 said the feed-forward geometry fails first out of
+domain; four arms spanning 1201 → 3520 scenes and 42 k → 84 k steps say it **binds absolutely**.
 
-**3. Where the data does show, it shows as coverage.** Posed annotated-assigned rises with the
-mixture exactly where AP does — ScanNet++ 0.657 → 0.766, Replica 0.671 → 0.739 (B → C) — while
-in-domain it is already 0.88–0.91 and has nowhere to go.
+**3. The two ways data pays are different, and the diagnostics separate them.** B → C pays in
+**coverage**: posed annotated-assigned rises exactly where AP does (ScanNet++ 0.657 → 0.766,
+Replica 0.671 → 0.739) while in domain it is already 0.88–0.91 and has nowhere to go. A-long pays
+in **mask quality instead**: its coverage is *lower* than C's out of domain (ScanNet++ 0.716,
+Replica 0.681) and its AP is far higher, so the extra data bought better masks per assigned vertex,
+not more of them. Do not read the AP gains here as one mechanism.
 
-**4. Infinigen costs in domain and helps only on the other synthetic dataset.** A is below B and C
-on all six ScanNetv2/ScanNet200 cells (posed AP50 0.277 vs 0.327, −15 %) and on ScanNet++
-(0.029 vs 0.043), but takes **Replica's AP50 and AP25** (0.090 / 0.378 vs 0.080 / 0.326) — the one
-benchmark that is, like Infinigen, synthetic renders. Read as a single 8-scene cell and as a
-domain-match hypothesis, not a result: **A is the only arm that had not converged** (§6.4), so its
-in-domain deficit is an upper bound. Arm A-long (job 11498642) is what settles both halves.
+**4. "Infinigen hurts" was a budget artefact — at convergence the full mixture wins every cell.**
+At 42 k steps A trails B and C on all six ScanNetv2/ScanNet200 cells and on ScanNet++. At 84 480
+steps the same mixture takes **every one of the eight cells**, by margins far outside anything in
+§7.2: unposed ScanNetv2 **0.057 / 0.166 / 0.516** against C's 0.042 / 0.129 / 0.480 (+29 % AP50)
+and posed **0.177 / 0.389 / 0.708** against 0.140 / 0.327 / 0.668 (+19 %). Zero-shot it is
+**2.5× B's AP50 on both** ScanNet++ (0.068 vs 0.027) and Replica (0.119 vs 0.047), and Replica's
+AP25 more than doubles (0.480 vs 0.211). The larger the mixture, the more steps it needs before it
+pays — which is §6.4's lesson stated on the ruler that matters.
 
-**5. What this does not change.** The ScanNetv2 headline is unmoved: B (0.041 / 0.130 / 0.474) and
-C (0.042 / 0.129 / 0.480) reproduce the published `--anchor_3d` row (0.042 / 0.138 / 0.504) within
-noise, so §8.2's competitor comparison stands as written and gains no new claim from this block.
-The §7.4 caveats apply here verbatim — one run per cell, Replica's GT is our construction, and no
-claim is made about 200-way or 84-way recognition.
+**5. This IS a new headline, and it is the best row the project has.** A-long's unposed ScanNetv2
+triple **0.057 / 0.166 / 0.516** beats the published `--anchor_3d` ScanNet-only row
+(0.042 / 0.138 / 0.504) by +20 % AP50 on the same ruler, and it is the number §8.2's competitor
+table should quote once C-long has separated data from compute (§6.4). Against the published
+class-agnostic cluster — FAST3DIS 0.038 / 0.096 / 0.316 and IGGT 0.028 / 0.112 / 0.287 — it leads
+on all three measures by 1.5–2.0×, still on a **strictly frozen** backbone and at ~17.4 views/scene
+against their 50. The §7.4 caveats apply verbatim: one run per cell, Replica's GT is our
+construction, no claim about 200-way or 84-way recognition — and A-long is not yet step-matched
+(job 11632049 is that control).
 
 ## 8. Summary table — the numbers to quote, and against what
 
@@ -824,15 +852,25 @@ class-aware number).
 |---|---|---|---|---|---|
 | IGGT (re-evaluated by FAST3DIS) | adapted | 50 | 0.028 | 0.112 | 0.287 |
 | FAST3DIS | LoRA-adapted DA3 | 50 | 0.038 | 0.096 | 0.316 |
-| **Ours, `--anchor_3d`, defaults** | **frozen VGGT-1B** | **~17** | **0.042** | **0.138** | **0.504** |
+| **Ours, `--anchor_3d`, defaults — ScanNet-only training** | **frozen VGGT-1B** | **~17** | **0.042** | **0.138** | **0.504** |
 | — same, best lifting knobs (sensitivity, not headline) | 〃 | 〃 | 0.055 | 0.185 | 0.571 |
 | *ours, headline checkpoint (no `--anchor_3d`), tuned* | 〃 | 〃 | *0.017* | *0.060* | *0.334* |
+| **Ours + EXTRA TRAINING DATA** (A-long: ScanNet + ScanNet++ + Infinigen, 3520 scenes, §7.5) | 〃 | 〃 | **0.057** | **0.166** | **0.516** |
 
 **The claim: ahead of both published unposed methods on all three metrics, with a strictly frozen
 backbone, no adaptation, ~1/3 of their views, and all lifting knobs at defaults.** It survives the
 whole knob grid — the worst point of the sweep is still 1.44× FAST3DIS's AP50 (§5). Two caveats
 travel with it: single run against a single control, and the class-collapse sign is
 checkpoint-dependent (the italic row is the same recipe without `--anchor_3d`).
+
+**The extra-data row is separate on purpose, and the ScanNet-only row stays the headline.** The
+field norm both this project and its competitors follow is that extra training data gets its own
+labelled row rather than being folded into the clean one (`docs/TRAINING_COMPARABILITY.md` §2, and
+MaskDINO's own README fences its rows the same way). Read the two together: the *mechanism* claim
+rests on the ScanNet-only row, the *scaling* claim on the extra-data one. It is also the closer
+comparison to IGGT, which likewise trains on a curated mixture. Two things it still owes:
+**it is not yet step-matched** (84 k steps against the arms it beats; job 11632049 is that control)
+and, like every row here, it is a single run.
 
 *Not in this table on purpose:* **SegVGGT 0.504 / 0.717 / 0.870** — posed transfer, a different
 protocol (§5.1); and the point-cloud/RGB-D family (Mask3D 55.2, SegDINO3D 64.0 AP) — different

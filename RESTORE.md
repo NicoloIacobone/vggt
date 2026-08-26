@@ -31,14 +31,29 @@ will normally pick your own `$R`.
 
 ```bash
 cd $R/cluster/scratch/niacobone/vggt
-python3.12 -m venv myenv          # the original was Python 3.12.8
-myenv/bin/pip install -r requirements.txt   # pins torch 2.3.1 / torchvision 0.18.1
+module purge
+deactivate                       # only if a venv is active; harmless to skip
+rm -rf myenv
+module load stack/2024-06 python/3.12.8 cuda/12.8.0 eth_proxy   # Euler-specific; adapt
+python -m venv myenv             # the original was Python 3.12.8
+source myenv/bin/activate
+pip install --upgrade pip wheel setuptools
+pip install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
+pip install -r requirements_demo.txt
 ```
 
-Put it **off** any purging scratch filesystem if you can. On the old cluster a 15-day scratch
-purge deleted torch's `.py` files while leaving the `.pyc`, producing a torch that imports
-half-way (`module 'torch._dynamo' has no attribute 'disable'`); see `CLAUDE.md` for the
-diagnosis. Nothing about that bug is specific to Euler.
+Two things this recipe does that the obvious short version does not, both load-bearing:
+**`requirements_demo.txt` is required, not optional** — matplotlib, scipy, opencv, trimesh and the
+rest of the active code's imports live there, not in `requirements.txt`; and the last two lines
+**override** the cu128 line, so what you end up with is **torch 2.3.1+cu121 / torchvision
+0.18.1+cu121 / numpy 2.5.2**, which is what every published number was produced with. Verified
+2026-08-24 on Euler: 41 491 files, all 20 CPU tests green.
+
+Put it **off** any purging scratch filesystem if you can. On the old cluster a 15-day scratch purge
+destroyed the venv twice, and the two failures looked nothing alike — once the `.py` sources went
+and the `.pyc` stayed, once the reverse plus the binaries (`Unable to find torch_shm_manager`). See
+`CLAUDE.md` for both signatures and the diagnosis. Nothing about that bug is specific to Euler.
 
 Point the caches at the restored weights so nothing re-downloads the frozen VGGT-1B backbone:
 

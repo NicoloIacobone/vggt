@@ -13,7 +13,8 @@ stores one uint16 id map per frame:
 This module reads that layout and returns **the same sample dict** as
 `ScanNetSingleSceneDataset`, so the trainer, the feature cache, `build_frame_targets` and both
 evaluators consume the two interchangeably. `build_scene_dataset` dispatches per directory, which
-is what makes a mixed ScanNet + ScanNet++ + Infinigen scene list a single flat list of paths.
+is what makes a mixed ScanNet + ScanNet++ + Infinigen + RE10K scene list a single flat list of
+paths — a source added to the build needs no change here.
 
 **Every instance is class 1 here.** These datasets' taxonomies are not ScanNet's, so a scene from
 them is only meaningful under `--class_agnostic` (docs/todo.md 6e), where the head has one class

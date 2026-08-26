@@ -8,6 +8,7 @@ The mirror stores two very different shapes, and this module hides the differenc
                             It is a plain byte split, NOT a `zip -s` multi-disk archive, so the
                             central directory sits at the tail of the LAST part and every member
                             can be reached by seeking across the concatenation.
+  processed_re10k/          the same shape: one 169 GiB zip in 43 parts, 1 221 783 members.
   processed_infinigen/      one ordinary ~60 MB zip per sub-scene, opened with `zipfile`.
 
 **Why not just concatenate.** `cat *.zip.0* > all.zip` would materialise 211 GiB and we need

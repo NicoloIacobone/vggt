@@ -15,7 +15,7 @@ came from; anything unsourced is marked as such.
 | **SegVGGT** | **ScanNetv2 train (1201 scenes)**, and separately **ScanNet200 train** — same scenes, 200-class label space, **two checkpoints, no shared pretraining**. 2–24 frames/scene, 518 px long edge, LoRA r=32, lr 2e-4 new / 6e-5 pre-existing, 8×A100 ≈ 2 days per dataset, ≤48 images/batch | ScanNetv2 val + ScanNet200 val (Table 1, full val); **ScanNet++ zero-shot** (Table 2) | §4.1 *"We train the models separately on ScanNetv2 and ScanNet200 using 8 NVIDIA A100 GPUs, taking approximately 2 days per dataset"*; §4.3; `configs/eval/segvggt_scannetv2.yaml` |
 | **FAST3DIS** | **Aria Synthetic Environments ONLY.** *"Our model is trained exclusively on the Aria Synthetic Environments Dataset […] we sampled 40% of the scenes to form our training set"* (of 100 000+ scenes). No real data at all. | **ScanNetV2, ScanNet++, Replica — all three zero-shot**, 50 uniformly sampled views/scene, **class-agnostic**, Sim(3)+ICP alignment | §4.1 Datasets; §4.1 *"we uniformly sample 50 views along the camera trajectory to reconstruct and evaluate each scene"*; §4.4 *"In the class-agnostic setting, we ignore the semantic class labels"* |
 | **IGGT** | **InsScene-15K**, curated from **Aria (ASE) + Infinigen + RE10K + ScanNet++**. Initialised from VGGT, then finetuned once. 8×A800 × 2 days, 1–12 frames/scene, 24 images/batch, lr 1e-6 backbone / 1e-5 heads | ScanNet + ScanNet++, **10 randomly selected scenes each, 8–10 images per scene** — spatial tracking, reconstruction, open-vocab semantics. **No AP table of its own.** | §2 InsScene-15K; §4 *"we randomly select 10 scenes and sample 8–10 images per scene"*; §A.3 *"initialized with weights from VGGT […] and fine-tuned on the InsScene-15K dataset"* |
-| **this project** | ScanNetv2 train, official 1201 split, frozen VGGT-1B, head-only | ScanNetv2 val-312 (2D per-frame/per-bundle + 3D benchmark) | `docs/RESULTS.md` §6, `docs/MASKDINO.md` §9 |
+| **this project** | ScanNetv2 train, official 1201 split, frozen VGGT-1B, head-only. **Separately labelled extra-data rows** add ScanNet++ and Infinigen from InsScene-15K (arms A/C, `docs/MULTIDATASET.md` §10) and, separately again, RE10K's **SAM2-generated** masks (arm D, §11) | ScanNetv2 val-312 (2D per-frame/per-bundle + 3D benchmark); the 4-benchmark matrix for the extra-data arms | `docs/RESULTS.md` §6, §7.5, `docs/MASKDINO.md` §9 |
 
 ### 1.1 Three consequences
 
@@ -86,7 +86,7 @@ This is a depth/MVS training corpus. Treat the whole directory as unusable for i
 | **Replica (8 scenes: room0-2, office0-4)** | FAST3DIS's 3rd benchmark | **DONE 2026-08-08** — `dataset/replica/{replica_3d_gt_8,replica_frames_8}.tar.zst`; CC-BY-NC-4.0 | 372 MB + 417 MB (789 MB total — the 15–25 GB estimate assumed unsampled frames; 50/scene + zstd is far smaller) | 2 inodes on work; 0 loose on scratch |
 | **InsScene-15K** | replicating IGGT's training data | **DONE 2026-08-08** — `dataset/insscene15k/`, mirrored as-is (not unzipped), Apache-2.0. **Still partial**: Aria/ASE not uploaded upstream as of this date (re-checked, unchanged since 2026-08-07) | 522.07 GB | **1565 files** (not ~120 — `processed_infinigen` alone is 1468 small per-scene zips, not one shard per subset) |
 | **Aria Synthetic Environments, annotated** | replicating FAST3DIS's training data | **MISSING and out of reach** — 23 TB / 100 000 scenes / 58 M images; their 40 % ≈ 9.2 TB | 9.2 TB | ~23 M frames |
-| Infinigen, RE10K (standalone) | only if InsScene-15K's shards prove incomplete | missing | — | — |
+| Infinigen, RE10K (standalone) | only if InsScene-15K's shards prove incomplete | **not needed** — both are inside the mirror and both are annotated. The RE10K row here used to read "missing"; it was **stale from 2026-08-24**, when the masks were found under a *sibling* directory the original survey never looked at (`processed_re10k/sam2_results/<scene>/auto_masks.json`, 5127 of 5138 scenes). See `docs/MULTIDATASET.md` §1.3 | 0 | 0 |
 
 **Storage discipline** (`docs/DATASET.md` §5.1): scratch is quota'd on **file count** (1.0 M soft /
 1.5 M hard), currently 250 462 used. Every build above materialises its tree in `$TMPDIR` and lands
@@ -100,11 +100,13 @@ This is a depth/MVS training corpus. Treat the whole directory as unusable for i
 2. **The ASE copy on this cluster has no annotations** (§3.1), so an ASE arm would need a fresh
    download under Project Aria terms, not a local read.
 3. **InsScene-15K appears incomplete.** Its HuggingFace tree currently exposes only
-   `processed_infinigen`, `processed_re10k`, `processed_scannetpp_v2` — the Aria portion is absent
+   `processed_infinigen`, `processed_re10k`, `processed_scannetpp_v2` — all three of which we now
+   train on, with RE10K's rows carrying the **SAM2-supervised** caveat — but the Aria portion is
+   absent
    ("datasets are still being uploaded"). Any replication built on it is **partial** and must say so.
-   The full 522 GB / 1565-file mirror is on work as of 2026-08-08; re-checked at mirror time and
-   still no Aria/ASE directory — this fact does not change once the download completes, only the
-   date it was last confirmed does.
+   The full 522 GB / 1565-file mirror is on work as of 2026-08-08; **re-checked 2026-08-24 against
+   the live HuggingFace tree — still exactly those three folders, still no Aria/ASE directory.**
+   This fact does not change once the download completes, only the date it was last confirmed does.
 4. **FAST3DIS never states which scenes it evaluates** on any of its three datasets — only "50
    uniformly sampled views". Our numbers will be on official val-312 / `nvs_sem_val`-50 / the
    standard 8 Replica scenes; do not claim identical evaluation sets.

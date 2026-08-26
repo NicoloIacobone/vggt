@@ -35,8 +35,10 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
   at 34.55 AP vs our own arm's 34.3, which certifies our matcher/criterion/DN on the *training*
   path and prices the recipe at ~11.6 AP against upstream's released 46.1.
 - `docs/DATASET.md` — GT provenance, the tars, mask conventions, how a job gets the data.
-- `docs/MULTIDATASET.md` — the multi-dataset training arm (ScanNet + ScanNet++ + Infinigen,
-  `--class_agnostic`). Its rows are **class-agnostic** and never comparable to RESULTS' §2/§3/§6.
+- `docs/MULTIDATASET.md` — the multi-dataset training arm (ScanNet + ScanNet++ + Infinigen, plus
+  RE10K in its own arm, `--class_agnostic`). Its rows are **class-agnostic** and never comparable
+  to RESULTS' §2/§3/§6. Anything trained on RE10K is additionally **SAM2-supervised** — the masks
+  are model output, not ground truth — and carries a separate labelled row (§1.3, §11).
 - `docs/todo.md` — open work only.
 - `docs/RELATED_WORK.md` — competitor landscape & positioning. Read before framing any result as a
   contribution.
@@ -53,15 +55,50 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
 
 A virtualenv lives in-repo at `myenv/` — use `myenv/bin/python`.
 
-> ⚠ **`myenv/` is on scratch, and scratch purges files 15 days after last access — it destroyed
-> the venv on 2026-08-07.** Python imports read `__pycache__/*.pyc` and never touch the `.py`
-> source, so the sources' atime goes stale, the purge deletes them, and the *still-present* `.pyc`
-> then fails to validate. Symptom: `ModuleNotFoundError: No module named 'torch._vendor...'` or
-> `module 'torch._dynamo' has no attribute 'disable'` — a torch that imports partially, in a tree
-> with far fewer `.py` than `.pyc`. Diagnose with
-> `find myenv -name '*.py' | wc -l` vs `-name '*.pyc' | wc -l`. Rebuilding it on scratch just
-> restarts the 15-day clock; `$HOME` is not purged and has room. `requirements.txt` pins
-> torch 2.3.1 / torchvision 0.18.1.
+> ⚠ **`myenv/` is on scratch, and scratch purges files 15 days after last access. It has now
+> destroyed the venv TWICE — 2026-08-07 and 2026-08-24 — and once took the MaskDINO reference
+> too.** A running import touches almost nothing in the tree, so most of it goes stale and the
+> purge takes whatever it reaches first. The two occurrences looked completely different:
+>
+> | date | what survived | what went | symptom |
+> |---|---|---|---|
+> | 2026-08-07 | the `.pyc` | the `.py` sources | `ModuleNotFoundError: No module named 'torch._vendor…'`, `module 'torch._dynamo' has no attribute 'disable'` |
+> | 2026-08-24 | the `.py` sources (12 207 — they had been `touch -a`'d on 08-21) | the `.pyc` (12 206 → 3 607), the `.so`, and plain **binaries** | `RuntimeError: Unable to find torch_shm_manager at …/torch/bin/torch_shm_manager` |
+>
+> **Refreshing one file type just moves the failure to the rest** — that is exactly what the second
+> occurrence was. **Diagnose on the total, not on one extension**: `find myenv -type f | wc -l`
+> (16 364 after the purge, ~30 k healthy) alongside the `.py`/`.pyc` counts. Rebuilding on scratch
+> restarts the 15-day clock, so if you leave it there, refresh the **whole** tree
+> (`find myenv -exec touch -a {} +`) well inside 15 days. `$HOME` is not purged but has ~10 GB free
+> of its 45 GB soft quota against a ~9 GB venv, and `/cluster/work/igp_psr` is at 100 %.
+>
+> **The rebuild recipe — this one, not `RESTORE.md`'s shorter version** (used 2026-08-24, 41 491
+> files, all 20 CPU tests green):
+>
+> ```bash
+> cd /cluster/scratch/niacobone/vggt
+> module purge
+> deactivate                       # only if a venv is active; harmless to skip
+> rm -rf myenv
+> module load stack/2024-06 python/3.12.8 cuda/12.8.0 eth_proxy
+> python -m venv myenv
+> source myenv/bin/activate
+> pip install --upgrade pip wheel setuptools
+> pip install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cu128
+> pip install -r requirements.txt
+> pip install -r requirements_demo.txt
+> ```
+>
+> **`requirements.txt` overrides the cu128 line**, so the environment this recipe actually leaves
+> is **torch 2.3.1+cu121 / torchvision 0.18.1+cu121 / numpy 2.5.2** — which is the point: that is
+> what every published number was produced with. The cu128 step is not load-bearing; keep it only
+> if you also intend to unpin `requirements.txt`. `requirements_demo.txt` is not optional here —
+> matplotlib, scipy, opencv, trimesh and the rest of the active code's imports come from it, not
+> from `requirements.txt`.
+>
+> `requirements.txt` still pins `numpy==1.26.1` while the resolved tree lands on 2.x; the drift is
+> old and harmless. To see what a *previous* environment held after a purge has eaten the code,
+> `ls -d myenv/lib/python3.12/site-packages/*.dist-info` — those survive when the modules do not.
 
 Runs on a GPU cluster node;
 matplotlib must stay headless (`Agg`). SLURM logs go to `slurm/logs/` (gitignored) — never let them

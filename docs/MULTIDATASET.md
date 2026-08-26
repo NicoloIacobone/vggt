@@ -1,4 +1,4 @@
-# Multi-dataset training — ScanNet v2 + ScanNet++ + Infinigen (todo 6e + 6f)
+# Multi-dataset training — ScanNet v2 + ScanNet++ + Infinigen + RE10K (todo 6e + 6f + 6j)
 
 Opened 2026-08-10. This is the **data-scaling** workstream: every number in `docs/RESULTS.md` was
 produced by a head trained on ScanNet v2 and nothing else, and the scaling curve (50 → 190 → 490 →
@@ -22,7 +22,7 @@ themselves, not from the paper:
 |---|---|---|
 | `processed_scannetpp_v2` | 903 scenes; `images/*.jpg`, `depth/*.png`, `refined_ins_ids/<stem>.jpg.npy` (int16 per-pixel ids at the image's own 920×690) | **yes** |
 | `processed_infinigen` | 1466 sub-scene zips (156 scenes); `Image/`, `Depth/`, `ObjectSegmentation/*.npy` (int64 ids), `Objects/*.json` (names + `object_index`), `camview/*.npz` (K, T) | **yes** |
-| `processed_re10k` | `rgb/` + `cam/` only | **no** — no instance annotation of any kind, so it is skipped entirely (169 GB never read) |
+| `processed_re10k` | 5138 scenes; `<scene>/{rgb,cam}/` **and** a sibling `sam2_results/<scene>/auto_masks.{json,avi}` — COCO-RLE masklets, per frame, ids persistent across the clip (5127 of 5138 scenes) | **yes, but SAM2-generated** — §1.3, built §1.4. Every row trained on it says **SAM2-supervised** |
 
 Two properties were verified before any of it was used, because both are load-bearing:
 
@@ -33,6 +33,134 @@ Two properties were verified before any of it was used, because both are load-be
 2. **Infinigen's ids index `Objects/*.json`**, so every instance has a name. All 42 ids of a test
    frame resolved (`BedFactory(...)`, `bedroom_0/0.wall`). That is what makes the room-shell drop
    below principled rather than a heuristic.
+
+### 1.3 RE10K IS annotated — corrected 2026-08-24
+
+The row above used to read *"`rgb/` + `cam/` only — no instance annotation of any kind"*. **That was
+wrong**, and the error was structural: the original survey grouped member paths by their depth-2
+component, which for `processed_re10k/<scene>/rgb/…` is `rgb`/`cam` — but the masks live under a
+**sibling top-level directory**, `processed_re10k/sam2_results/<scene>/`, so they never appeared in
+that histogram. Re-read from the split zip 2026-08-24 (1 221 783 members in 43 parts, no
+unpacking):
+
+| | measured |
+|---|---|
+| scenes with `rgb/` | 5138 |
+| scenes with `sam2_results/auto_masks.json` | **5127** (all of them inside the 5138) |
+| `auto_masks.json` schema | SA-V: `masklet[frame][obj]` = COCO RLE `{size, counts}`, plus `masklet_id`, `masklet_type`, `masklet_num`, `video_frame_count`, `video_height`, `video_width` |
+| json size | median 1.73 MB uncompressed, p95 5.68, max 20.8; 2.19 GiB compressed in total |
+| masklets per scene | median ~60, range 10–667 |
+| frame counts | `len(rgb) == video_frame_count == len(masklet)` in every scene sampled, and asserted per scene at build time |
+
+**`masklet_num` is NOT the number of masklets.** In every scene checked it equals
+`video_frame_count`, i.e. the OUTER dimension. The outer index is the frame, the inner one the
+masklet, and the inner length is constant per scene. The first scene inspected (218 frames,
+60 masklets) happened to have `masklet_num == video_frame_count == 218` *and* was read correctly
+by luck; scenes where the two differ settle it. Index by position on the outer axis, never on
+`masklet_num`.
+
+**Ids are persistent across the clip**, which is the property §1 verifies before using a source —
+and it is verified, not assumed from the word "masklet". Constant inner length proves nothing on
+its own, so the check is a *tracking* one: over 475 instance pairs in 10 random scenes, the IoU
+between masklet *i* on adjacent frames is **median 0.932** against **0.475** for the best match to
+any *other* index, and the same index is the best match **93.7 %** of the time. End to end through
+the build, 53/60, 61/64, 68/68, 54/55 and 43/46 instance ids survive across four sampled frames of
+the first scenes built.
+
+**The one caveat that must travel with every number: the masks are SAM2 output, not ground truth.**
+ScanNet++ and Infinigen ship human or engine GT; these are automatic and unnamed. That is a
+different *kind* of supervision, not merely more of the same, so this source gets its own labelled
+arm and is **never folded into A/A-long's row** — the same rule `docs/TRAINING_COMPARABILITY.md` §2
+states for extra data, with one extra caveat nobody else's row carries.
+
+Two further properties, neither of which blocks training but both of which shape how it is read:
+
+1. **RE10K is video of *scenes*, not a 3D instance benchmark** — no mesh, no benchmark cloud, so
+   it can never appear on the 3D ruler, only in training. It is also therefore **not one of the
+   four benchmarks of `docs/RESULTS.md` §7**, so unlike ScanNet++ there is **nothing it can leak
+   and no exclusion list to pass**. Stated explicitly so the next reader does not go looking.
+2. It is the only source in the mirror with **clip-length temporal id persistence at 5127 scenes**,
+   i.e. cheap `--multi_frame` identity supervision — which is the reason to want it at all.
+
+### 1.4 Building RE10K — four decisions, three of them traps (2026-08-24)
+
+`slurm/build_insscene2d.py --source re10k` follows `build_scannetpp` exactly — same split-zip
+reader, same per-scene `remap_ids` onto a dense 1..G, same 518×518 squash, same `manifest.json`.
+Four things are specific to it:
+
+**1. COCO RLE without `pycocotools`.** It is not in `myenv`, and adding a C extension to the
+critical path of a venv scratch has already destroyed twice (CLAUDE.md) is a bad trade for ~60
+lines. `slurm/coco_rle.py` implements the format directly: LEB128-style base-32 run lengths,
+column-major, **delta against the run two places back from the third run onwards**. Two of the
+three easy bugs there (wrong delta start, row- vs column-major) survive a round trip through one's
+own encoder, so it is tested against **`pycocotools` itself** — `tests/data/coco_rle_fixture.json`
+was generated once under the reference env and carries the mask bits next to every `counts` string.
+`tests/test_coco_rle.py`, 47 checks.
+
+**2. Frame ↔ mask alignment is positional, and the stems are not sortable as strings.** `masklet`
+is indexed by frame *position*; `rgb/` is keyed by a timestamp stem. Those stems are **8 or 9
+digits** (307 821 vs 287 683 across the mirror), so a lexicographic sort puts every 9-digit stem
+before every 8-digit one and **silently misaligns masks and images in 107 scenes**. They are sorted
+by `int`. The build then *asserts* `len(rgb) == video_frame_count == len(masklet)` per scene and
+skips-and-counts any scene where it does not hold, rather than guessing.
+
+**3. Resolution is per scene, not global.** 360×640 dominates but 540×960, 506×960 and 1080×1920
+all occur, and the RLE `size` matches the scene's own `video_height × video_width`. The build
+checks the rgb PNG against them before resizing **both** to 518×518.
+
+**4. Overlaps: the SMALLER instance wins.** SAM2 masklets are not a partition — a wall or floor
+blob routinely contains the objects in front of it — while the instance-map format is one id per
+pixel. Painting largest-first keeps every small object intact and costs the big blob only the
+pixels it was occluding. Ties go to the lower masklet index. Both halves are deterministic, which
+is what a per-scene id table requires.
+
+**The room-shell filter, measured before it was chosen.** Infinigen needed one (walls/floors 21–32 %
+of a frame) and ScanNet++ did not (largest median area 0.18–0.32). RE10K has no names, so the only
+available rule is area — and the measurement, over 60 random scenes and 4638 instances:
+
+| | measured |
+|---|---|
+| per-instance scene-wide area, percentiles | p50 **0.002**, p75 0.010, p90 0.039, p95 0.076, p99 0.223, max 0.758 |
+| per-scene *median largest* instance (30 scenes) | median **0.247**, p25 0.185, p75 0.383, max 0.727 — i.e. inside ScanNet++'s unfiltered 0.18–0.32 band, but with a much worse tail |
+| border contact by area bucket | <0.10 → 0.000 median, 0.10–0.30 → 0.134, **>0.30 → 0.223** (and 17 % of them touch more than half the frame border) |
+
+So the big instances *are* shell-shaped — they run off the edge of the frame the way a wall does
+and a chair does not — and the cut is placed at **0.30 of the frame, averaged over the kept frames
+of the scene**:
+
+| cap | instances dropped | labelled pixels dropped (median scene) | scenes emptied |
+|---|---|---|---|
+| 0.20 | 1.3 % | **21.8 %** | 0 |
+| **0.30** | **0.5 %** | **0.0 %** | 0 |
+| 0.40 | 0.3 % | 0.0 % | 0 |
+
+The average is taken **scene-wide, not per frame**, deliberately: a per-frame threshold would make
+an instance flicker in and out of the GT, and the multi-frame head re-links instances across views
+by id, so a flickering id is worse than either keeping or dropping it outright. `--max_area_frac`
+is the only knob.
+
+> ⚠ **The cap does NOT make RE10K shell-free, and arm D must be read knowing that.** Looked at
+> rather than counted — overlays of built scenes — SAM2 splits a wall, a ceiling or a floor into
+> several sub-regions that each sit comfortably under 30 %, so **walls, floors and ceilings are
+> still supervised instances in this source**. They are not in the other three (ScanNet's benchmark
+> excludes wall/floor, Infinigen's shell is dropped **by name**, our Replica GT excludes the room
+> shell — §1.1). Lowering the cap does not fix it, because **there is no knee to cut at**: pooled
+> over 25 scenes, border contact — the thing that distinguishes a wall from a chair — rises
+> *smoothly* with area (0.000 → 0.012 → 0.048 → 0.090 → 0.160 → 0.193 → 0.296 across the 0–2 %,
+> 2–5 %, 5–10 %, 10–15 %, 15–20 %, 20–30 % and >30 % bands), and even above 30 % only **two thirds**
+> of instances are shell-shaped, so a third of what any cap removes is a legitimate large object.
+> Meanwhile the pixel mass is spread almost evenly across those bands (14 / 12 / 15 / 16 / 13 /
+> 12 / 19 %), so a cap at 0.10 would delete **60 % of the labelled pixels** — that is not a shell
+> filter, that is gutting the supervision.
+>
+> The honest statement: **SAM2 auto-masks are a class-agnostic over-segmentation of the whole
+> image, not an object-vs-shell partition, and no cheap rule recovers one from them.** The 0.30 cap
+> removes the frame-dominating blobs and claims nothing more. This is a **confound in arm D on top
+> of the SAM2 one** — the arm adds both new scenes *and* shell supervision the other three sources
+> do not have — and it is the first thing to suspect if arm D loses AP on the 3D ruler while its 2D
+> masks look fine, since the benchmark counts an unmatched wall as a false positive. The follow-up
+> if so is a border-contact rule rather than a tighter area one; both halves of the border
+> statistic are computable from the RLE runs without decoding the mask.
 
 ### 1.1 The two exclusions
 
@@ -85,13 +213,20 @@ writes:
     <source>/<scene>/instance/<stem>.png     uint16 id map, 0 = background
     <source>/<scene>/manifest.json           frames, id table, provenance, counters
 
-`slurm/insscene_shards.py` reads the 211 GiB ScanNet++ archive **without unpacking it**: the parts
-are a plain `split -b` of one zip, so the central directory sits at the tail of the last part and
-any member can be reached by seeking across the concatenation. Concatenating would materialise
-211 GiB to read ~0.3 % of it. zip64 is mandatory at this size and is handled explicitly.
+`slurm/insscene_shards.py` reads the 211 GiB ScanNet++ and 169 GiB RE10K archives **without
+unpacking them**: the parts are a plain `split -b` of one zip, so the central directory sits at the
+tail of the last part and any member can be reached by seeking across the concatenation.
+Concatenating would materialise 211 GiB to read ~0.3 % of it. zip64 is mandatory at this size and
+is handled explicitly.
 
-Storage discipline per `docs/DATASET.md` §5.1: the tree is built in `$TMPDIR` (≈148 k files) and
-only one tar per source lands on work — **scratch inode cost zero**.
+Storage discipline per `docs/DATASET.md` §5.1: the tree is built in `$TMPDIR` (≈148 k files for
+ScanNet++ + Infinigen, a further ≈333 k for RE10K) and only one tar per source lands on work —
+**scratch inode cost zero**.
+
+Measured cost per source: ScanNet++ + Infinigen together were **1 h 42** (job 10286143); RE10K is
+**~2.6 s/scene × 5127 ≈ 3 h 45** and **~2.0 MB/scene ≈ 10 GB**, which is why
+`slurm/build_insscene2d.sh` asks for 24 h rather than 12. `--source re10k` is **not** in the
+script's default `SOURCES`: it is opt-in because its supervision is model-generated (§1.3).
 
 ## 3. `--class_agnostic` (todo 6e)
 
@@ -123,17 +258,21 @@ supervising every ScanNet++/Infinigen object as ScanNet class 1.
 ## 5. Running it
 
 ```bash
-# 1. the build (CPU, ~3 h; writes two tars to dataset/insscene2d/)
+# 1. the build (CPU, ~1 h 42; writes two tars to dataset/insscene2d/)
 sbatch slurm/build_insscene2d.sh
+sbatch --export=ALL,SOURCES=re10k slurm/build_insscene2d.sh            # +the SAM2 source, ~3 h 45
 
 # 2. the training — class-agnostic by construction, val stays the official ScanNet 312
 sbatch slurm/train_maskdino_multi.sh                                   # all three sources
 sbatch --export=ALL,SOURCES='scannet scannetpp' slurm/train_maskdino_multi.sh
 sbatch --export=ALL,CAP_SCANNETPP=200,CAP_INFINIGEN=200 slurm/train_maskdino_multi.sh
+sbatch --export=ALL,SOURCES='scannet scannetpp infinigen re10k',CAP_RE10K=1500,EPOCHS=17 \
+    --cpus-per-task=26 slurm/train_maskdino_multi.sh                   # arm D, §11
 DRY_RUN=1 bash slurm/train_maskdino_multi.sh                           # lists + schedule only
 
 # CPU tests
 myenv/bin/python tests/test_insscene2d.py        # the reader, the build's transforms
+myenv/bin/python tests/test_coco_rle.py          # the RLE decoder, against pycocotools' output
 myenv/bin/python tests/test_class_agnostic.py    # 6e, both directions
 myenv/bin/python tests/test_multidata2d.py       # the loader and the dispatcher
 bash tests/test_train_maskdino_multi_sh.sh       # the driver's scene lists + the §7.1 regression
@@ -143,9 +282,15 @@ bash tests/test_train_maskdino_multi_sh.sh       # the driver's scene lists + th
 class-agnostic — otherwise "more data helped" and "the ruler got easier" are indistinguishable.
 
 **The memory bound is the feature cache**, not the GPU: the trainer caches frozen VGGT features
-for every scene up front, ~45 MB per 8-frame bundle, so ~54 GB for ScanNet's 1201 alone and
-~160 GB for the full 3520-scene mixture. That is what the job's 16×16 GB request buys; `CAP_*`
-shrinks it.
+plus GT for every scene up front. Measured, not projected: **135 GB for 1513 scenes** and
+**258 GiB for 3832** (arm A-long, job 11498642) — ≈ 69 MiB per cached bundle. The job's default
+16 × 16 GB = 256 GB is sized for the 1201-scene arm; every larger mixture overrides
+`--cpus-per-task` at submit time (§8 sizing), and `CAP_*` shrinks it.
+
+**`EPOCHS` must be set by hand for any large mixture.** The driver's default is `20000/N_TRAIN`
+clamped to [6, 40], which at ~5000 scenes returns the floor of 6 — badly under-budgeted. Reading a
+step-matched deficit as "this data hurts" is the trap this workstream fell into twice (§9 reading
+1, §10.3 reading 2).
 
 ## 6. The baseline — ScanNet-only, class-agnostic (job 10287578, 2026-08-10)
 
@@ -193,7 +338,12 @@ prevent.
 | 〃 re-run after the §7.1 fix (job **10479399**) | **PASSED 2026-08-12** — see below |
 | first uncapped mixture attempt (job 10480614) | FAILED 2026-08-12 — §7.2, the argv cap; lists right, `execve` too long |
 | the full mixture run (job **10484000**) | **DONE 2026-08-12** after the §7.2 fix — §9 |
-| the three data-scaling arms (§10) | launched 2026-08-21 |
+| the three data-scaling arms (§10) | launched 2026-08-21, **done 2026-08-22** — §10.3, §10.4 |
+| C-long, the step-matched control for A-long | **running** (job 11632049) — §10.3 reading 2b |
+| RE10K survey corrected: it IS annotated (6g) | done 2026-08-24 — §1.3 |
+| `slurm/coco_rle.py` + `build_re10k` + 47 + 39 CPU checks | done 2026-08-24 — §1.4 |
+| the RE10K build itself (job **11641723**) | launched 2026-08-24 — §11 |
+| arm **D**, the SAM2-supervised four-source arm | §11 |
 
 **What the smoke established** (18 scenes, 6 per source, 2 epochs, 10 min): the driver reaches the
 end; staging unpacks all three sources; the dispatcher reports
@@ -287,10 +437,13 @@ cap. It is not broken, but it has the same ceiling — and unlike §7.1 it fails
 
 **Sizing, once, for every arm** (measured, not projected): the feature cache is the binding
 constraint and it is **not** the GPU. The 1201-scene baseline peaked at **135 GB RSS for 1513
-scenes** and the 3520-scene mixture at **274 GB for 3832** — ≈ 71–89 MB per cached bundle including
-GT, not the 45 MB of features alone. So override the script's default (16 × 16 GB = 256 GB, sized
-for the 1201-scene arm) at submit time rather than editing it: `--cpus-per-task=26` (416 GB) for
-the full mixture, 20 (320 GB) for ScanNet+ScanNet++, the default for ScanNet alone.
+scenes** and the 3520-scene mixture at **258 GiB for 3832** (job 11498642, `sacct MaxRSS`) —
+≈ 69 MiB per cached bundle including GT, not the 45 MB of features alone. A linear fit through the
+two points is **44 GB + 60 MB × scenes**. So override the script's default (16 × 16 GB = 256 GB,
+sized for the 1201-scene arm) at submit time rather than editing it: `--cpus-per-task=26` (416 GB)
+for the full mixture *and* for the ~5020-scene four-source arm D (≈360 GB, ~20 % headroom),
+20 (320 GB) for ScanNet+ScanNet++, the default for ScanNet alone. All four sources **uncapped** is
+8647 train scenes ≈ 640 GB, i.e. 40–44 CPUs, and may not schedule.
 
 **The 3D ruler is ready for a one-class checkpoint** (done 2026-08-12):
 `scripts/eval_3d_maskdino.py::label_setting` derives the label setting from the dataset **and**
@@ -348,6 +501,7 @@ project able to say what multi-dataset training is worth.
 | **B** | ScanNet only | 1201 | 35 | 42 035 | 11435335 |
 | **C** | ScanNet + ScanNet++ | 2054 | 20 | 41 080 | 11435338 |
 | **A-long** | = A, run to convergence | 3520 | 24 | 84 480 | 11498642 |
+| **C-long** | = C, step-matched to A-long | 2054 | 40 | 82 160 | 11632049 |
 
 Recipe, identical across the three: `--class_agnostic --multi_frame --feature_mode bundle
 --anchor_3d`, S=8, b1, 300 queries, lr 1e-4, warmup 2, val = official ScanNet 312.
@@ -416,6 +570,7 @@ Official ScanNet 312 val, class-agnostic, `checkpoint_best_bundle.pth` (selected
 | **B** ScanNet only | 1201 | 42 035 | 25/35 | 0.654 / 0.675 | 0.557 / 0.548 | **0.441** | 0.707 | 13 h 16 |
 | **C** + ScanNet++ | 2054 | 41 080 | 19/20 | **0.659 / 0.677** | **0.568 / 0.554** | 0.472 | **0.714** | 11 h 34 |
 | **A** + Infinigen | 3520 | 42 240 | **12/12** | 0.630 / 0.628 | 0.521 / 0.479 | 0.531 | 0.693 | 9 h 50 |
+| **A-long** = A converged | 3520 | 84 480 | 20/24 | **0.676 / 0.704** | **0.600 / 0.604** | **0.414** | **0.734** | 18 h 47 |
 | (§6 reference: ScanNet only, 16 ep, no `--anchor_3d`) | 1201 | 19 216 | 16/16 | 0.641 / 0.656 | 0.536 / 0.505 | 0.509 | 0.692 | 6 h 26 |
 
 **Reading 1 — adding real, same-domain ScanNet++ is free on this ruler; adding synthetic Infinigen
@@ -423,13 +578,22 @@ is not.** C − B = **+0.006** per-bundle AP50, *inside* the 0.009 seed spread (
 §6.1), i.e. neutral, with `view_consistency` its best anywhere in this block. A − C = **−0.075**,
 eight times the spread.
 
-**Reading 2 — but only A failed to converge, so −0.075 is an upper bound on Infinigen's cost, not
-a measurement of it.** B is flat over its last six epochs (0.534 … 0.544, peak 0.548 at epoch 25 of
-35) and C nearly so (0.541 / 0.530 / 0.554 / 0.549 over 17–20); **A's best epoch is its last**, and
-its curve is still climbing ~+0.010/epoch (0.454 → 0.469 → 0.479). At a matched *step* budget the
-2.9×-larger mixture gets 2.9× fewer passes over any one scene, which is §9 reading 1 again one
-level up. **Arm A-long (24 epochs, 84 480 steps, job 11498642) settles it** — and extending only A
-is what convergence requires, not favouritism, precisely because B and C are already flat.
+**Reading 2 — only A failed to converge, so −0.075 was an upper bound on Infinigen's cost. A-long
+settled it, and the sign FLIPS.** B was flat over its last ten epochs (peak 0.548 at 25 of 35) and
+C nearly so (0.541 / 0.530 / 0.554 / 0.549 over 17–20); **A's best epoch was its last**, still
+climbing ~+0.010/epoch. Doubling its budget to 84 480 steps makes the full 3520-scene mixture the
+**best run of the block on every 2D axis** — per-bundle AP50 0.479 → **0.604** (+0.056 over C, 6×
+the seed spread), per-frame **0.704**, the best `id_switch` (0.414) and `view_consistency` (0.734)
+measured anywhere — and A-long is itself converged (0.604 / 0.589 / 0.579 / 0.592 / 0.581 over its
+last five). **The larger the mixture, the more steps it needs before it pays**; reading a
+step-matched deficit as "this data hurts" is the trap, and this workstream fell into it twice
+(§9 reading 1, then here).
+
+**Reading 2b — what A-long still owes.** It had 2× the steps of B and C, so "more data" and "more
+compute" are not separated at the top end. B is saturated (flat over ten epochs, so steps cannot
+rescue it) and C nearly so, but the clean measurement is **C-long** (2054 scenes, 82 160 steps,
+job 11632049): A-long ⇄ C-long is step-matched and both converged, and it isolates exactly what
+Infinigen contributes.
 
 **Reading 3 — `--anchor_3d` plus a real step budget is worth +0.043 to the ScanNet-only
 class-agnostic row**, 0.505 (§6) → 0.548, with `id_switch` 0.509 → 0.441. Two variables at once,
@@ -461,7 +625,92 @@ touch. The 2D masks improved measurably and the unposed number did not leave zer
 the training data** — which is `docs/todo.md` §5's lifting workstream, now with a much sharper
 statement of what it must fix and evidence that no amount of supervision substitutes for it.
 
-**Infinigen is the odd one out.** Arm A is below B and C on all six ScanNet/ScanNet200 cells and on
-ScanNet++, but takes Replica's AP50 and AP25 — the one benchmark that is, like Infinigen, synthetic
-renders. A had not converged, so its in-domain deficit is an upper bound; A-long settles it. Until
-then the defensible multi-dataset setting is **C: ScanNet + ScanNet++, 2054 scenes**.
+**And "Infinigen is the odd one out" did not survive A-long.** At 42 k steps arm A trailed B and C
+on every ScanNet/ScanNet200 cell and on ScanNet++. At 84 k the same mixture **takes all eight of
+its cells**: unposed ScanNetv2 0.057 / 0.166 / 0.516 (+29 % AP50 over C), posed
+0.177 / 0.389 / 0.708 (+19 %), and **2.5× B's zero-shot AP50 on both** ScanNet++ (0.068 vs 0.027)
+and Replica (0.119 vs 0.047). It also beats the project's published ScanNet-only `--anchor_3d` row
+(0.042 / 0.138 / 0.504) by +20 % AP50 on the same ruler, which makes it the best 3D row anywhere in
+this project — recorded in `docs/RESULTS.md` §8.2 as a **separately labelled extra-data row**, per
+the field norm in `docs/TRAINING_COMPARABILITY.md` §2, not folded into the headline.
+
+**How the two winners pay is not the same mechanism.** B → C buys **coverage** (posed
+annotated-assigned 0.657 → 0.766 on ScanNet++, 0.671 → 0.739 on Replica). A-long buys **mask
+quality**: its coverage is *lower* than C's out of domain (0.716 / 0.681) and its AP far higher.
+
+Pending C-long, quote A-long for the scaling claim and keep the ScanNet-only row as the headline.
+
+## 11. Arm D — RE10K as a fourth source, SAM2-supervised (todo 6j, 2026-08-24)
+
+**A separate, separately-labelled arm, and it must stay that way.** Arms A/B/C differ only in *how
+much* human/engine ground truth they see. Arm D changes the **kind** of supervision: RE10K's masks
+are SAM2 output, so a gain here is "model-generated pseudo-labels at scale help" — a different
+claim, and a weaker one, than "more annotated data helps". Never fold it into A/A-long's row, and
+write **SAM2-supervised** on every row it produces (`docs/TRAINING_COMPARABILITY.md` §2, and §1.3
+above for why this row carries one caveat more than the field norm requires).
+
+| arm | train sources | scenes | epochs | steps | job |
+|---|---|---|---|---|---|
+| **A-long** (the comparison) | ScanNet + ScanNet++ + Infinigen | 3520 | 24 | 84 480 | 11498642 |
+| **D** | + RE10K, capped at 1500 | **5020** | **17** | **85 340** | 11642516 |
+
+Recipe **identical to A-long so the comparison is one variable**: `--class_agnostic --multi_frame
+--feature_mode bundle --anchor_3d`, S=8, b1, 300 queries, lr 1e-4, warmup 2, val = the official
+ScanNet 312 unchanged. `--class_agnostic` is not a choice here — RE10K shares no taxonomy with
+ScanNet and `prepare_scenes` refuses a mixed list against a multi-class head (§3).
+
+**Why 1500 RE10K scenes and 17 epochs, computed rather than copied.** The arm is **step-matched to
+A-long**, not epoch-matched, because a matched step budget is the only way "more data" and "more
+compute" stay separable at the top end (§10.3 reading 2b):
+
+| | arithmetic | |
+|---|---|---|
+| steps | 5020 scenes × 17 epochs = **85 340** | vs A-long's 84 480, +1.0 % |
+| peak RSS | 44 GB + 60 MB × (5020 + 312) = **≈ 364 GB** | vs 416 GB at `--cpus-per-task=26`, ~13 % headroom |
+| wall | 5332 scenes ÷ 1277 scenes/h ≈ 4.2 h caching + 85 340 ÷ 5354 steps/h ≈ 15.9 h | **≈ 20 h** against the 24 h partition |
+
+The rates come from A-long itself: 18 h 47 total, ~3 h of it caching 3832 scenes.
+
+**What arm D can and cannot settle.** It is one variable against A-long *as a source*, so it
+measures what 1500 scenes of SAM2-supervised video add on top of the best annotated mixture. It
+does **not** separate "pseudo-labels help" from "1500 more scenes help" — that would need a fourth
+source of equal size with real GT, which the mirror does not have. Say the former, never the
+latter.
+
+**And that one variable carries two changes, not one** (§1.4): RE10K adds new scenes *and*
+**supervises the room shell**, which none of the other three sources does. If arm D loses on the 3D
+ruler while its 2D numbers hold up, shell false positives are the first hypothesis, not "SAM2 masks
+are bad" — the benchmark GT has no wall or floor to match them against.
+
+**And the known trap.** At 5020 scenes each ScanNet scene gets 17 passes against A-long's 24, a
+1.4× cut in exposure to the domain the val ruler is drawn from — the §9-reading-1 shape in
+miniature. So: **if arm D's best epoch is its last, it has not converged**, the number is an upper
+bound on the cost rather than a measurement, and the answer is a longer run
+(`scripts/train_maskdino.py --resume <ckpt>` splits it across two 24 h jobs), not a conclusion.
+
+### 11.1 The deliverable is the matrix, not the val ruler
+
+`CKPTS=<run_dir> bash slurm/eval_3d_matrix.sh` — 4 benchmarks × 2 bridges. §10.4 and
+`docs/RESULTS.md` §7.5 established that the ScanNet val ruler is in-domain for every arm and
+actively misled about C ⇄ B (+0.006 there, +59 %/+70 % on the matrix). Read the **posed** column
+for the data claim; every out-of-domain **unposed** cell will be ~0.000 whatever the training
+mixture is, because it depends only on VGGT's frozen cameras and head-only training cannot touch
+them (`docs/RESULTS.md` §7.5 finding 2).
+
+### 11.2 Status
+
+| step | state |
+|---|---|
+| RE10K read + schema verified from the split zip | done 2026-08-24 — §1.3 |
+| `slurm/coco_rle.py`, verified against `pycocotools` (47 checks) | done 2026-08-24 |
+| `build_re10k` + the room-shell measurement (39 checks) | done 2026-08-24 — §1.4 |
+| the driver takes a 4th source with **zero code change** (24 checks) | verified 2026-08-24 |
+| `insscene2d_re10k.tar.zst` (job **11641723**) | *running*, ~3 h 15 |
+| smoke, 24 scenes / 2 epochs (job **11642515**) | `--dependency=afterok` on the build |
+| arm D (job **11642516**) | `afterok` on the smoke |
+| the 3D matrix on arm D (chain job **11642519**) | `afterok` on arm D — 4 × 2 cells |
+
+The four are chained end to end, the §10.1 pattern: a failure anywhere cancels what follows
+instead of burning the ~20 GPU-hours downstream of it. The matrix cannot be submitted by name
+because the run directory carries a timestamp minted when the training job *starts*, so
+`slurm/chain_eval3d_matrix.sh` reads it back out of the training log.

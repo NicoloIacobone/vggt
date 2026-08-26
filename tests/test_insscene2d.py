@@ -9,7 +9,15 @@ What is actually at risk here, and therefore what is tested:
   * instance ids must be remapped ONCE PER SCENE, because the multi-frame GT re-links instances
     across views by id;
   * the ScanNet++ evaluation scenes must be droppable, or training leaks docs/RESULTS.md §7;
-  * Infinigen's room shell must be dropped by NAME, matching the ScanNet/Replica convention.
+  * Infinigen's room shell must be dropped by NAME, matching the ScanNet/Replica convention;
+  * RE10K's rgb stems must be ordered NUMERICALLY, because `masklet` is indexed by frame position
+    and the stems are 8 OR 9 digits long — a lexicographic sort silently misaligns masks and
+    images in the 107 scenes that mix the two widths;
+  * RE10K's room shell must be dropped by AREA (it has no names), scene-wide rather than
+    per frame, so an instance never flickers in and out of the multi-frame GT.
+
+The COCO-RLE decoder those last two rest on is tested separately, against `pycocotools` itself:
+`tests/test_coco_rle.py`.
 """
 
 import io
@@ -27,12 +35,16 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from slurm.build_insscene2d import (  # noqa: E402
+    RE10K_MAX_AREA_FRAC,
     even_indices,
     infinigen_keep_ids,
+    re10k_frame_stems,
+    re10k_keep_ids,
     remap_scene_ids,
     resize_instance_map,
     write_scene,
 )
+from slurm.coco_rle import encode_counts  # noqa: E402
 from slurm.insscene_shards import SplitZipReader, scene_ids  # noqa: E402
 
 PASSED = []
@@ -172,6 +184,68 @@ def test_write_scene_round_trip(tmp: Path):
     check((out / "color" / "frame_000000.jpg").exists(), "colour frames are written")
 
 
+def _rle(mask: np.ndarray) -> dict:
+    """A bool mask → the COCO RLE dict the RE10K masklets carry. Test helper."""
+    flat = mask.T.ravel().astype(np.int8)
+    edges = np.concatenate([[0], np.flatnonzero(np.diff(flat)) + 1, [flat.size]])
+    runs = np.diff(edges).tolist()
+    if flat[0] != 0:
+        runs = [0] + runs
+    return {"size": [int(mask.shape[0]), int(mask.shape[1])], "counts": encode_counts(runs)}
+
+
+def test_re10k_stems_are_ordered_numerically():
+    """8- vs 9-digit timestamps: a lexicographic sort misaligns 107 real scenes."""
+    members = [
+        "processed_re10k/aaaa/rgb/99999999.png",       # 8 digits, LATER than the 9-digit ones
+        "processed_re10k/aaaa/rgb/100000000.png",
+        "processed_re10k/aaaa/rgb/100033367.png",
+        "processed_re10k/aaaa/cam/99999999.npz",       # a sibling directory, not a frame
+        "processed_re10k/sam2_results/aaaa/auto_masks.json",
+        "processed_re10k/bbbb/rgb/000000010.png",
+    ]
+    index = re10k_frame_stems(members)
+    check(sorted(index) == ["aaaa", "bbbb"],
+          f"only scene dirs with rgb frames are indexed, got {sorted(index)}")
+    check(index["aaaa"] == ["99999999", "100000000", "100033367"],
+          f"stems sort NUMERICALLY, not lexicographically — got {index['aaaa']}")
+    check(index["aaaa"] != sorted(index["aaaa"]),
+          "the fixture really does distinguish the two orders (8- and 9-digit stems)")
+    try:
+        re10k_frame_stems(["processed_re10k/cccc/rgb/not_a_number.png"])
+    except ValueError as exc:
+        check("non-numeric" in str(exc), "a non-numeric stem raises rather than sorting wrongly")
+    else:
+        raise AssertionError("a non-numeric rgb stem was accepted")
+
+
+def test_re10k_shell_is_dropped_by_area_scene_wide():
+    h, w = 20, 30
+    shell = np.zeros((h, w), dtype=bool); shell[:, :] = True          # 100 % of the frame
+    half = np.zeros((h, w), dtype=bool); half[:10, :] = True          # 50 %
+    obj = np.zeros((h, w), dtype=bool); obj[2:6, 2:8] = True          # 4 %
+    # frame 0 shows all three; frame 1 shows only the object, so `half` averages to 25 % < 30 %
+    masklet = [[_rle(shell), _rle(half), _rle(obj)],
+               [None, _rle(np.zeros((h, w), dtype=bool)), _rle(obj)]]
+    keep, missing = re10k_keep_ids(masklet, [0, 1], h * w, RE10K_MAX_AREA_FRAC)
+    check(keep == {2, 3}, f"the 100 %-of-frame shell goes, the object stays — got {sorted(keep)}")
+    check(missing == 1, f"`None` masklet entries are counted, got {missing}")
+    check(2 in keep,
+          "the rule is the SCENE-WIDE mean, not a per-frame threshold — a 50 %/0 % instance "
+          "averages to 25 % and survives, so its id cannot flicker across the bundle")
+    keep_strict, _ = re10k_keep_ids(masklet, [0, 1], h * w, 0.20)
+    check(keep_strict == {3}, "a tighter cap also removes it — the threshold is the only knob")
+    check(re10k_keep_ids(masklet, [], h * w, RE10K_MAX_AREA_FRAC) == (set(), 0),
+          "a scene with no picked frames keeps nothing rather than dividing by zero")
+
+
+def test_re10k_empty_masklet_is_not_an_instance():
+    h, w = 8, 8
+    blank = _rle(np.zeros((h, w), dtype=bool))
+    keep, _ = re10k_keep_ids([[blank]], [0], h * w, RE10K_MAX_AREA_FRAC)
+    check(keep == set(), "a masklet with zero area never becomes an instance")
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="insscene2d_test_"))
     try:
@@ -183,6 +257,9 @@ def main() -> int:
         test_infinigen_shell_is_dropped_by_name()
         test_resize_invents_no_ids()
         test_write_scene_round_trip(tmp)
+        test_re10k_stems_are_ordered_numerically()
+        test_re10k_shell_is_dropped_by_area_scene_wide()
+        test_re10k_empty_masklet_is_not_an_instance()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     for message in PASSED:
