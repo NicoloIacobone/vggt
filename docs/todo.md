@@ -262,8 +262,10 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 
 ## 4. Watching
 
-**One run open as of 2026-08-24: C-long (11632049), the step-matched control for A-long, with its
-matrix chained on `afterok`.** Everything else in the data-scaling set has landed —
+**C-long (11632049) LANDED 2026-08-25 AND FAILED** — an unstable optimisation, not a slow one; the
+cause is the learning rate, the same failure §11.3 isolated on arm D (docs/MULTIDATASET.md §10.5).
+**Re-run submitted 2026-08-26: C-long′ (11831105) at lr 5e-5, whose control is A-long′ (11830142),
+already queued for arm D. A-long′ ⇄ C-long′ is step-matched, same-LR and one-variable.** Everything else in the data-scaling set has landed —
 docs/MULTIDATASET.md §10.3/§10.4, docs/RESULTS.md §6.4/§7.5/§8.2. Everything else once listed here
 has landed too:
 
@@ -273,10 +275,16 @@ has landed too:
 - (todo 2f fully closed 2026-08-12 — jobs 9979913 / 10477399 / 10477400 → 2f. Negative.)
 - (the 24-cell cross-dataset matrix landed 2026-08-22, jobs 11498511–11498543, 0 failures →
   docs/RESULTS.md §7.5. It is the deliverable of 6f and it reverses §10.3's ScanNet reading.)
-- **Job 11632049 — C-long**, ScanNet + ScanNet++ at 40 epochs / 82 160 steps: the **step-matched**
-  partner for A-long, which won every cell but had 2× the steps of the arms it beat. A-long ⇄
-  C-long is then both converged AND step-matched, and isolates what Infinigen contributes
-  (docs/MULTIDATASET.md §10.3 reading 2b).
+- **Job 11632049 — C-long — FAILED 2026-08-25.** ScanNet + ScanNet++ at 40 epochs / 82 160 steps,
+  meant as the **step-matched** partner for A-long. It completed and all 8 matrix cells are green,
+  but the run destabilised: 16 epochs of rising train loss (total +45.2, worst +11.4 @ ep 6), final
+  train loss 122.6 against arm C's 93.2 on **identical data at half the steps**, and best epoch =
+  last. Excluded as causes: data, config, `head_config`, and commit `9da8dfe` (measured RNG-inert);
+  schedule length alone is excluded by arm B's clean 35 epochs. **Cause: the learning rate** — the
+  same 1e-4 divergence §11.3 isolated on arm D, triggered here by *exposure* (a 40-epoch cosine
+  holds LR near peak twice as long as arm C's 20-epoch one) rather than by dose.
+  **Re-run: C-long′ 11831105 at lr 5e-5, matrix chained 11831106; control A-long′ 11830142**
+  → docs/MULTIDATASET.md §10.5.
 - (arm A-long landed 2026-08-23 — job 11498642, 18 h 47, matrix 11540891–11540905 chained and
   green. It **flipped the sign of §10.3**: at 84 k steps the full 3520-scene mixture is the best
   run of the block on every 2D axis AND takes all eight of its 3D cells → docs/RESULTS.md §7.5
@@ -515,8 +523,10 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       ScanNet-only `--anchor_3d` row and 1.5–2.0× the published class-agnostic cluster), and 2.5×
       arm B's zero-shot AP50 on ScanNet++ and Replica. The larger the mixture, the more steps it
       needs before it pays — a step-matched deficit is not evidence that data hurts.
-      **STILL OPEN: C-long** (11632049), the step-matched partner that separates "more data" from
-      "more compute" at the top end.
+      **STILL OPEN: C-long.** Job 11632049 was that step-matched partner and **failed** as an
+      unstable run — the LR failure of §11.3 (docs/MULTIDATASET.md §10.5) — so "more data" vs "more
+      compute" at the top end is still unmeasured and A-long's win is still confounded with its 2×
+      step budget. Re-run in flight: C-long′ 11831105 ⇄ A-long′ 11830142, both at lr 5e-5.
 
 - [~] **6j. RE10K as a FOURTH training source — SAM2-supervised, its own arm** (opened 2026-08-24,
       `docs/MULTIDATASET.md` §1.3, §1.4, §11). **6f's "processed_re10k has no annotation" was
@@ -545,13 +555,34 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       only two thirds of instances are shell-shaped, while a 0.10 cap would delete 60 % of the
       labelled pixels. So arm D adds new scenes **and** shell supervision the other three sources
       do not have. First hypothesis if it loses 3D AP with healthy 2D masks.
-      IN FLIGHT, chained `afterok` end to end: the build (**11641723**, ~3 h 15, ~10 GB tar) →
-      smoke 24 scenes/2 epochs (**11642515**) → **arm D** (**11642516**: 5020 scenes, 17 epochs =
-      85 340 steps, step-matched to A-long's 84 480, `--cpus-per-task=26`, ≈20 h) → the 4×2
-      matrix (**11642519**). The deliverable is the **matrix**, not the ScanNet val ruler (§10.4).
-      **Watch for the known trap**: arm D gives each ScanNet scene 17 passes against A-long's 24,
-      so if its best epoch is its last it has not converged and the number is an upper bound on the
-      cost, not a measurement — say so and run a longer one.
+      **BUILD DONE 2026-08-24** (job 11641723, 4 h 42): `insscene2d_re10k.tar.zst` **9.7 GB**,
+      **5127 scenes, 0 failed, 0 `None` masklet entries**, 158 903 frames, 370 562 instances
+      (median 61/scene), 1.83 % of masklets dropped by the 0.30 cap + `min_area_px`. Smoke
+      (11642515) passed: all four sources staged and cached, loss 252.6 → 224.1. **RE10K is the
+      DENSEST source in the mixture** — 223–476 instance-frames per 8-frame bundle against
+      ScanNet++'s 75–295 and ScanNet's 48–66, with 0.64–0.98 of every frame labelled foreground.
+      **ARM D AT lr 1e-4 DIVERGED — job 11642516 is a failed run, not a measurement**
+      (docs/MULTIDATASET.md §11.2, docs/RESULTS.md §6.4.1 + §7.5.1). It completed cleanly (17 h 15,
+      352 GiB peak RSS of 416, 0 failures, no NaN) and is still garbage: best `bundle_AP50`
+      **0.136 at epoch 2 of 17** vs A-long's 0.604, training loss RISING 132 → 169 while the LR
+      decayed, and **`train_AP50` collapsing 0.211 → 0.006** — the head stopped fitting its own
+      training data. All 8 3D cells collapsed with it, to *below* the ScanNet-only 1201 control.
+      **CAUSE ISOLATED 2026-08-25, one variable at a time (§11.3): the LEARNING RATE, not RE10K.**
+      `D-lr` (11744294) holds mixture, dose and `--anchor_3d` fixed and halves the LR to 5e-5 — the
+      collapse vanishes and it tracks A-long epoch for epoch, ending ep6 *ahead* (0.369 vs 0.364)
+      on 43 % more scenes. `D-dose` (11744296) shows the instability is dose-dependent at 1e-4
+      (8 % RE10K trains fine), but the LR is the operative knob because it fixes the full dose.
+      **A label conflict cannot be undone by halving a learning rate**, so the SAM2-supervision and
+      room-shell hypotheses are refuted *as the cause of this failure* — they stay open only as
+      questions about a converged arm's quality.
+      IN FLIGHT (launched 2026-08-26): **D-long** (11830140, 5020 scenes, lr 5e-5, 17 ep =
+      85 340 steps) and **A-long′** (11830142, 3520 scenes, lr 5e-5, 24 ep = 84 480 steps), each
+      chaining its own 4×2 matrix (11830144 / 11830145). **A-long′ is not optional**: published
+      A-long ran at 1e-4 and arm D cannot run there at all, so without it the comparison moves two
+      variables — the flaw this workstream has already hit twice. D-long ⇄ A-long′ is one variable,
+      the RE10K data, at matched steps and matched schedule. Read it on the MATRIX, not the val
+      ruler (§10.4).
+
 - [x] **6g. Upstream MaskDINO trained under OUR recipe — DONE 2026-08-12, and it AGREES**
       (docs/MASKDINO_COCO.md §6 row 2 + §6.1; jobs 10094393 → 10228029 → 10279969 → 10427048,
       87 948 iters). Built as `third_party/maskdino_control/` (own README); driver

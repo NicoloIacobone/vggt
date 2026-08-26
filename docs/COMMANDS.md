@@ -154,12 +154,21 @@ always the official ScanNet 312, class-agnostic — **never move it**.
   **floor of 6** for any large mixture. One step = one 8-frame bundle = one scene at b1, so
   steps = N_TRAIN × EPOCHS; A-long's budget is 84 480.
 
+…and a third for anything past the 3520-scene mixture:
+
+* `--learning_rate`. The default **1e-4 diverges** on the 5020-scene four-source mixture — job
+  11642516 ran 17 h cleanly and produced garbage, training loss rising from the first epoch after
+  warmup and `train_AP50` collapsing 0.211 → 0.006. **5e-5 fixes it at the same data and dose**
+  (docs/MULTIDATASET.md §11.3). Re-run the control at the same LR too, or the comparison moves
+  two variables.
+
 ```bash
 sbatch slurm/train_maskdino_multi.sh                                   # the 3-source mixture
 sbatch --export=ALL,SOURCES='scannet scannetpp',EPOCHS=40 --cpus-per-task=20 \
     slurm/train_maskdino_multi.sh                                      # arm C-long
 sbatch --export=ALL,SOURCES='scannet scannetpp infinigen re10k',CAP_RE10K=1500,EPOCHS=17,\
-EXTRA_ARGS='--anchor_3d' --cpus-per-task=26 slurm/train_maskdino_multi.sh   # arm D (§11)
+EXTRA_ARGS='--anchor_3d --learning_rate 5e-5' --cpus-per-task=26 \
+    slurm/train_maskdino_multi.sh                                      # arm D-long (§11.4)
 DRY_RUN=1 SOURCES='scannet scannetpp infinigen re10k' bash slurm/train_maskdino_multi.sh
 ```
 

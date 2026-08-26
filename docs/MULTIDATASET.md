@@ -155,12 +155,19 @@ is the only knob.
 >
 > The honest statement: **SAM2 auto-masks are a class-agnostic over-segmentation of the whole
 > image, not an object-vs-shell partition, and no cheap rule recovers one from them.** The 0.30 cap
-> removes the frame-dominating blobs and claims nothing more. This is a **confound in arm D on top
-> of the SAM2 one** — the arm adds both new scenes *and* shell supervision the other three sources
-> do not have — and it is the first thing to suspect if arm D loses AP on the 3D ruler while its 2D
-> masks look fine, since the benchmark counts an unmatched wall as a false positive. The follow-up
-> if so is a border-contact rule rather than a tighter area one; both halves of the border
-> statistic are computable from the RLE runs without decoding the mask.
+> removes the frame-dominating blobs and claims nothing more. This remains a **second confound in
+> arm D on top of the SAM2 one** — the arm adds both new scenes *and* shell supervision the other
+> three sources do not have.
+>
+> **What this box predicted has since been tested, and the prediction was WRONG.** It said shell
+> supervision would be "the first thing to suspect if arm D loses AP", and arm D then lost AP
+> catastrophically — but the cause was **not** this (§11.3): the *same* data at the *same* dose
+> trains normally once the learning rate is halved, which a label conflict could not do. Kept as
+> written, with the correction attached, because the shell fact is still true and still
+> unquantified — it is simply not what broke the first arm. If a *converged* arm D underperforms
+> A-long, this becomes the live hypothesis again, and the follow-up is a border-contact rule rather
+> than a tighter area one; both halves of the border statistic are computable from the RLE runs
+> without decoding the mask.
 
 ### 1.1 The two exclusions
 
@@ -266,8 +273,9 @@ sbatch --export=ALL,SOURCES=re10k slurm/build_insscene2d.sh            # +the SA
 sbatch slurm/train_maskdino_multi.sh                                   # all three sources
 sbatch --export=ALL,SOURCES='scannet scannetpp' slurm/train_maskdino_multi.sh
 sbatch --export=ALL,CAP_SCANNETPP=200,CAP_INFINIGEN=200 slurm/train_maskdino_multi.sh
-sbatch --export=ALL,SOURCES='scannet scannetpp infinigen re10k',CAP_RE10K=1500,EPOCHS=17 \
-    --cpus-per-task=26 slurm/train_maskdino_multi.sh                   # arm D, §11
+sbatch --export=ALL,SOURCES='scannet scannetpp infinigen re10k',CAP_RE10K=1500,EPOCHS=17,\
+EXTRA_ARGS='--anchor_3d --learning_rate 5e-5' --cpus-per-task=26 \
+    slurm/train_maskdino_multi.sh                                      # arm D-long, §11.4
 DRY_RUN=1 bash slurm/train_maskdino_multi.sh                           # lists + schedule only
 
 # CPU tests
@@ -286,6 +294,10 @@ plus GT for every scene up front. Measured, not projected: **135 GB for 1513 sce
 **258 GiB for 3832** (arm A-long, job 11498642) — ≈ 69 MiB per cached bundle. The job's default
 16 × 16 GB = 256 GB is sized for the 1201-scene arm; every larger mixture overrides
 `--cpus-per-task` at submit time (§8 sizing), and `CAP_*` shrinks it.
+
+**And `--learning_rate` for anything past 3520 scenes.** The default 1e-4 diverges on the
+5020-scene four-source mixture; 5e-5 does not, at the same data (§11.3). It is a third knob the
+submitter owns, alongside `--cpus-per-task` and `EPOCHS`.
 
 **`EPOCHS` must be set by hand for any large mixture.** The driver's default is `20000/N_TRAIN`
 clamped to [6, 40], which at ~5000 scenes returns the floor of 6 — badly under-budgeted. Reading a
@@ -339,11 +351,13 @@ prevent.
 | first uncapped mixture attempt (job 10480614) | FAILED 2026-08-12 — §7.2, the argv cap; lists right, `execve` too long |
 | the full mixture run (job **10484000**) | **DONE 2026-08-12** after the §7.2 fix — §9 |
 | the three data-scaling arms (§10) | launched 2026-08-21, **done 2026-08-22** — §10.3, §10.4 |
-| C-long, the step-matched control for A-long | **running** (job 11632049) — §10.3 reading 2b |
+| C-long, the step-matched control for A-long | **FAILED** (job 11632049) — unstable run, §10.5; control still open |
+| **C-long′** at lr 5e-5, the re-run | submitted 2026-08-26 (job 11831105) — §10.5; pairs with A-long′ |
 | RE10K survey corrected: it IS annotated (6g) | done 2026-08-24 — §1.3 |
 | `slurm/coco_rle.py` + `build_re10k` + 47 + 39 CPU checks | done 2026-08-24 — §1.4 |
-| the RE10K build itself (job **11641723**) | launched 2026-08-24 — §11 |
-| arm **D**, the SAM2-supervised four-source arm | §11 |
+| the RE10K build itself (job **11641723**) | **done 2026-08-24** — 9.7 GB, 5127 scenes, 0 failed — §11.1 |
+| arm **D** at lr 1e-4 (job 11642516) | **DIVERGED 2026-08-25** — §11.2; cause isolated in §11.3 |
+| **D-long** + **A-long′** at lr 5e-5 (11830140 / 11830142) | launched 2026-08-26 — §11.4 |
 
 **What the smoke established** (18 scenes, 6 per source, 2 epochs, 10 min): the driver reaches the
 end; staging unpacks all three sources; the dispatcher reports
@@ -501,7 +515,8 @@ project able to say what multi-dataset training is worth.
 | **B** | ScanNet only | 1201 | 35 | 42 035 | 11435335 |
 | **C** | ScanNet + ScanNet++ | 2054 | 20 | 41 080 | 11435338 |
 | **A-long** | = A, run to convergence | 3520 | 24 | 84 480 | 11498642 |
-| **C-long** | = C, step-matched to A-long | 2054 | 40 | 82 160 | 11632049 |
+| ~~**C-long**~~ | = C, step-matched to A-long | 2054 | 40 | 82 160 | 11632049 — **FAILED, §10.5** |
+| **C-long′** | = C-long at **lr 5e-5** — the live control | 2054 | 40 | 82 160 | 11831105 (partner: A-long′ 11830142, §11.4) |
 
 Recipe, identical across the three: `--class_agnostic --multi_frame --feature_mode bundle
 --anchor_3d`, S=8, b1, 300 queries, lr 1e-4, warmup 2, val = official ScanNet 312.
@@ -589,11 +604,12 @@ last five). **The larger the mixture, the more steps it needs before it pays**; 
 step-matched deficit as "this data hurts" is the trap, and this workstream fell into it twice
 (§9 reading 1, then here).
 
-**Reading 2b — what A-long still owes.** It had 2× the steps of B and C, so "more data" and "more
-compute" are not separated at the top end. B is saturated (flat over ten epochs, so steps cannot
-rescue it) and C nearly so, but the clean measurement is **C-long** (2054 scenes, 82 160 steps,
-job 11632049): A-long ⇄ C-long is step-matched and both converged, and it isolates exactly what
-Infinigen contributes.
+**Reading 2b — what A-long still owes, and why it is still owed.** It had 2× the steps of B and C,
+so "more data" and "more compute" are not separated at the top end. B is saturated (flat over ten
+epochs, so steps cannot rescue it) and C nearly so, but the clean measurement is **C-long** (2054
+scenes, 82 160 steps): A-long ⇄ C-long would be step-matched with both converged, isolating exactly
+what Infinigen contributes. **Job 11632049 was that run and it failed — an unstable optimisation,
+not a slow one (§10.5). The control is still open and nothing here is settled.**
 
 **Reading 3 — `--anchor_3d` plus a real step budget is worth +0.043 to the ScanNet-only
 class-agnostic row**, 0.505 (§6) → 0.548, with `id_switch` 0.509 → 0.441. Two variables at once,
@@ -638,9 +654,59 @@ the field norm in `docs/TRAINING_COMPARABILITY.md` §2, not folded into the head
 annotated-assigned 0.657 → 0.766 on ScanNet++, 0.671 → 0.739 on Replica). A-long buys **mask
 quality**: its coverage is *lower* than C's out of domain (0.716 / 0.681) and its AP far higher.
 
-Pending C-long, quote A-long for the scaling claim and keep the ScanNet-only row as the headline.
+Pending a **valid** C-long (11632049 failed — §10.5), quote A-long for the scaling claim, keep the
+ScanNet-only row as the headline, and keep the compute/data confound stated rather than dropped.
 
-## 11. Arm D — RE10K as a fourth source, SAM2-supervised (todo 6j, 2026-08-24)
+### 10.5 C-long FAILED — an unstable run, not a slow one (job 11632049, 2026-08-25)
+
+The step-matched control §10.3 reading 2b asks for. It completed (18 h 01, 40/40 epochs, all 8
+matrix cells green, 0 failed scenes) and **must not be used**: the optimisation destabilised and
+never recovered, so the checkpoint prices nothing.
+
+**It is worse than arm C on identical data with twice the steps — including on TRAIN loss**, which
+rules out val noise, overfitting and best-epoch selection:
+
+| | arm C (11435338) | C-long (11632049) |
+|---|---|---|
+| data / seed / recipe | 2054 scenes, seed 0 | **identical** (51 config keys equal; only `num_epochs` 20 → 40) |
+| epochs / steps | 20 / 41 080 | 40 / 82 160 |
+| epochs where train loss ROSE | 1 (+0.9) | **16, total +45.2, worst +11.4 @ ep 6** |
+| final train loss | **93.2** | 122.6 — worse than arm C at *epoch 5* |
+| final train `bundle_AP50` | **0.485** | 0.349 |
+| val `bundle_AP50` (best ckpt) | **0.554** | 0.416, **best epoch = last → a lower bound** |
+
+**What is excluded as the cause.** Data: the train lists are identical by scene name (2054), val is
+the same 312, 0 leakage into either. Config: identical but for the schedule length. Head:
+`head_config` identical to arm C and A-long. **Code: commit `9da8dfe` (08-24 12:17, 70 min before
+the run) moved the matcher/criterion/optimizer construction ahead of the feature cache — measured
+RNG-inert** (the moved constructors draw zero random numbers, so the training stream is unchanged)
+and it touches no data or hyperparameter. **Schedule length alone: arm B ran 35 epochs with ZERO
+loss rises.**
+
+**What it is: the learning rate — the same failure §11.3 isolated independently.** Arm D diverged
+at 1e-4 with the identical signature (train loss rising shortly after warmup, `train_AP50`
+collapsing) and **halving to 5e-5 removed it completely at the same data**. The trigger there was
+*dose* — the fraction of dense frames per batch; here it is **exposure**: a 40-epoch cosine holds
+the LR near 1e-4 for twice as long as arm C's 20-epoch one (at epoch 7, 9.60e-5 against 8.30e-5),
+so C-long takes roughly double arm C's dose at high LR before the schedule pulls it down. Same
+operative knob, different trigger. This also explains why arm B's 35 epochs were clean: 1201
+ScanNet-only scenes are the sparsest mixture in the block.
+The node (`eu-ts-02`, AMD EPYC / A100-80GB, against `eu-a65-0x` Intel / A100-40GB for B/C/A-long)
+remains the only *environmental* difference, but arm A ran on `eu-ts-02` without failing, so it is
+at most a contributing factor.
+
+**Consequence.** Infinigen's contribution at convergence is **not measured**. A-long ⇄ C-long as it
+stands compares a healthy run to a broken one and would attribute the whole +0.188 per-bundle AP50
+to data — the §9 reading 1 / §10.3 reading 2 trap in a new costume.
+
+**The re-run: C-long′, job 11831105** (2054 scenes, 40 epochs = 82 160 steps, **lr 5e-5**, seed 0,
+`--anchor_3d`, matrix chained as 11831106). Its partner is **A-long′** (job 11830142, §11.4), which
+§11.4 launched at 5e-5 for arm D's sake and which serves here unchanged: **A-long′ ⇄ C-long′ is
+step-matched (84 480 vs 82 160), same-LR and one-variable.** That is what the driver's rule — "re-run
+the CONTROL at the same LR, or the comparison moves two variables at once" — requires, and it costs
+one extra job rather than two because A-long′ already exists.
+
+## 11. Arm D — RE10K as a fourth source, SAM2-supervised (todo 6j, 2026-08-24/26)
 
 **A separate, separately-labelled arm, and it must stay that way.** Arms A/B/C differ only in *how
 much* human/engine ground truth they see. Arm D changes the **kind** of supervision: RE10K's masks
@@ -649,55 +715,117 @@ claim, and a weaker one, than "more annotated data helps". Never fold it into A/
 write **SAM2-supervised** on every row it produces (`docs/TRAINING_COMPARABILITY.md` §2, and §1.3
 above for why this row carries one caveat more than the field norm requires).
 
-| arm | train sources | scenes | epochs | steps | job |
-|---|---|---|---|---|---|
-| **A-long** (the comparison) | ScanNet + ScanNet++ + Infinigen | 3520 | 24 | 84 480 | 11498642 |
-| **D** | + RE10K, capped at 1500 | **5020** | **17** | **85 340** | 11642516 |
+### 11.1 The build (job 11641723, done 2026-08-24)
 
-Recipe **identical to A-long so the comparison is one variable**: `--class_agnostic --multi_frame
---feature_mode bundle --anchor_3d`, S=8, b1, 300 queries, lr 1e-4, warmup 2, val = the official
-ScanNet 312 unchanged. `--class_agnostic` is not a choice here — RE10K shares no taxonomy with
-ScanNet and `prepare_scenes` refuses a mixed list against a multi-class head (§3).
+`insscene2d_re10k.tar.zst`, **9.7 GB**, on work beside the other two. 4 h 42 wall, 8 CPUs, ~11 GB
+of `$TMPDIR`, **scratch inode cost zero**.
 
-**Why 1500 RE10K scenes and 17 epochs, computed rather than copied.** The arm is **step-matched to
-A-long**, not epoch-matched, because a matched step budget is the only way "more data" and "more
-compute" stay separable at the top end (§10.3 reading 2b):
+| | measured over all 5127 scenes |
+|---|---|
+| scenes built / failed | **5127 / 0** — the `len(rgb) == video_frame_count == len(masklet)` assertion held everywhere |
+| `None` masklet entries | **0** in the entire dataset |
+| frames | 158 903 (median 32; 426 scenes have fewer than 32 to give) |
+| instances | **370 562**, median **61**/scene, p95 157, max 681 |
+| dropped by the 0.30 cap + `min_area_px` | 6914 of 377 476 masklets = **1.83 %** |
 
-| | arithmetic | |
-|---|---|---|
-| steps | 5020 scenes × 17 epochs = **85 340** | vs A-long's 84 480, +1.0 % |
-| peak RSS | 44 GB + 60 MB × (5020 + 312) = **≈ 364 GB** | vs 416 GB at `--cpus-per-task=26`, ~13 % headroom |
-| wall | 5332 scenes ÷ 1277 scenes/h ≈ 4.2 h caching + 85 340 ÷ 5354 steps/h ≈ 15.9 h | **≈ 20 h** against the 24 h partition |
+**RE10K is the densest source in the mixture**, which §1.2's argument did not anticipate: the smoke
+cached 223–476 instance-frames per 8-frame bundle for RE10K against ScanNet++'s 75–295,
+Infinigen's 57–250 and ScanNet's 48–66. Combined with 0.64–0.98 of every frame being labelled
+foreground, an RE10K batch is a very different object from a ScanNet one — which is exactly what
+§11.3 turns out to be about.
 
-The rates come from A-long itself: 18 h 47 total, ~3 h of it caching 3832 scenes.
+### 11.2 The first attempt DIVERGED — job 11642516 is a failed run, not a measurement
 
-**What arm D can and cannot settle.** It is one variable against A-long *as a source*, so it
-measures what 1500 scenes of SAM2-supervised video add on top of the best annotated mixture. It
-does **not** separate "pseudo-labels help" from "1500 more scenes help" — that would need a fourth
-source of equal size with real GT, which the mirror does not have. Say the former, never the
-latter.
+Recipe identical to A-long (`--class_agnostic --multi_frame --feature_mode bundle --anchor_3d`,
+S=8, b1, 300 queries, **lr 1e-4**, warmup 2, val = official ScanNet 312), 5020 scenes × 17 epochs =
+**85 340 steps** against A-long's 84 480. It ran to completion: 17 h 15, **352 GiB peak RSS** of the
+416 requested at `--cpus-per-task=26`, 0 failures, no NaN, no warning, all 5020 + 312 scenes cached
+with the right per-source counts. **The infrastructure was fine and the result is still garbage.**
 
-**And that one variable carries two changes, not one** (§1.4): RE10K adds new scenes *and*
-**supervises the room shell**, which none of the other three sources does. If arm D loses on the 3D
-ruler while its 2D numbers hold up, shell false positives are the first hypothesis, not "SAM2 masks
-are bad" — the benchmark GT has no wall or floor to match them against.
+| | ep1 | ep2 | ep3 | ep4 | ep5 | ep6 | … | last |
+|---|---|---|---|---|---|---|---|---|
+| **arm D** loss / val bundle AP50 | 146 / 0.120 | 132 / **0.136** | 132 / 0.120 | 148 / 0.107 | 157 / 0.072 | 158 / 0.009 | … | 161 / 0.061 |
+| **A-long** loss / val bundle AP50 | 156 / 0.099 | 135 / 0.140 | 130 / 0.208 | 125 / 0.288 | 114 / 0.336 | 107 / 0.364 | … | 68 / 0.581 |
 
-**And the known trap.** At 5020 scenes each ScanNet scene gets 17 passes against A-long's 24, a
-1.4× cut in exposure to the domain the val ruler is drawn from — the §9-reading-1 shape in
-miniature. So: **if arm D's best epoch is its last, it has not converged**, the number is an upper
-bound on the cost rather than a measurement, and the answer is a longer run
-(`scripts/train_maskdino.py --resume <ckpt>` splits it across two 24 h jobs), not a conclusion.
+Best `bundle_AP50` **0.136 at epoch 2** (per-frame 0.334 / 0.256, per-bundle 0.291 / 0.136,
+`id_switch` 0.663, `view_consistency` 0.485), against A-long's 0.604.
 
-### 11.1 The deliverable is the matrix, not the val ruler
+**Three readings, and the third is the one that matters.**
 
-`CKPTS=<run_dir> bash slurm/eval_3d_matrix.sh` — 4 benchmarks × 2 bridges. §10.4 and
-`docs/RESULTS.md` §7.5 established that the ScanNet val ruler is in-domain for every arm and
-actively misled about C ⇄ B (+0.006 there, +59 %/+70 % on the matrix). Read the **posed** column
-for the data claim; every out-of-domain **unposed** cell will be ~0.000 whatever the training
-mixture is, because it depends only on VGGT's frozen cameras and head-only training cannot touch
-them (`docs/RESULTS.md` §7.5 finding 2).
+1. **It is a divergence, not the under-convergence §9/§10.3 warned about.** The two runs are
+   indistinguishable for two epochs and then arm D turns over at exactly the epoch warmup ends and
+   the LR first sits at its 1e-4 peak. Loss *rises* from 132 to 169 while the LR decays, and only
+   creeps back as the cosine reaches 5e-6.
+2. **`train_AP50` collapses too — 0.211 → 0.006 → 0.058.** The head fails on the data it is being
+   fit to, so this cannot be read as "RE10K taught it something that hurts ScanNet val". Anything
+   that only moved val would leave the training fit intact.
+3. **Every one of the 8 3D cells collapses with it** (job 11642519's matrix, `docs/RESULTS.md`
+   §7.5): unposed ScanNetv2 0.001 / 0.007 / 0.172 against A-long's 0.057 / 0.166 / 0.516, and
+   *below even the ScanNet-only 1201-scene control*. A run this far below its own control on the
+   ruler it trains on is not measuring its training data.
 
-### 11.2 Status
+### 11.3 What actually broke it — two diagnostics, one variable each (2026-08-25)
+
+Six epochs each, which is all a divergence that starts at epoch 3 needs. Both are read against
+A-long's own first six epochs, not against each other.
+
+| run | scenes | RE10K share | lr | ep6 loss / val bundle AP50 |
+|---|---|---|---|---|
+| **A-long** (reference trajectory) | 3520 | — | 1e-4 | 107 / 0.364 |
+| **arm D** as run | 5020 | 30 % | 1e-4 | 158 / **0.009** |
+| **D-lr** (11744294) — same data, half the LR | 5020 | 30 % | **5e-5** | **105 / 0.369** |
+| **D-dose** (11744296) — same LR, 5× less RE10K | 3820 | 8 % | 1e-4 | 115 / 0.348 |
+
+**The cause is the learning rate, not RE10K's supervision.** `D-lr` holds the mixture, the dose and
+`--anchor_3d` fixed, halves the LR, and the collapse disappears completely: it tracks A-long epoch
+for epoch (0.085 / 0.169 / 0.238 / 0.277 / 0.331 / **0.369** against 0.099 / 0.140 / 0.208 / 0.288 /
+0.336 / 0.364) and is *marginally ahead* at epoch 6 on 43 % more scenes. **A label conflict cannot
+be fixed by halving a learning rate**, so §1.4's shell hypothesis and §1.3's "SAM2 masks are a
+different kind of supervision" are both **refuted as the cause of this failure** — they remain open
+as questions about a converged arm's *quality*, but they did not break this run.
+
+`D-dose` says the instability is dose-dependent at the original LR: at 8 % RE10K the same 1e-4
+trains normally. That is consistent with the trigger being the fraction of batches that are dense,
+near-fully-covered RE10K frames — but **the LR is the operative knob**, because it removes the
+problem at the full dose.
+
+**So arm D's number is 0.136-at-epoch-2 and it means nothing about RE10K.** It is recorded as a
+diverged run so the next reader does not re-derive it, and it is never quoted as what this data is
+worth.
+
+### 11.4 The real arm, and why it needs a control it did not need before
+
+Two runs, launched 2026-08-26, one variable between them:
+
+| arm | train sources | scenes | lr | epochs | steps | job |
+|---|---|---|---|---|---|---|
+| **D-long** | ScanNet + ScanNet++ + Infinigen + RE10K@1500 | 5020 | 5e-5 | 17 | **85 340** | 11830140 |
+| **A-long′** | ScanNet + ScanNet++ + Infinigen | 3520 | 5e-5 | 24 | **84 480** | 11830142 |
+
+**A-long′ is not optional.** The published A-long ran at 1e-4 and arm D *cannot* run there at all,
+so quoting D-long against it would compare two things that differ in both the data and the LR —
+the two-variables-at-once flaw this file has flagged twice already (§6 reading 1, §10.3 reading 3).
+A-long′ re-runs A-long's exact mixture at D-long's LR, so **D-long ⇄ A-long′ is one variable: the
+RE10K data**, at matched steps and matched schedule. Both chain their own 4 × 2 matrix
+(11830144 / 11830145).
+
+Read the pair on the **matrix**, never on the ScanNet val ruler (§10.4). And when they land, A-long′
+also prices the LR change itself against the published A-long — a free second read-out nobody
+asked for and everyone will want.
+
+### 11.5 What arm D can and cannot settle, once it converges
+
+It is one variable against A-long′ *as a source*, so it measures what 1500 scenes of
+SAM2-supervised video add on top of the best annotated mixture. It does **not** separate
+"pseudo-labels help" from "1500 more scenes help" — that would need a fourth source of equal size
+with real GT, which the mirror does not have. Say the former, never the latter.
+
+And it still carries §1.4's second confound: RE10K adds new scenes **and** supervises the room
+shell, which none of the other three sources does. That is now the *live* hypothesis if a
+**converged** D-long underperforms A-long′ — it is no longer available as an explanation for the
+first attempt, which the LR alone explains.
+
+### 11.6 Status
 
 | step | state |
 |---|---|
@@ -705,12 +833,8 @@ them (`docs/RESULTS.md` §7.5 finding 2).
 | `slurm/coco_rle.py`, verified against `pycocotools` (47 checks) | done 2026-08-24 |
 | `build_re10k` + the room-shell measurement (39 checks) | done 2026-08-24 — §1.4 |
 | the driver takes a 4th source with **zero code change** (24 checks) | verified 2026-08-24 |
-| `insscene2d_re10k.tar.zst` (job **11641723**) | *running*, ~3 h 15 |
-| smoke, 24 scenes / 2 epochs (job **11642515**) | `--dependency=afterok` on the build |
-| arm D (job **11642516**) | `afterok` on the smoke |
-| the 3D matrix on arm D (chain job **11642519**) | `afterok` on arm D — 4 × 2 cells |
-
-The four are chained end to end, the §10.1 pattern: a failure anywhere cancels what follows
-instead of burning the ~20 GPU-hours downstream of it. The matrix cannot be submitted by name
-because the run directory carries a timestamp minted when the training job *starts*, so
-`slurm/chain_eval3d_matrix.sh` reads it back out of the training log.
+| `insscene2d_re10k.tar.zst` (job 11641723) | **done 2026-08-24** — 9.7 GB, 5127 scenes, 0 failed |
+| smoke, 24 scenes / 2 epochs (job 11642515) | **passed 2026-08-24** — loss 252.6 → 224.1, all four sources cached |
+| arm D at lr 1e-4 (job 11642516) + its matrix (11642519) | **DIVERGED 2026-08-25** — §11.2 |
+| the two divergence diagnostics (11744294 / 11744296) | **done 2026-08-25** — §11.3, the LR is the cause |
+| **D-long** (11830140) + **A-long′** (11830142), + matrices (11830144 / 11830145) | launched 2026-08-26 |

@@ -613,15 +613,48 @@ budget to 84 480 steps makes the full 3520-scene mixture the best run of the who
 **0.704**, and the best `id_switch` (0.414) and `view_consistency` (0.734) measured anywhere.
 A-long is itself converged (0.604 / 0.589 / 0.579 / 0.592 / 0.581 over its last five epochs).
 
-**The one caveat, and the run that closes it.** A-long is compared at *convergence*, not at matched
-steps — it had 2× the gradient steps of B and C. B is saturated (flat over 10 epochs, so more steps
-cannot rescue it) and C nearly so, but "more data" and "more compute" are not yet separated at the
-top end. **C-long** (2054 scenes, 40 epochs = 82 160 steps, job 11632049) is the step-matched
-control; A-long ⇄ C-long is then the clean measurement of what Infinigen contributes.
-Full reading: **docs/MULTIDATASET.md §10.3**.
+**The one caveat, and the run that was meant to close it — which FAILED.** A-long is compared at
+*convergence*, not at matched steps: it had 2× the gradient steps of B and C. B is saturated (flat
+over 10 epochs, so more steps cannot rescue it) and C nearly so, but "more data" and "more compute"
+are **still not separated** at the top end. C-long (2054 scenes, 40 epochs = 82 160 steps, job
+11632049) was the step-matched control and **it destabilised**: 16 epochs of rising train loss,
+final train loss 122.6 against arm C's 93.2 on identical data at half the steps, best epoch = last.
+Its checkpoint prices nothing and is not tabled here. **The caveat therefore stands unresolved.**
+The cause is the learning rate (the failure §11.3 isolated independently); the re-run is **C-long′**
+at lr 5e-5 (job 11831105) against **A-long′** (11830142), step-matched and same-LR.
+Full reading: **docs/MULTIDATASET.md §10.5**.
 
 **Do not read this table as the result of the workstream.** Every cell is scored on ScanNet, which
 is in-domain for all three arms; what the extra data was bought for is §7's out-of-domain columns.
+
+#### 6.4.1 Arm D — the fourth source, **SAM2-supervised** (2026-08-25) — a DIVERGED run
+
+**Its own block, and not a measurement of anything.** RE10K's masks are **SAM2 output, not ground
+truth** (docs/MULTIDATASET.md §1.3), so this row could never be folded into A/A-long's; but it
+must not be quoted as what RE10K is worth either, because **the run diverged**.
+
+| arm | train data | scenes | lr | steps | per-frame mIoU / AP50 | per-bundle mIoU / AP50 | `id_switch` ↓ | `view_consistency` ↑ |
+|---|---|---|---|---|---|---|---|---|
+| **A-long** (11498642) | ScanNet+ScanNet+++Infinigen | 3520 | 1e-4 | 84 480 | 0.676 / 0.704 | 0.600 / 0.604 | 0.414 | 0.734 |
+| **D** (11642516) **SAM2-supervised, DIVERGED** | + RE10K@1500 | 5020 | 1e-4 | 85 340 | 0.334 / 0.256 | 0.291 / **0.136** | 0.663 | 0.485 |
+
+**Why it is a divergence and not the familiar under-convergence.** Best epoch is **2 of 17**; the
+training loss *rises* from 132 to 169 while the LR decays; and `train_AP50` collapses 0.211 → 0.006,
+i.e. the head stops fitting the data it is being trained on. Nothing that merely made ScanNet val
+harder could do that. The run itself was clean — 17 h 15, 352 GiB peak RSS of 416, 0 failures, no
+NaN.
+
+**The cause is the learning rate, and it was isolated with one variable at a time**
+(docs/MULTIDATASET.md §11.3). Holding the mixture, the RE10K dose and `--anchor_3d` fixed and
+halving the LR to 5e-5 removes the collapse entirely: that run tracks A-long epoch for epoch and is
+marginally ahead at epoch 6 (0.369 vs 0.364) on 43 % more scenes. **A label conflict cannot be
+undone by halving a learning rate**, so neither "SAM2 masks are the wrong kind of supervision" nor
+the room-shell confound explains this failure.
+
+The real arm is therefore **D-long** (5020 scenes, lr 5e-5, 85 340 steps, job 11830140) against a
+**re-run A-long′ at the same LR** (3520 scenes, 84 480 steps, job 11830142), because A-long as
+published cannot be compared to a 5e-5 run without moving two variables at once. Neither is in this
+table yet.
 
 ## 7. Cross-dataset matrix — the same ruler on four benchmarks (todo 6d, 2026-08-09)
 
@@ -810,6 +843,27 @@ and posed **0.177 / 0.389 / 0.708** against 0.140 / 0.327 / 0.668 (+19 %). Zero-
 AP25 more than doubles (0.480 vs 0.211). The larger the mixture, the more steps it needs before it
 pays — which is §6.4's lesson stated on the ruler that matters.
 
+#### 7.5.1 Arm D — **SAM2-supervised**, and a DIVERGED run (2026-08-25, job 11642519)
+
+Same ruler, same defaults, 8 cells, 0 failed scenes. **Do not read these as what RE10K training
+data is worth** — the checkpoint behind them comes from a run whose training loss rose and whose
+`train_AP50` collapsed to 0.006 (§6.4.1, docs/MULTIDATASET.md §11.2). They are recorded so the next
+reader does not re-derive them, and because the collapse is uniform across all 8 cells, which is
+itself part of the evidence that the run — not the data — is what failed.
+
+| arm | dataset | unposed (`unproject`) | posed (`gt_projection`) |
+|---|---|---|---|
+| **D** RE10K@1500, 5020 (85 k steps, lr 1e-4) **SAM2-supervised, DIVERGED** | scannetv2 | 0.001 / 0.007 / 0.172 | 0.006 / 0.025 / 0.320 |
+| | scannet200 | 0.004 / 0.014 / 0.154 | 0.013 / 0.040 / 0.269 |
+| | scannetpp | 0.000 / 0.000 / 0.000 | 0.000 / 0.001 / 0.042 |
+| | replica | 0.000 / 0.000 / 0.006 | 0.001 / 0.003 / 0.128 |
+
+For scale: A-long is 0.057 / 0.166 / 0.516 unposed on ScanNetv2 and the **ScanNet-only 1201-scene
+control** is 0.013 / 0.050 / 0.320 (§7.2). Arm D lands **below its own single-source control on the
+domain it trains on**, which is the shape of a broken run, not of bad training data. The corrected
+pair (D-long 11830140 vs A-long′ 11830142, both lr 5e-5, both step-matched) chains its own matrix;
+until it lands, this workstream's scaling claim is still A-long's.
+
 **5. This IS a new headline, and it is the best row the project has.** A-long's unposed ScanNetv2
 triple **0.057 / 0.166 / 0.516** beats the published `--anchor_3d` ScanNet-only row
 (0.042 / 0.138 / 0.504) by +20 % AP50 on the same ruler, and it is the number §8.2's competitor
@@ -817,8 +871,9 @@ table should quote once C-long has separated data from compute (§6.4). Against 
 class-agnostic cluster — FAST3DIS 0.038 / 0.096 / 0.316 and IGGT 0.028 / 0.112 / 0.287 — it leads
 on all three measures by 1.5–2.0×, still on a **strictly frozen** backbone and at ~17.4 views/scene
 against their 50. The §7.4 caveats apply verbatim: one run per cell, Replica's GT is our
-construction, no claim about 200-way or 84-way recognition — and A-long is not yet step-matched
-(job 11632049 is that control).
+construction, no claim about 200-way or 84-way recognition — and **A-long is still not step-matched** (job
+11632049 was that control and failed; C-long′ 11831105 ⇄ A-long′ 11830142 replaces it,
+docs/MULTIDATASET.md §10.5).
 
 ## 8. Summary table — the numbers to quote, and against what
 
@@ -869,8 +924,10 @@ labelled row rather than being folded into the clean one (`docs/TRAINING_COMPARA
 MaskDINO's own README fences its rows the same way). Read the two together: the *mechanism* claim
 rests on the ScanNet-only row, the *scaling* claim on the extra-data one. It is also the closer
 comparison to IGGT, which likewise trains on a curated mixture. Two things it still owes:
-**it is not yet step-matched** (84 k steps against the arms it beats; job 11632049 is that control)
-and, like every row here, it is a single run.
+**it is not yet step-matched** (84 k steps against the arms it beats — job 11632049 was that control
+and failed as an unstable run — the LR failure of §11.3 — so the compute/data split at the top end
+remains unmeasured until C-long′ 11831105 ⇄ A-long′ 11830142 lands, docs/MULTIDATASET.md §10.5) and,
+like every row here, it is a single run.
 
 *Not in this table on purpose:* **SegVGGT 0.504 / 0.717 / 0.870** — posed transfer, a different
 protocol (§5.1); and the point-cloud/RGB-D family (Mask3D 55.2, SegDINO3D 64.0 AP) — different

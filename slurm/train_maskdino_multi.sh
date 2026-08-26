@@ -6,8 +6,9 @@
 #   sbatch slurm/train_maskdino_multi.sh                              # the full mixture
 #   sbatch --export=ALL,SOURCES='scannet scannetpp' slurm/train_maskdino_multi.sh
 #   sbatch --export=ALL,CAP_SCANNETPP=200,CAP_INFINIGEN=200 slurm/train_maskdino_multi.sh
-#   sbatch --export=ALL,SOURCES='scannet scannetpp infinigen re10k',CAP_RE10K=1500,EPOCHS=17 \
-#       --cpus-per-task=26 slurm/train_maskdino_multi.sh              # the SAM2-supervised arm
+#   sbatch --export=ALL,SOURCES='scannet scannetpp infinigen re10k',CAP_RE10K=1500,EPOCHS=17,\
+#       EXTRA_ARGS='--anchor_3d --learning_rate 5e-5' --cpus-per-task=26 \
+#       slurm/train_maskdino_multi.sh          # the SAM2-supervised arm -- 5e-5 IS load-bearing
 #   DRY_RUN=1 bash slurm/train_maskdino_multi.sh                      # print the lists and exit
 #
 # Knobs (via --export=ALL,VAR=...):
@@ -47,6 +48,16 @@
 # workstream read "more data hurts" off an under-budgeted run twice (docs/MULTIDATASET.md §9
 # reading 1, §10.3 reading 2). One step = one 8-frame bundle = one scene at b1, so
 # steps = N_TRAIN x EPOCHS; A-long's budget is 84 480.
+#
+# LEARNING RATE -- the third thing a big mixture can need, learned the expensive way. The default
+# 1e-4 is stable up to the 3520-scene three-source mixture and DIVERGES on the 5020-scene
+# four-source one: job 11642516 ran 17 h clean and produced garbage, its training loss RISING from
+# epoch 3 (the first epoch after warmup) and `train_AP50` collapsing 0.211 -> 0.006. Halving to
+# 5e-5 removes it entirely at the same data and the same dose (docs/MULTIDATASET.md §11.3).
+# So for any mixture larger or denser than A-long's, pass `--learning_rate 5e-5` in EXTRA_ARGS --
+# and re-run the CONTROL at the same LR, or the comparison moves two variables at once.
+# The tell, if it happens again: the epoch-1/2 curve looks normal and the run turns over exactly
+# when warmup ends. Watch `loss` and `train_AP50`, not just val.
 #
 #SBATCH --job-name=maskdino_multi
 #SBATCH --output=/cluster/scratch/niacobone/vggt/slurm/logs/maskdino_multi_%j.log
