@@ -713,15 +713,21 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       to training on FAST3DIS's own source. What it does not buy: a FAST3DIS-matched training
       set — their 40 % scene list is unpublished, permanently (§5). Work: licence acceptance,
       one fetch job, a `train/` adapter mirroring `slurm/build_insscene2d.py`.
-- [ ] **6o. Land the ablation-table hole on the 3D ruler — HALF DONE 2026-08-27.**
+- [x] **6o. Land the ablation-table hole on the 3D ruler — CLOSED 2026-08-28.**
   - [x] **`--no-cross_frame_attn` — job 11986399, DONE** (`docs/RESULTS.md` §5.5). 312 scenes, 0
         failures, defaults. Removing it costs **57 % of the 3D AP50** (0.067 → 0.029 class-aware,
         0.050 → 0.021 class-agnostic) — the largest single-mechanism effect in the project, and
         the ratio holds across both label settings. Single variable verified by a `config.json`
         diff: exactly one differing key.
-  - [ ] **`--feature_mode single` — job 11986440, running.** A new 12-epoch run on the official
-        1201/312 split, because no leak-free checkpoint of that arm existed; its 3D eval follows.
-        Until it lands, the +0.147 bundle-features figure stays retired-ruler evidence.
+  - [x] **`--feature_mode single` — jobs 11986440 → 12012326, DONE 2026-08-28.** A new 12-epoch
+        run on the official 1201/312 split (no leak-free checkpoint of that arm existed), then its
+        3D eval. **0.76× the control's AP50 class-aware, 0.51× class-agnostic** — the two columns
+        disagree by ~1.5×, so this row must never be quoted without its label setting. In 2D it
+        reproduces the retired figure on the new split (−0.166 per-bundle AP50 against −0.147).
+        Single-variable (config diff: only `feature_mode`), schedule-matched not
+        convergence-matched (both peak at epoch 12/12). **Reading that came out of the move to
+        Tier 1: the 2D *ordering* of the two levers held, its *spacing* did not** — 1.24× apart in
+        2D, 2.4× apart class-aware in 3D.
 - [x] **6q. RE10K at matched compute — ANSWERED NEGATIVE in-domain 2026-08-27.** D-long (11830140,
       +1500 SAM2-supervised RE10K scenes) against A-long′ (11830142) at lr 5e-5, gradient-step
       budgets matched to within 1 % (85 340 vs 84 480 — the 17-vs-24 epoch difference is what

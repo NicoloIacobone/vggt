@@ -178,15 +178,15 @@ Read every Δ against the **measured seed spread of 0.009 per-bundle AP50**.
 | **Bundle width 8 → 16** | +0.027 per-bundle AP50; `id_switch` −0.113; +46 % unposed 3D AP50 | 3× seed noise | **Tier 1 (D)** |
 | Lifting knobs (`--vote_radius`, depth conf.) | +0.016 → +0.047 3D AP50 | larger than most decoder ablations | **Tier 1 (D)** |
 | **Cross-frame attention** | **removing it costs 57 % of the 3D AP50** (0.067 → 0.029; class-agnostic 0.050 → 0.021) | the largest single-mechanism effect in the project | **Tier 1 (D)** — landed 2026-08-27 |
-| **Bundle features** | +0.147 per-bundle AP50 (−0.048 per-frame) | 16× | **no Tier-1 number** ⚠ — training run in flight (§6.5) |
+| **Bundle features** | **switching to per-frame costs 24 % of the 3D AP50 class-aware, 49 % class-agnostic** (0.067 → 0.051 / 0.050 → 0.025) | second-largest; **always quote with its label setting** | **Tier 1 (D)** — landed 2026-08-28 |
 | Mask resolution 37² → 74² | −0.022 (neutral) | **not the bottleneck** | `MASKDINO.md` §7.7 |
 
-⚠ The one effect size still marked *no Tier-1 number* was measured on the **retired project-val
-2D ruler** (`docs/old/RESULTS_HISTORY.md`). It is quoted here as the reason the job in §6.5 was
-launched, not as a result — and it may not go on a slide next to a competitor number.
-**Cross-frame attention no longer needs that caveat**: its 3D number landed 2026-08-27
-(`RESULTS.md` §5.5, single-variable verified by a `config.json` diff), and it is the strongest
-mechanism result the project holds.
+✅ **The ⚠ rows are gone: the ablation table is fully on Tier 1 as of 2026-08-28**
+(`RESULTS.md` §5.5, both single-variable, verified by `config.json` diffs). Two things the move
+off the 2D ruler changed, and they are why it was worth the GPU time: **the bundle-features row is
+label-setting dependent** (0.76× class-aware vs 0.51× class-agnostic — never quote "24 %" alone),
+and **the spacing between the two levers was wrong in 2D** — they looked close there (1.24×
+apart), and class-aware on the 3D ruler they are 2.4× apart.
 
 ### The four conclusions
 
@@ -334,7 +334,7 @@ the class-**aware** column on ScanNet200 only; the class-agnostic headline (§2)
 
 ---
 
-### 6.5 The ablation-table hole — LAUNCHED 2026-08-27
+### 6.5 The ablation-table hole — CLOSED 2026-08-28
 
 The headline lives on Tier 1 (3D). Two of the study's strongest levers are measured only on Tier 2
 (2D) — see the ⚠ under §4. **A 3D-ruler ablation of `--no-cross_frame_attn` and
@@ -343,14 +343,15 @@ The headline lives on Tier 1 (3D). Two of the study's strongest levers are measu
 **Both halves are now in flight** (2026-08-27). They cost very differently, which is why they are
 two jobs and not one:
 
-| half | what was launched | job | state |
+| half | what was launched | job | result |
 |---|---|---|---|
-| `--no-cross_frame_attn` | one 3D eval of the existing official-split checkpoint | **11986399** | **DONE 2026-08-27** — removing it costs **57 % of the 3D AP50** (`RESULTS.md` §5.5) |
-| `--feature_mode single` | a **new 12-epoch training run** on the official 1201/312 split — no usable checkpoint existed, and the only one that did was trained on a range overlapping val-312 | **11986440** | running; its 3D eval follows |
+| `--no-cross_frame_attn` | one 3D eval of the existing official-split checkpoint | **11986399** | **−57 % of the 3D AP50** (0.43× class-aware, 0.42× class-agnostic) |
+| `--feature_mode single` | a **new 12-epoch training run** — no leak-free checkpoint of that arm existed — then its 3D eval | **11986440** → **12012326** | **−24 % class-aware, −49 % class-agnostic** (0.76× / 0.51×) |
 
-Single variable in both cases, and for the finished half that is **verified, not assumed**: a
-`config.json` diff of the two runs returns exactly one differing key. Until the second half lands,
-the +0.147 bundle-features figure in §4 stays labelled as retired-ruler evidence, not a result.
+**CLOSED 2026-08-28.** Single variable in both cases, **verified not assumed**: a `config.json`
+diff of each run against the control returns exactly one differing key. The second row is
+schedule-matched rather than convergence-matched (both peak at epoch 12 of 12), and it must always
+be quoted with its label setting — the two columns disagree by ~1.5×.
 
 ---
 

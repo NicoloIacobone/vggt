@@ -347,7 +347,7 @@ unposed too.
 **1.71×** (from 1.84×). Their row is class-aware and ours class-agnostic, so this is a
 *direction*, not a like-for-like ratio — §5.1's decomposition is where that gap is priced.
 
-### 5.5 THE ABLATION TABLE ON THE 3D RULER — cross-frame attention (todo 6o, 2026-08-27)
+### 5.5 THE ABLATION TABLE ON THE 3D RULER — both levers (todo 6o, CLOSED 2026-08-28)
 
 Job 11986399, 312 scenes, 0 failures, all lifting knobs at defaults, unposed. The first **Tier-1**
 number for the mechanism that carries multi-view consistency: until now cross-frame attention was
@@ -361,26 +361,40 @@ schedule, same everything else.
 |---|---|---|
 | the control — `maskdino_sf_list1201_mf_20260802_133826` | 0.023 / 0.067 / 0.268 | 0.013 / 0.050 / 0.320 |
 | **`--no-cross_frame_attn`** — `…_mf_noxframe_20260803_111855` | **0.010 / 0.029 / 0.167** | **0.005 / 0.021 / 0.214** |
-| Δ | −0.012 / **−0.038** / −0.101 | −0.008 / **−0.029** / −0.106 |
-| ratio | 0.46× / **0.43×** / 0.62× | 0.38× / **0.42×** / 0.67× |
+| ratio vs control | 0.46× / **0.43×** / 0.62× | 0.38× / **0.42×** / 0.67× |
+| **`--feature_mode single`** — `…singlefeat_20260827_192650` (job 12012326) | **0.020 / 0.051 / 0.251** | **0.007 / 0.025 / 0.234** |
+| ratio vs control | 0.89× / **0.76×** / 0.93× | 0.52× / **0.51×** / 0.73× |
 
-**1. Cross-frame attention is worth ~2.3× the 3D AP50.** Removing it costs **57 %** of the
-class-aware AP50 and 58 % of the class-agnostic one. That is far larger than any decoder
-ingredient measured anywhere in this project, and it is now on the **same ruler as the headline**
-rather than on a retired 2D one.
+**1. Both mechanisms are worth about half the 3D AP50, and both are far larger than any decoder
+ingredient.** Removing cross-frame attention costs **57 %** of the class-aware AP50; switching to
+per-frame features costs **24 %** class-aware and **49 %** class-agnostic. Nothing in the decoder
+(two-stage, encoder, denoising, box init) came close to either. The two levers the study leaned
+on are now priced on the **same ruler as the headline** rather than on a retired 2D one.
 
-**2. It survives the label setting.** The ratio is 0.43× class-aware and 0.42× class-agnostic —
-so this is not an artefact of the class collapse that makes other rows checkpoint-dependent (§5,
-§9.11).
+**2. Cross-frame attention survives the label setting; per-frame features does not.** Cross-frame
+attention reads 0.43× class-aware and 0.42× class-agnostic — the same number twice, so it is not
+an artefact of the class collapse. `--feature_mode single` reads **0.76× class-aware but 0.51×
+class-agnostic**, i.e. the two columns disagree by a factor of ~1.5 on how much it matters. That
+is exactly the checkpoint-dependent collapse §9.11 documents, and it means **the bundle-features
+row must always be quoted with its label setting**. Never quote "24 %" alone.
 
-**3. AP25 falls least** (0.62×/0.67× against 0.43×/0.42× at AP50). Objects are still found without
-cross-frame attention; what degrades is whether the fused 3D instance is *good enough* to clear the
-0.5-IoU bar. That is the same signature as everything else in this section — the mechanism buys
-mask/identity quality, and the lifting step is what converts it into AP50.
+**3. The 2D ranking does not survive intact.** On the retired project-val ruler the two levers were
+close (+0.183 vs +0.147 per-bundle AP50, a ratio of 1.24). On the 3D ruler they are close only in
+the class-agnostic column (58 % vs 49 %); class-aware they are 57 % vs 24 %, a ratio of 2.4. **The
+2D ordering was not wrong, but its *spacing* was — which is the reason the exercise was worth its
+GPU time.**
 
-**Still open: the other half.** `--feature_mode single` has no leak-free checkpoint, so it needed a
-new training run (job 11986440, official split, 12 epochs); its 3D eval follows. Until it lands the
-ablation table is half on Tier 1.
+**4. AP25 falls least in both rows** (0.62×/0.67× and 0.93×/0.73× against AP50's 0.43×/0.42× and
+0.76×/0.51×). Objects are still found without either mechanism; what degrades is whether the fused
+3D instance clears the 0.5-IoU bar — the same signature as everything else in this section: the
+mechanisms buy mask/identity quality, and the lifting step is what converts it into AP50.
+
+**Caveats that travel with the second row.** `--feature_mode single` needed a **new training run**
+(job 11986440) because no leak-free checkpoint of that arm existed; it is single-variable against
+the control (config diff: only `feature_mode`) and **schedule-matched, not convergence-matched** —
+both runs peak at epoch 12 of 12, so neither had stopped improving. In 2D it reproduces the
+retired figure on the new split: per-bundle AP50 0.5249 → 0.3589, i.e. −0.166 against the −0.147
+recorded on project-val.
 
 ## 6. Official 1201/312 split — first runs (2026-08-02)
 

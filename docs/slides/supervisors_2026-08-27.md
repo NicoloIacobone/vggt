@@ -209,21 +209,20 @@ Two notes on the rows in bold. **Views** was the last unmatched *evaluation* axi
 
 <!-- _class: mid -->
 
-## 12. Closing the ablation table on the 3D ruler
+## 12. The ablation table, now on the 3D ruler — CLOSED
 
-The headline lives on the 3D benchmark. But the **two mechanisms that carry multi-view consistency** — cross-frame attention, and letting a query see the whole bundle's features rather than one view's — had only ever been measured on the project's internal 2D metrics. 3D anchors, bundle width and the lifting parameters all had 3D numbers; those two did not. Both were launched today; **the first has landed.**
+The headline lives on the 3D benchmark, but the **two mechanisms that carry multi-view consistency** — cross-frame attention, and letting a query see the whole bundle's features rather than one view's — had only ever been measured on the project's internal 2D metrics. **Both now have 3D numbers.**
 
-| Checkpoint | 18-class AP / AP50 / AP25 | class-agnostic |
-|---|---|---|
-| the control — full model, official split | 0.023 / 0.067 / 0.268 | 0.013 / 0.050 / 0.320 |
-| **without cross-frame attention** | **0.010 / 0.029 / 0.167** | **0.005 / 0.021 / 0.214** |
-| ratio | 0.46× / **0.43×** / 0.62× | 0.38× / **0.42×** / 0.67× |
+| Checkpoint | 18-class AP / AP50 / AP25 | class-agnostic | AP50 vs control |
+|---|---|---|---|
+| the control — full model, official split | 0.023 / 0.067 / 0.268 | 0.013 / 0.050 / 0.320 | — |
+| **without cross-frame attention** | 0.010 / 0.029 / 0.167 | 0.005 / 0.021 / 0.214 | **0.43× / 0.42×** |
+| **per-frame features** | 0.020 / 0.051 / 0.251 | 0.007 / 0.025 / 0.234 | **0.76× / 0.51×** |
 
-- **Removing cross-frame attention costs 57 % of the 3D AP50** — far more than any decoder ingredient measured anywhere in this project, and now on the **same ruler as the headline** rather than on an internal one. The effect survives the label setting (0.43× class-aware, 0.42× class-agnostic), so it is not an artefact of class collapse.
-- **AP25 falls least.** Objects are still found without it; what degrades is whether the fused 3D instance clears the 0.5-IoU bar — the same signature as everything else here: the mechanism buys quality, the lifting step converts it into AP50.
-- **Single variable, verified not assumed:** a config diff of the two runs returns exactly one differing key.
-
-**The other half is still running** (`--feature_mode single`, job 11986440): no leak-free checkpoint of that arm existed, so it needed a new 12-epoch training run before it could be evaluated at all. That asymmetry in price is why they were two jobs and not one.
+- **Both levers are worth roughly half the 3D AP50, and both dwarf every decoder ingredient** (two-stage, encoder, denoising, box init were all ≤0.046 on the 2D ruler). These are the two mechanisms the study leans on, and they are now priced where the headline is.
+- **Cross-frame attention survives the label setting; bundle features does not** — 0.43×/0.42× against 0.76×/0.51×. The bundle-features row must always be quoted **with its label setting**.
+- **The 2D ordering held, its spacing did not.** In 2D the two looked close (1.24× apart); class-aware on the 3D ruler they are 2.4× apart. That correction is what the exercise bought.
+- **Single variable in both cases, verified not assumed:** a config diff against the control returns exactly one differing key. The second row is schedule-matched, not convergence-matched — both runs peak at their last epoch.
 
 ---
 
@@ -266,7 +265,7 @@ The headline lives on the 3D benchmark. But the **two mechanisms that carry mult
 | **The two no-ScanNet arms** | train on IGGT's mixture **minus ASE**, never on ScanNet → makes the competitor comparison **training-matched** | 11839134 · 11839135 | one **done**, one running; the done one's 3D evals are scoring now |
 | **More data ⇄ more compute** | separates the two at the top end; re-run at a halved learning rate after the first pair destabilised | 11831105 · 11830142 | **both done** |
 | **RE10K arm** (**SAM2-supervised** — masks are model output, not GT) | whether a fourth, model-labelled source helps | 11830140 | **done — it COSTS in-domain**, see below; 3D matrices scoring |
-| **The ablation table on the 3D ruler** (slide 12) | cross-frame attention and bundle features, priced on the headline's own ruler | 11986399 · 11986440 | **first half DONE** — 57 % of the 3D AP50; second running |
+| **The ablation table on the 3D ruler** (slide 12) | cross-frame attention and bundle features, priced on the headline's own ruler | 11986399 · 11986440 → 12012326 | **CLOSED** — both levers now have 3D numbers |
 | **Formal identity metrics** (slide 14) | HOTA / AssA / DetA / IDF1 on the headline checkpoint and its control | 11994637 · 11994639 | **DONE — and they revised an identity claim** (slide 14) |
 | **Seed spread for those metrics** | whether the AssA move of 3D anchors is an effect or noise | 11997568 · 11997569 | **DONE — noise**; the identity claim was retired (slide 14) |
 | ~~Views per scene, 17 → 50~~ | the last unmatched *evaluation* axis | 11841445 ff. | **DONE — and it moved the headline (slide 8)** |
