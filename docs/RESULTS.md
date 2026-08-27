@@ -1,174 +1,33 @@
 # Results — one table per protocol
 
-Two model families, two protocols. **The single most common mistake in this project is comparing
-across the horizontal line below.** Read §1 before quoting any number.
+Every number in this file is on the **official ScanNet v2 1201/312 split or larger**, and on one
+of two rulers. **The single most common mistake in this project is comparing across them.** Read
+§1 before quoting anything.
 
-**A third ruler exists and is not in this file.** The COCO backbone-swap study
-(`docs/MASKDINO_COCO.md`) scores standard COCO mask/box AP with `pycocotools` on a different
-dataset, a different task and a different metric implementation. Nothing there is comparable to
-anything here — it answers "how much does the backbone swap cost against upstream MaskDINO's own
-numbers", not "how good is the ScanNet head".
+## 1. The two rulers
 
-## 1. The two protocols
-
-| | multi-view (per-bundle) | single-frame (per-frame) |
+| | 3D — the official benchmark (§5, §7) | 2D — internal, per-frame / per-bundle (§6) |
 |---|---|---|
-| unit scored | one instance vs its 8-frame GT mask, one IoU over the concatenated frames | each frame separately, averaged over frames then over scenes |
-| used by | the retired baseline head | the MaskDINO track (active) |
-| scoring | softmax, "argmax ≠ background" | sigmoid, `max_c sigmoid(logit_c) ≥ 0.25` |
-| bridge | — | `scripts/eval_perframe.py` puts a legacy checkpoint on this protocol |
+| unit scored | one instance in the scene's **point cloud**, official ScanNet evaluator, vendored | one query's mask, on VGGT's 37×37 patch grid, our own metric code |
+| what it is for | **the only numbers placeable next to a published paper** | model selection and ablation ranking |
+| per-frame vs per-bundle | — | per-frame scores each view alone; per-bundle scores one query's whole [S, h, w] volume against the bundle's GT |
 
-Per-frame scores **higher** than per-bundle for the same checkpoint: an instance only has to
-match in the frames where it is visible, and a prediction that claims no pixels in a frame is
-dropped rather than penalised (`train/perframe.py::drop_empty_masks`). That is why the baseline head reads
-0.451/0.294 per-frame and 0.367/0.199 per-bundle — the same model, two rulers.
+Per-frame scores **higher** than per-bundle for the same checkpoint: an instance only has to match
+in the views where it is visible, and a prediction that claims no pixels in a view is dropped
+rather than penalised (`train/perframe.py::drop_empty_masks`).
 
-All numbers below: official ScanNet GT, per-instance masks, val = scenes 0080–0089, held out of
-every training set.
+**A 2D number may never be placed next to a competitor's**, and a §7 row (ScanNet200 / ScanNet++ /
+Replica, class-agnostic only) may never be read next to a class-aware ScanNetv2 one.
 
-**A third and a fourth block exist and neither belongs on this page's axis.** §5 is the 3D ruler
-(official 3D instance benchmark, point clouds, its own evaluator) and **§7 is that same ruler run
-on three further benchmarks** — ScanNet200, ScanNet++ and Replica, class-agnostic only. A §7 row
-may never be read next to a 2D row here, nor next to a class-aware ScanNetv2 one.
+### 1.1 – §4 — moved to the archive (2026-08-27)
 
-### 1.1 The val split, and why it is not the official one (decided 2026-07-28)
+The project-val split (scenes 0080–0089), the retired baseline head's own tables, the SAM3
+ground-truth era and the COCO port check are **no longer reported**. They are in
+`docs/old/RESULTS_HISTORY.md` for provenance and are not quotable. Everything this project
+reports is on the official ScanNet v2 1201/312 split or larger, and starts at §5.
 
-Val = scenes **0080–0089** is a *project convention*, not the official ScanNet v2 val split. It
-stays that way: it is the one ruler every retired-baseline and every MaskDINO scale point was measured on, and
-switching would break the continuity of the 50 → 190 → 490 scaling curve for zero real gain in
-comparability (§1.2). Alongside it there is now **one comparability read-out**: the official
-ScanNet v2 val list (`data/splits/scannetv2_val.txt`, 312 scenes) intersected with our 500-scene
-tar gives **77** scenes (`*_00`, id < 490). 74 of those sit inside the usual training range, so
-the read-out needs its **own run** rather than a re-scoring of an existing checkpoint —
-`VAL_SPLIT=official sbatch slurm/train_maskdino.sh` (413 train / 77 val, job 8900194).
+Section numbering below is unchanged, so every existing cross-reference to §5–§8 still resolves.
 
-**Since 2026-08-02 the full official 1201/312 split has its own runs — §6.** That is a third 2D
-ruler: its numbers live only there and are never mixed into the §2/§3 tables.
-
-### 1.2 …and none of it is comparable to published ScanNet numbers
-
-Published feed-forward competitors (SegVGGT, FAST3DIS, IGGT, …) score their masks on the
-**official 3D instance benchmark** (AP/AP50/AP25) against the benchmark point clouds. We score
-**per-view 2D masks on the 37×37 patch grid** with our own metric code. Different task,
-different GT, different metric implementation — never put the two in one table. The full
-side-by-side of the two protocols is in `docs/RELATED_WORK.md` ("Numbers: what is comparable to
-what"). **The bridge now exists (§5): the 3D ruler runs OUR model on the official benchmark** —
-it is the only place in this project where a number may sit next to a published one, and it
-lives in its own section for that reason. Read §5's protocol note before doing so: the published
-3D numbers are themselves split across **two different protocols**, and only one of them is ours.
-
-**And the training data differs too — see `docs/TRAINING_COMPARABILITY.md`.** SegVGGT trains on the
-same official 1201 split we do; FAST3DIS trains on synthetic Aria data *only* and scores ScanNet
-zero-shot; IGGT trains on a mixture that includes ScanNet++. A protocol-matched comparison is still
-not a training-matched one.
-
-### 1.3 Fixed cached view sets (accepted 2026-07-28)
-
-Frames are drawn once per scene up front and reused for the whole run — that is what makes
-head-only training take minutes instead of hours. The risk (the head memorising the cached view
-combinations rather than learning view-set robustness) is accepted and stated, and measured once
-by the `--bundles_per_scene 2 --color_jitter 0.2` run at N=490 (job 8895565, §2).
-
-### 1.4 The COCO numbers are implementation verification, not a project result
-
-`docs/MASKDINO.md` §7.6 reports **46.133 mask AP / 51.549 box AP on COCO val2017**. That is not a
-result of this project and belongs in no table here. It is a *correctness proof for the port*:
-our ported decoder + deformable encoder driven by upstream MaskDINO's own released COCO weights,
-reproducing that checkpoint's published number (46.1 / 51.5, the README model-zoo row
-"MaskDINO (hid 1024)" — *not* a paper table value) to +0.004 AP, and matching an unmodified
-upstream run in the same environment to the same tolerance. It says our implementation of MaskDINO is
-faithful. It says nothing about VGGT, ScanNet, or 3D consistency — the backbone, the dataset and
-the task are all upstream's there. Never quote it next to a ScanNet number.
-
-**Since 2026-08-12 the port is certified on the *training* path too** (`docs/MASKDINO_COCO.md` §6
-row 2): upstream MaskDINO's own code, trained under our recipe, lands at **34.55 segm AP against
-our `resnet50` arm's 34.3**. §7.6's certificate covered inference only and explicitly excluded
-`matcher.py`, `criterion.py` and DN generation; those three are now corroborated end to end. Still
-not a project result, and still belongs in no table here.
-
-## 2. Single-frame protocol — the comparison that matters
-
-| Model | Scenes | val mIoU | val AP50 | val AP75 | val mAP |
-|---|---|---|---|---|---|
-| the retired baseline head — **the bar** | 190 | 0.451 | 0.294 | 0.141 | 0.154 |
-| MaskDINO | 50 | 0.451 | 0.440 | 0.314 | 0.290 |
-| MaskDINO | 190 | 0.594 | 0.624 | 0.440 | 0.418 |
-| MaskDINO | 490 | 0.669 | 0.699 | 0.506 | 0.475 |
-| **MaskDINO + `--bundles_per_scene 2 --color_jitter 0.2`** | **490** | **0.694** | **0.729** | **0.582** | **0.526** |
-
-### One-flag variants at N=490 (2026-07-28, ΔAP50 vs 0.699)
-
-| Change | val mIoU | val AP50 | ΔAP50 | verdict |
-|---|---|---|---|---|
-| `--bundles_per_scene 2 --color_jitter 0.2` | 0.694 | 0.729 | **+0.030** | best result so far; still data-limited |
-| `--bundles_per_scene 4 --color_jitter 0.2` | 0.699 | 0.722 | +0.023 | **saturates**: within noise of 2 draws — the views-per-scene lever is exhausted, more *scenes* is the remaining data lever |
-| `--mask_upsample 2` (74×74 masks) | 0.662 | 0.677 | −0.022 | neutral (inside ±0.04 noise) — masks stay on the 37×37 grid. **Confirmed on the full-resolution ruler too** (docs/MASKDINO.md §7.7): 37×37's GT-only ceiling is 0.956 AP50 vs the model's ~0.69 — recognition binds, not resolution |
-| `--feature_mode bundle` (multi-view-aware tokens) | 0.622 | 0.651 | −0.048 | **negative result** per frame — but *required* for multi-view consistency (§3) |
-| `--multi_frame --feature_mode bundle` | 0.621 | 0.630 | −0.069 | −0.021 against its own control (`bundle`, 0.651) → per-frame neutral, and it buys the multi-view metric below |
-
-Job ids, caveats (the `--bundles_per_scene 2` job got a 2× step budget through an epoch-clamp
-bug, since fixed) and the reasoning: `docs/MASKDINO.md` §7.4.
-
-**+48 % mIoU, +138 % AP50 over the retired baseline head** for the plain N=490 recipe (0.669 / 0.699);
-**+54 % / +148 %** for the bolded `--bundles_per_scene 2` row (0.694 / 0.729). The curve is still rising at 490 scenes —
-all the official-GT tar holds — and overfitting eases with scale (train mIoU 1.000 → 0.994 →
-0.947), so the model is still data-limited.
-
-### Ablations at N=190 — no single ingredient carries the win
-
-| Config | val mIoU | val AP50 | ΔAP50 |
-|---|---|---|---|
-| full recipe | 0.594 | 0.624 | — |
-| `--no-two_stage` | 0.592 | 0.578 | −0.046 |
-| `--enc_layers 0` | 0.551 | 0.580 | −0.044 |
-| `--dn no` | 0.586 | 0.594 | −0.030 |
-| `--initialize_box_type no` | 0.610 | 0.608 | −0.016 |
-
-Every crippled variant still beats the baseline head by ~2×. Credit belongs to the architecture *class*, and
-**data scale dominates everything**: +0.26 AP50 from 50→490 scenes vs ≤0.05 from any component.
-Details and job ids: `docs/MASKDINO.md` §7.
-
-## 3. Multi-view protocol — the baseline head's own ruler, and now MaskDINO too
-
-Since 2026-07-28 the MaskDINO track can be scored on this ruler as well: with `--multi_frame`
-one query is one instance across all 8 views by construction (docs/MASKDINO.md §8.2), so its
-mask volume can be scored exactly like the baseline head's.
-
-| Model (N=490) | mIoU | AP50 | AP75 | mAP |
-|---|---|---|---|---|
-| the retired baseline head (N=190) | 0.367 | 0.199 | — | — |
-| MaskDINO `--multi_frame` (job 8900100) | 0.535 | 0.494 | 0.279 | 0.272 |
-| … `--no-cross_frame_attn` (job 8950617) | 0.393 | 0.311 | 0.089 | 0.132 |
-| … `--feature_mode single` (per-frame features, job 8950613) | 0.429 | 0.347 | 0.154 | 0.181 |
-| **… + `--bundles_per_scene 2 --color_jitter 0.2`** (job 9071415) | **0.539** | **0.515** | — | — |
-
-**+47 % mIoU, 2.6× AP50 on the baseline head's own protocol** (the 9071415 row, the current multi-view
-best; its per-frame numbers also rise to 0.643 / 0.667), with no post-hoc matching or fusion.
-
-The two ablation rows (2026-07-29, docs/MASKDINO.md §7.4.1) localise the result: **cross-frame
-attention is worth 0.183 bundle AP50** — the only individually-decisive component found anywhere
-in this track — and **bundle features are worth 0.147**. The same bundle features are a *negative*
-for per-frame accuracy (§2), so multi-view consistency has a measured price: 0.729 single-frame
-best vs 0.630 per-frame for the best multi-view model.
-
-### 3.1 The retired baseline head
-
-The bar row above (0.367 / 0.199 at N=190; 0.451 / 0.294 per-frame) is the best of a retired
-family of hand-rolled DETR-style heads — a query-initialisation study on the same frozen backbone
-and the same multi-view supervision. It is kept as the **single historical bar** and nothing else;
-the per-variant narrative, tables and verdicts are archived in `docs/old/ARMS_SUMMARY.md` and are
-not part of the current story.
-
-One conclusion from it still matters, because MaskDINO **inverts** it: that head got *worse* with
-more data (0.367@190 → 0.350@490), which at the time read as "the dataset is not the bottleneck".
-The MaskDINO scaling curve says otherwise — the old head was **architecture-limited, not
-data-limited**, and the old scaling result was a property of that head, not of the task.
-
-## 4. Ground-truth quality — why the older numbers do not transfer
-
-Switching from SAM3-generated GT to official ScanNet GT (2026-07-08) cost about half the honest
-AP50 headline. Any pre-2026-07-08 number in `docs/old/` is on the old ruler. Table and reasoning:
-`docs/DATASET.md` §1.
 
 ## 5. The 3D ruler — official ScanNet 3D instance benchmark (docs/MASKDINO.md §9)
 
@@ -297,7 +156,7 @@ and AP25 (0.360 vs 0.316)**, and exceeds IGGT on AP and AP25 while matching its 
 strictly frozen backbone, and *untuned* (all lifting knobs at their defaults, so the §9.8 sweep's
 headroom is unexplored on it). Three honesty notes that must travel with that sentence: it is a
 **single run against a single control**; the structural handicaps above (`otherfurniture`,
-~17 frames/scene against SegVGGT's 75–100) still apply; and (2026-08-06) **their column is
+and the view budget of the run itself) still apply; and (2026-08-06) **their column is
 class-agnostic and ours is class-aware**, so "exceeds FAST3DIS" is a cross-setting statement.
 **Job 9866391 has since landed the class-agnostic column for this row and the claim SURVIVES:
 0.042 / 0.138 / 0.504 — lead on AP50/AP25, lead IGGT on AP, tie FAST3DIS on AP** (table above,
@@ -944,7 +803,7 @@ block and never across blocks (§1). Every "vs" column names what the number is 
 | C | **2D, official 1201/312 split** (§6) | per-frame AP50 **0.669** · per-bundle AP50 **0.552** | job 8900194, 0.604 per-frame | scale holds on the honest split; own metric code → not a leaderboard number |
 | D | **3D, official benchmark, UNPOSED** — predicted depth+cameras (§5) | class-agnostic **0.042 / 0.138 / 0.504** (`--anchor_3d`; seed 1: 0.039 / 0.129 / 0.485) | FAST3DIS 0.038 / 0.096 / 0.316 · IGGT 0.028 / 0.112 / 0.287 | **lead on AP50 + AP25** (1.34–1.44× / 1.53–1.59× FAST3DIS), **tie FAST3DIS on AP**, lead IGGT on all three; frozen backbone, untuned, **2 seeds** (§5.2) |
 | E | **3D, official benchmark, POSED** — GT poses/intrinsics/depth (§5.1) | **0.088 / 0.260 / 0.572** (S=16, 20 ep) | SegVGGT 0.504 / 0.717 / 0.870 | still behind; the protocol explains 2.3×, the rest is real |
-| F | **COCO port check** (`docs/MASKDINO_COCO.md`, §1.4) | 46.133 mask AP / 51.549 box AP | upstream MaskDINO's own checkpoint, 46.1 / 51.5 | implementation is faithful; **not a project result** |
+| F | **COCO port check** (`docs/old/MASKDINO_COCO.md`, §1.4) | 46.133 mask AP / 51.549 box AP | upstream MaskDINO's own checkpoint, 46.1 / 51.5 | implementation is faithful; **not a project result** |
 | G | **3D, the other three benchmarks** — ScanNet200 / ScanNet++ / Replica (§7) | posed `--anchor_3d` **0.124 / 0.275 / 0.523** (ScanNet200) · 0.009 / 0.038 / 0.178 (ScanNet++) · 0.006 / 0.028 / 0.190 (Replica) | no like-for-like published row is held in this project (§7.3 reading 6) | zero-shot **fails** under the unposed bridge (0.000 everywhere) and survives weakly under the posed one; the split localises it to geometry vs masks |
 
 AP triples are always `AP / AP50 / AP25`. A/B/C are per-view 2D masks on our own metric code

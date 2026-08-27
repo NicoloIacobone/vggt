@@ -1,16 +1,17 @@
 # Note del relatore — deck `supervisors_2026-08-27.md`
 
 Documento di preparazione, **non** una slide. Per ogni slide: a cosa serve, come aprirla (frase
-pronta, in inglese, da dire ad alta voce), cosa dire, cosa **non** dire, e le domande che quella
-slide invita.
+pronta, in inglese), cosa dire, cosa **non** dire, e le domande che quella slide invita.
 
-Regole che valgono per tutto il talk:
+> **Il meeting è stato annullato: il deck viene inviato, non presentato.** Queste note restano utili
+> per due cose — rispondere ai messaggi che il deck genererà, e ricostruire il perché di ogni riga.
+> Le "aperture" sono conservate come sintesi in una frase di ogni slide.
 
-- **Ogni numero 3D va accompagnato da due etichette**: *posed / unposed* e *class-aware /
-  class-agnostic*. Un numero senza etichette non è confrontabile con nulla — la slide 3 esiste apposta.
-- **I numeri 2D interni non vanno mai accostati a un numero pubblicato** di un competitor. Sono
-  nostro codice di metrica su maschere per-vista: servono a scegliere checkpoint e a ordinare
-  ablation, non a fare classifica.
+Regole che valgono per tutto il documento:
+
+- **Ogni numero 3D va accompagnato da tre etichette**: *posed / unposed*, *class-aware /
+  class-agnostic* e **il numero di viste**. Un numero senza etichette non è confrontabile con nulla
+  — la slide 3 esiste apposta.
 - **Le righe con dati extra restano recintate** dalla riga headline (che è ScanNet-only).
 - **Tutto ciò che è addestrato su RE10K è supervisionato da SAM2** — le maschere sono output di un
   modello, non ground truth. Va detto ogni volta.
@@ -20,17 +21,19 @@ Regole che valgono per tutto il talk:
 
 ## Slide 1 — Titolo
 
-**Punto della slide:** dichiarare subito che la riunione ha due decisioni da prendere, non è un
-aggiornamento di stato.
+**Punto della slide:** dichiarare che cos'è il documento — un **aggiornamento di stato**, non una
+richiesta di decisioni. Il meeting è stato annullato e il deck viene inviato, quindi deve reggersi
+senza qualcuno che lo racconti.
 
-**Apertura:** *"Two things I need from you today: which of the last ablations to run, and whether
-this becomes a CVPR submission in November. Everything else on these slides is evidence for those
-two."*
+**Sintesi in una frase:** *"Where the project stands on the 3D benchmark, under what setting each
+number was produced, what is running right now, and what is still open."*
 
-**Cosa dire:** il progetto ha una headline che regge il confronto con la letteratura; le due
-domande aperte sono (a) come chiudere il buco nella tabella delle ablation e (b) se scrivere il
-paper. Anticipa che la struttura del talk è: setup → come si leggono i numeri → metodo → righello →
-risultati → decisioni.
+**Cosa dire (se se ne parla a voce):** il progetto ha una headline che regge il confronto con la
+letteratura; la struttura è setup → come si leggono i numeri → metodo → righello → risultati →
+cosa sta girando → cosa resta aperto. Le due domande che il deck poneva come "decisioni" non ci
+sono più: **la prima è stata semplicemente eseguita** (le due ablation sono partite, slide 12), e
+la seconda — se scrivere il paper — non ha bisogno di una slide dedicata per essere posta in un
+messaggio.
 
 ---
 
@@ -39,13 +42,13 @@ risultati → decisioni.
 **Punto della slide:** far capire in un minuto *che tipo* di sistema è. Le tre cose che contano:
 backbone congelato, feature in cache, supervisione solo 2D.
 
-**Apertura:** *"Three facts define this system: the backbone is frozen, its features are computed
+**Sintesi in una frase:** *"Three facts define this system: the backbone is frozen, its features are computed
 once and cached, and nothing but 2D masks ever supervises it."*
 
 **Cosa dire:**
 
 - *Frozen*: VGGT-1B non viene mai aggiornato. Nessun finetuning, nessun LoRA. Tutti i competitor
-  adattano il backbone; noi no, ed è una scelta che va rivendicata (slide 18), non giustificata.
+  adattano il backbone; noi no, ed è una scelta che va rivendicata (slide 14), non giustificata.
 - *Cached features* — è la domanda che ti faranno: **il backbone congelato viene eseguito una volta
   per scena, prima dell'addestramento, e i token che produce vengono salvati su disco. Il training
   loop legge solo quei token; il backbone non gira mai dentro il ciclo di training.** Conseguenza
@@ -74,7 +77,7 @@ non ground truth.
 nostri prodotti con protocolli diversi, o un nostro numero con un numero pubblicato sotto un altro
 setting. Se salti questa slide, il resto del talk diventa fragile.
 
-**Apertura:** *"Before any number: in this literature the same model can score four different
+**Sintesi in una frase:** *"Before any number: in this literature the same model can score four different
 things depending on the setting. So every number here carries its labels."*
 
 **Cosa dire:**
@@ -101,7 +104,7 @@ things depending on the setting. So every number here carries its labels."*
 
 **Perché è importante dirlo qui:** i due cluster di numeri pubblicati (FAST3DIS/IGGT intorno a
 0.03–0.04 AP, SegVGGT a 0.50) sembrano incoerenti finché non si sa che sono due ponti diversi.
-Se lo spieghi ora, la slide 12 non richiede difese.
+Se lo spieghi ora, la slide 11 non richiede difese.
 
 ---
 
@@ -110,14 +113,15 @@ Se lo spieghi ora, la slide 12 non richiede difese.
 **Punto della slide:** una sola idea — *una query è un'istanza in tutte le viste, per costruzione*.
 E il tensore di output che la rende concreta.
 
-**Apertura:** *"The whole model output is one tensor, and the reason it is one tensor is the point
+**Sintesi in una frase:** *"The whole model output is one tensor, and the reason it is one tensor is the point
 of the method."*
 
 **Cosa dire:**
 
 - Il decoder emette `pred_masks [B, N, S, h, w]`. Leggi la tabella ad alta voce: **B** bundle nel
   batch (un bundle = le S viste di una scena), **N** query condivise da tutto il bundle (in fase di
-  scoring ne teniamo le prime 100), **S** viste nello *stesso* forward pass (~17 per scena ScanNet),
+  scoring ne teniamo le prime 100), **S** viste nello *stesso* forward pass (addestrato a 8, e
+  generalizza: **fino a 50 in valutazione**, che è il budget dei competitor),
   **h × w = 37 × 37** che è la griglia di patch di VGGT, cioè la risoluzione su cui le maschere
   vengono predette.
 - La conseguenza: la query numero *n* è **lo stesso oggetto in tutte le S viste**. Non c'è un passo
@@ -125,10 +129,10 @@ of the method."*
   proprietà della rappresentazione, non un post-processing.
 - Il confronto retorico utile: chi fa fusione a posteriori deve decidere *dopo* che la maschera
   della vista 3 e quella della vista 7 sono lo stesso oggetto. Noi non abbiamo quel passo, quindi
-  non abbiamo neanche i suoi errori — ma abbiamo il costo opposto (slide 14: le bundle features
+  non abbiamo neanche i suoi errori — ma abbiamo il costo opposto (le bundle features
   costano −0.048 di AP per-frame).
 
-**Se chiedono perché 37×37 è così poco:** rimanda alla slide 15, punto 3 — è **misurato** che la
+**Se chiedono perché 37×37 è così poco:** è **misurato** che la
 risoluzione non è il collo di bottiglia: su quella griglia il ceiling con GT è 0.956 AP50 e il
 modello sta a ~0.69. Quello che lega è il riconoscimento.
 
@@ -139,7 +143,7 @@ modello sta a ~0.69. Quello che lega è il riconoscimento.
 **Punto della slide:** rispondere alla domanda "ma il decoder ha una sola modalità?". No: ne ha
 **due**, ed è l'ablation principale dello studio.
 
-**Apertura:** *"There are two versions of this decoder, and the difference between them is the one
+**Sintesi in una frase:** *"There are two versions of this decoder, and the difference between them is the one
 experiment nobody in the field has run."*
 
 **Cosa dire:**
@@ -161,12 +165,14 @@ experiment nobody in the field has run."*
   modalità bundle.
 - **La riga headline è quella con le ancore 3D**: valgono **+66 % di AP50 3D in entrambi i ponti** e
   riducono gli scambi di identità tra viste (−0.089), pur essendo neutre in 2D. È l'esempio pulito
-  del punto 4 della slide 15: *un meccanismo può comprare identità senza comprare accuratezza*.
+  di una regola che vale in tutto il progetto: *un meccanismo può comprare identità senza comprare
+  accuratezza*, quindi un meccanismo di identità si valuta sul righello 3D e sulle metriche di
+  identità (slide 14), mai sull'AP 2D da solo.
 - Chiudi con l'onestà: **nessuno dei due meccanismi è nostro.** Le query condivise tra viste sono di
   SegVGGT, le ancore 3D sono di FAST3DIS. Quello che non ha fatto nessuno è **metterle una contro
   l'altra dentro lo stesso decoder, con lo stesso backbone, gli stessi dati e lo stesso protocollo**.
 
-**Cosa NON dire:** mai "abbiamo inventato le ancore 3D". È esattamente il claim che la slide 17
+**Cosa NON dire:** mai "abbiamo inventato le ancore 3D". È esattamente il claim che la slide 13
 smonta, e un revisore lo smonterebbe in dieci secondi.
 
 ---
@@ -176,7 +182,7 @@ smonta, e un revisore lo smonterebbe in dieci secondi.
 **Punto della slide:** stabilire che il righello non è nostro. È lo script ufficiale, verificato, e
 lo stesso su tutti e quattro i benchmark.
 
-**Apertura:** *"The evaluator is not ours, and that is deliberate."*
+**Sintesi in una frase:** *"The evaluator is not ours, and that is deliberate."*
 
 **Cosa dire:**
 
@@ -193,7 +199,7 @@ lo stesso su tutti e quattro i benchmark.
 - Sugli altri tre riportiamo **solo class-agnostic**: la nostra testa ha 19 classi ScanNet e quelle
   tassonomie non sono le nostre. Inventare una corrispondenza sarebbe fabbricare un confronto, non
   misurarlo. Su ScanNet200 le etichette esistono ma sono 200: stesse scene, stesse tar, tassonomia
-  diversa — per questo "costa zero dati" (slide 13).
+  diversa — per questo "costa zero dati".
 
 **Domanda attesa — "Quindi su ScanNet++ e Replica usate il benchmark di ScanNet?"** Usiamo il
 **codice** dell'evaluator di ScanNet sul GT *di quei dataset*. È la stessa metrica applicata a
@@ -208,7 +214,7 @@ evidenza interna, non un confronto.
 **Punto della slide:** spiegare *come* le maschere 2D diventano istanze 3D, e perché quel passo da
 solo vale 2.3×.
 
-**Apertura:** *"Our model predicts 2D masks. The benchmark scores 3D instances. Everything
+**Sintesi in una frase:** *"Our model predicts 2D masks. The benchmark scores 3D instances. Everything
 interesting happens in between."*
 
 **Cosa dire:**
@@ -232,7 +238,7 @@ interesting happens in between."*
 - **Il ponte da solo vale 2.3× di AP50.** Ripetilo: è il motivo per cui i numeri pubblicati sembrano
   incoerenti tra loro e il motivo per cui noi pubblichiamo **entrambe** le colonne.
 - **Ceiling del setup:** le maschere GT spinte attraverso il ponte posed fanno
-  **0.828 / 0.948 / 0.974**. Non è 1.0 perché ~17 viste non coprono tutta la scena: è il tetto del
+  **0.828 / 0.948 / 0.974**. Non è 1.0 perché un budget di viste finito non copre tutta la scena: è il tetto del
   budget di viste, non un difetto del modello.
 - **Non far collegare due numeri che non c'entrano** (errore già capitato leggendo questa slide):
   il **2.3×** è il rapporto *posed ÷ unposed* sullo **stesso** checkpoint e sulle **stesse**
@@ -254,285 +260,178 @@ etichettata.
 
 **Punto della slide:** è **la** slide del progetto. Un solo claim.
 
-**Apertura:** *"This is the row the whole project is for. Same benchmark, same evaluator, same
-bridge, same label setting as the two published feed-forward competitors."*
+**Sintesi in una frase:** *"This is the row the whole project is for. Same benchmark, same
+evaluator, same bridge, same label setting — and, since today, the same number of views as the two
+published feed-forward competitors."*
 
 **Cosa dire:**
 
-- Setting: benchmark 3D ufficiale di ScanNet, **unposed** e **class-agnostic** — cioè esattamente il
-  setting in cui i due competitor pubblicano.
-- Il claim, parola per parola: **su due seed, guidiamo su AP50 (1.34–1.44×) e su AP25 (1.53–1.59×),
-  siamo in PARITÀ con FAST3DIS su AP, e siamo avanti a IGGT su tutte e tre** — con backbone
-  congelato, circa un terzo delle loro viste, e tutti i parametri di lifting ai valori di default.
-- La riga extra-data (0.057 / 0.166 / 0.516) resta **recintata**: è la norma del campo (lo fa anche
-  il README di MaskDINO). Il claim sul *meccanismo* poggia sulla riga ScanNet-only; il claim sullo
-  *scaling* su quella extra-data.
+- Setting: benchmark 3D ufficiale di ScanNet, **unposed**, **class-agnostic**, **50 viste** — cioè
+  esattamente il setting in cui i due competitor pubblicano.
+- Il claim, parola per parola: **a viste appaiate guidiamo su tutte e tre le colonne**, 1.39× /
+  1.77× / 1.72× su FAST3DIS, con backbone congelato e tutti i parametri di lifting ai default.
+- **La differenza rispetto a prima è l'asse viste, non il modello.** È lo stesso checkpoint: a 17
+  viste su AP eravamo in **pareggio** con FAST3DIS, a 50 siamo avanti. Il confronto non è
+  migliorato perché abbiamo cambiato modello, ma perché abbiamo smesso di confrontarci su un terzo
+  delle loro viste.
+- **E le viste non sono una leva aperta**: 50 → 71 è piatto o leggermente negativo. Satura
+  esattamente dove loro riportano, quindi è un confronto appaiato e non una gara di budget.
+- La riga extra-data resta **recintata**: il claim sul *meccanismo* poggia sulla riga ScanNet-only,
+  quello sullo *scaling* su quella extra-data.
 
-**Cosa NON dire — errore già commesso una volta in questo progetto:** *"avanti su tutte e tre"* per
-la riga ScanNet-only. **Su AP è un pareggio** (0.039–0.042 contro 0.038, dentro la nostra dispersione
-di seed). "Avanti su tutte e tre" è autorizzato **solo** per la riga extra-data, e solo con
-l'etichetta extra-data attaccata.
+**Cosa NON dire:** *"avanti su tutte e tre"* **senza dire a quante viste**. Il lead su AP esiste a
+50 viste; a 17 quella colonna è un pareggio. È la stessa specie di errore che il progetto ha già
+commesso una volta, solo con un'etichetta diversa. E le righe a 50 viste sono **un seme solo**: la
+replica a due semi è quella a 17 viste.
 
 **Attribuzione obbligatoria:** IGGT va sempre citato come *"as re-evaluated by FAST3DIS"*. IGGT non
 pubblica **nessun** AP su ScanNet: quella tripla è la ri-valutazione fatta da FAST3DIS.
 
----
-
-## Slide 9 — The four caveats
-
-**Punto della slide:** dire tu i limiti prima che li dicano loro. Rende credibile tutto il resto.
-
-**Apertura:** *"Four caveats travel with that table. I would rather state them than be asked."*
-
-**Cosa dire:** i quattro punti sono già sulla slide; il modo di raccontarli conta.
-
-1. **Due seed, ma una run per cella** — e soprattutto **una sola riga pubblicata per competitor**:
-   la debolezza statistica sta dalla *loro* parte, non solo dalla nostra.
-2. **Non siamo training-matched, e l'asimmetria è a nostro favore.** Entrambi i competitor sono
-   *zero-shot* su ScanNet (FAST3DIS addestra solo su Aria/ASE, IGGT su InsScene-15K), noi ci
-   addestriamo. Va detto ad alta voce, e va detto che le due run "no-ScanNet" che chiudono questo
-   asse sono già in coda (slide 19).
-3. **Il segno del class collapse dipende dal checkpoint.** La stessa ricetta *senza* ancore 3D fa
-   0.017 / 0.060 / 0.334 class-agnostic **con i parametri di lifting ottimizzati** (0.013 / 0.050 /
-   0.320 ai default): avanti su AP25, ~2× indietro su AP50/AP. Quindi non è un confronto
-   default-contro-default e l'etichetta va portata.
-4. **Due asimmetrie corrono nell'altro senso**: il nostro backbone è congelato, e usiamo ~17 viste
-   contro 50.
-
-**Nota per te:** i punti 2 e 4 insieme sono il messaggio vero — le asimmetrie non sono tutte dalla
-stessa parte, e sono tutte dichiarate. È questo che rende la riga headline difendibile.
+**Perché la riga "lifting ottimizzato" non c'è più.** C'era una riga con i due parametri del ponte
+2D→3D ottimizzati (0.055 / 0.185 / 0.571). È uscita perché lo sweep gira **sullo stesso split di
+validazione su cui riportiamo**: citarne l'argmax sarebbe tuning sul test set, e senza la slide di
+backup che lo spiegava sarebbe rimasto un numero non protetto. Se qualcuno chiede *"e se aveste
+scelto i parametri di lifting a posteriori?"*, la risposta pronta è: sul checkpoint con ancore 3D
+**ogni punto della griglia sta sopra FAST3DIS**, e il punto **peggiore** dello sweep è ancora
+1.44× il suo AP50 — comunque si giri la manopola la conclusione non cambia.
 
 ---
 
-## Slide 10 — The matched axes
+## Slide 9 — The matched axes
 
 **Punto della slide:** dimostrare che il confronto è stato costruito **con il setting del
 competitor**, asse per asse, e non con il nostro.
 
-**Apertura:** *"Every competitor-facing row is produced under the competitor's own setting. Here is
-the audit, axis by axis."*
+**Sintesi in una frase:** *"Every competitor-facing row is produced under the competitor's own
+setting. Here is the audit, axis by axis."*
 
-**Cosa dire:** non leggere tutte le righe. Leggine tre e dichiara il resto:
+**Cosa dire:** non leggere tutte le righe. Tre bastano:
 
-- evaluator ufficiale vendored → *matched*;
-- il ponte unposed è la stessa convenzione Sim(3)+ICP di FAST3DIS → *matched*;
-- il ponte posed è il "geometric GT" di SegVGGT, **certificato al 99.99 %** → *matched, e verificato,
-  non assunto*;
-- e poi la riga che ti fa risparmiare una discussione: **kept queries**. SegVGGT ne tiene 600, noi
-  100 — e l'abbiamo **misurato**: 0.138 → 0.140. È dentro il rumore, quindi **quella spiegazione del
-  gap è cancellata**. Averlo misurato e averla cancellata è più forte che averla lasciata come
-  scusa.
+- l'evaluator ufficiale vendored → *matched*;
+- il ponte posed è il "geometric GT" di SegVGGT, **certificato al 99.99 %** → *matched, e
+  verificato, non assunto*;
+- **le viste** — la riga nuova, ed è quella che vale la pena leggere: era l'ultimo asse di
+  valutazione non appaiato, ed è stata chiusa il 2026-08-27 con l'export denso dei frame.
+- e la riga che fa risparmiare una discussione: **kept queries**. SegVGGT ne tiene 600, noi 100 — e
+  l'abbiamo **misurato**: 0.138 → 0.140. È dentro il rumore, quindi **quella spiegazione del gap è
+  cancellata**. Averlo misurato e averla cancellata è più forte che averla lasciata come scusa.
+
+**La riga train split, e perché non contraddice la slide dopo.** Qui `train split` dice *matched*,
+la slide 10 dice *not matched*: non è un'incoerenza, sono **competitor diversi**, ed è per questo
+che ora la riga porta il nome. **SegVGGT addestra sullo stesso split ufficiale 1201 su cui
+addestriamo noi** (verificato sul paper: *"1,201 training scenes… 8 A100, ~2 days per dataset"*),
+quindi verso SegVGGT quell'asse è appaiato. FAST3DIS e IGGT su ScanNet **non si addestrano
+affatto** — ed è la prima riga della slide 10.
 
 ---
 
-## Slide 11 — The three gaps
+## Slide 10 — Gli assi non appaiati
 
-**Punto della slide:** i tre assi **non** matched, ciascuno con la direzione dichiarata. È la slide
-dell'onestà, e va detta con tono neutro.
+**Punto della slide:** gli assi **non** matched, ciascuno con la direzione dichiarata. È la slide
+dell'onestà, e va tenuta con tono neutro.
 
-**Apertura:** *"Three axes are not matched. Two of them are being closed, one never will be — and
-they do not all run in the same direction."*
+**Sintesi in una frase:** *"Two axes are not matched, and they do not run in the same direction."*
 
 **Cosa dire:**
 
-- **Viste (~17 contro 50, o 75–100 di SegVGGT): corre CONTRO di noi.** È il meglio disponibile oggi
-  perché il sottoinsieme di frame che abbiamo estratto è quello; l'export denso è in coda (slide 19).
-- **Dati di addestramento: corre A FAVORE nostro** — loro sono zero-shot su ScanNet, noi no. Le due
-  run "no-ScanNet" chiudono questo asse.
+- **Dati di addestramento: corre A FAVORE nostro** — FAST3DIS e IGGT sono **zero-shot su
+  ScanNet**, noi no. Va detto ad alta voce, ed è il tipo di asimmetria che un revisore trova da
+  solo se non gliela dici tu. Le due run "no-ScanNet" (slide 15) lo chiudono.
 - **Compute: ~0.8 contro ~16 GPU-days, e non è colmabile.** Va presentato come **forza, non come
   scusa**: è la conseguenza diretta del backbone congelato con feature in cache.
-- **ASE** (il dataset di FAST3DIS): 9.2 TB e con il 40 % della lista di scene non pubblicata.
-  Fuori portata in modo permanente — e non è un nostro limite, è una proprietà della loro release.
+- **ASE**: 9.2 TB e il 40 % della lista di scene non pubblicato. Attenzione a *cosa* è fuori
+  portata: **non il dataset — la lista di scene** (vedi slide 16, ASE è scaricabile).
+- **L'asimmetria che corre nell'altro senso e non è in tabella:** il nostro backbone è congelato,
+  i loro sono entrambi adattati.
 
-**La frase che chiude la slide:** *"a comparison with no state named is not ready to be shown"* —
-ogni riga verso un competitor è **matched**, **closest-available-and-declared**, oppure
-**permanentemente impossibile**. Tre stati, mai mescolati.
+**Cosa è sparito rispetto alla versione precedente di questo deck:** la riga *viste*, che era il
+terzo asse non appaiato. Ora è appaiata e sta nella slide 9.
+
+**La frase che chiude la slide:** ogni riga verso un competitor è **matched**,
+**closest-available-and-declared**, oppure **permanentemente impossibile**. Tre stati, mai
+mescolati — *"a comparison with no state named is not ready to be shown"*.
 
 ---
 
-## Slide 12 — The posed comparison vs SegVGGT, e dove va il gap
+## Slide 11 — The posed comparison vs SegVGGT, e dove va il gap
 
 **Punto della slide:** mostrare le stesse maschere sotto entrambi i ponti, e far vedere che il
-salto è sistematico (2.3× su ogni riga).
+salto è sistematico (2.2–2.3× su ogni riga).
 
-**Apertura:** *"Same masks, two bridges. The ratio is the same on every row, which is what makes it
-a property of the protocol rather than of a checkpoint."*
+**Sintesi in una frase:** *"Same masks, two bridges. The ratio is the same on every row, which is
+what makes it a property of the protocol rather than of a checkpoint."*
 
 **Cosa dire:**
 
-- Le righe sono quattro checkpoint nostri: la **run di controllo** (quella su cui è ancorata la
-  decomposizione della seconda metà della slide), quella con **ancore 3D**, quella con **bundle più largo
-  (16 viste)**, e le due cose insieme.
+- Le righe sono quattro checkpoint nostri: la **run di controllo**, quella con **ancore 3D** (la
+  riga su cui è ancorata la decomposizione), quella con **bundle più largo (16 viste)** e quella con
+  **dati extra a 50 viste**.
 - Il fatto notevole non è nessuna riga singola: è che **il rapporto posed/unposed è 2.2–2.3× su
-  tutte**. Cioè il ponte è una costante moltiplicativa del protocollo, non un effetto di un
-  particolare modello.
-- L'**oracolo** (GT attraverso il ponte posed, 0.828 / 0.948 / 0.974) dice dove sta il tetto con ~17
-  viste.
+  tutte**. Il ponte è una costante moltiplicativa del protocollo, non un effetto di un modello.
+- L'**oracolo** (GT attraverso il ponte posed, 0.828 / 0.948 / 0.974) dice dove sta il tetto del
+  protocollo.
 - SegVGGT, pubblicato e posed: 0.504 / 0.717 / 0.870. **Siamo dietro, e va detto in chiaro** — poi
   la seconda metà della slide dice di quanto e perché.
 
 **Regola:** le due colonne viaggiano sempre insieme. Non mostrare mai la colonna posed da sola:
 fuori contesto sembra un risultato migliore di quello che è.
 
-**Seconda metà della slide — punto:** trasformare "siamo 10 volte dietro" in "sappiamo esattamente dove vanno quelle
-10 volte, e due terzi delle cause sono scelte nostre".
+**La decomposizione — e l'unico modo corretto di citarla.**
 
-**Aggancio alla seconda metà:** *"We are behind SegVGGT by about ten times. That number decomposes, and the
-decomposition is the interesting part."*
-
-**Cosa dire:**
-
-- Dei **×10.7**: **2.3 è il ponte** (protocollo, non modello) e **~4.6 è reale**.
-- Il ~4.6 è comprato con quattro cose che noi **abbiamo scelto di non avere**: backbone adattato con
-  LoRA contro congelato; 75–100 viste contro ~17; maschere 259×196 contro 37×37; 600 query tenute
-  contro 100 — e **quest'ultima l'abbiamo misurata ed è neutra** (0.138 → 0.140), quindi esce
-  dall'elenco delle spiegazioni.
-- **Attenzione, e va detto:** la decomposizione è ancorata **alla riga di controllo**
-  (0.067 unposed → 0.156 posed contro 0.717 di SegVGGT). Le righe migliori della tabella qui sopra
-  hanno un
-  residuo *più piccolo*, ma **non abbiamo un numero autorizzato per quel residuo**. Quindi si cita
-  la decomposizione **nominando la riga**, e non la si ricalcola mai su un'altra riga.
-- **Se qualcuno chiede "ma perché il vostro AP è così basso in assoluto?"**: la baseline
-  image-only nella **tabella di SegVGGT stessa**, OneFormer3D†, fa **5.4 / 10.2 / 17.4**. Quella
-  tabella riporta l'AP in percentuale, quindi sulla scala di queste slide quella baseline sta nello
-  stesso intervallo delle nostre righe posed. Serve a ricalibrare l'aspettativa: in questo
-  benchmark, in questo setting, i numeri sono piccoli per tutti tranne SegVGGT.
-
-**Nota sulla fusione:** questa slide era due (il confronto posed e la decomposizione del gap). Sono state unite perché la seconda senza la prima non si legge: la tabella fornisce la riga di controllo su cui la decomposizione è ancorata.
+- Sulla riga con **ancore 3D**: distanza totale **×6.4**, di cui **×2.3 è il ponte** (protocollo,
+  non modello) e **×2.8 è reale**.
+- Il ×2.8 è comprato con tre cose che noi **abbiamo scelto di non avere**: backbone adattato con
+  LoRA contro congelato; 75–100 viste contro 50; maschere 259×196 contro 37×37. Una quarta
+  candidata — 600 query tenute contro 100 — **l'abbiamo misurata ed è neutra** (0.138 → 0.140),
+  quindi esce dall'elenco.
+- **Attenzione:** il residuo **dipende dal checkpoint**. Il vecchio **×4.6** era ancorato alla riga
+  di *controllo* (×10.7 totale); sulla riga con ancore 3D è ×2.8. Si cita **nominando la riga**, e
+  non lo si ricalcola mai su un'altra.
+- Sulla riga migliore la distanza grezza scende a **1.71×** — ma la loro colonna è class-aware e la
+  nostra class-agnostic, quindi è una *direzione*, non un rapporto like-for-like.
+- **Se qualcuno chiede "ma perché il vostro AP è così basso in assoluto?"**: la baseline image-only
+  nella **tabella di SegVGGT stessa**, OneFormer3D†, fa **5.4 / 10.2 / 17.4**. Serve a ricalibrare
+  l'aspettativa: in questo benchmark, in questo setting, i numeri sono piccoli per tutti tranne
+  SegVGGT.
 
 ---
 
-## Slide 13 — The other three benchmarks
+## Slide 12 — Chiudere la tabella delle ablation sul righello 3D
 
-**Punto della slide:** due cose che ScanNet da solo non può mostrare — dove pagano i dati extra, e
-dove esattamente fallisce lo zero-shot.
+**Punto della slide:** non è più una domanda aperta — è un lavoro **lanciato**, e la slide dice
+perché è stato lanciato in due pezzi invece che in uno.
 
-**Apertura:** *"ScanNet alone cannot show two things: what the extra data actually buys, and where
-the system breaks out of domain."*
-
-**Cosa dire:**
-
-- **Non è un'ablation**: non si toglie niente al modello. È **un solo checkpoint** misurato su
-  quattro dataset, quindi misura *transfer* — quanto lontano arriva lo stesso modello. E i tre
-  benchmark non sono tutti "fuori dominio": **ScanNet200 sono le stesse scene** con una tassonomia
-  a 200 classi (dominio identico, compito più difficile), mentre **ScanNet++ e Replica sono
-  davvero out-of-domain**.
-- Prima riga: il checkpoint **ScanNet-only**, cioè lo stesso della headline, sui tre altri benchmark.
-- Seconda riga: **con i dati extra**. Il confronto tra le due è il punto della slide: su ScanNet++
-  (0.009 → 0.019) e su Replica (0.006 → 0.040) i dati extra pagano **molto più** che su ScanNet.
-  **È l'unica misura nel progetto di qualcosa che il righello ScanNet non vede.**
-- Il risultato negativo, che è forse il più informativo del progetto: **lo zero-shot muore sotto il
-  ponte unposed** — ogni cella fuori dominio è 0.000 AP / 0.000–0.001 AP50 su tutte e quattro le run
-  di dati — **e sopravvive, debolmente, sotto quello posed**. Poiché l'unica differenza tra i due
-  ponti è la geometria, **il fallimento è localizzato nella geometria, non nelle maschere**. Le
-  maschere fuori dominio ci sono; è la ricostruzione feed-forward che non regge.
-- **ScanNet200 costa zero dati aggiuntivi**: stesse scene, stesse tar, tassonomia diversa.
-- Chiudi con la recinzione: **qui non esiste una riga pubblicata confrontabile**. È evidenza, non
-  classifica.
-
----
-
-## Slide 14 — What actually buys the result
-
-**Punto della slide:** ordinare le leve per importanza misurata, e far vedere che l'ultima colonna
-("measured on") nasconde il problema che diventerà la decisione (a).
-
-**Apertura:** *"Ranked by what we measured, not by what we expected. And read the last column —
-it is the reason for the first decision I am asking you for."*
+**Sintesi in una frase:** *"The two mechanisms that carry multi-view consistency had no 3D number.
+Both are running as of today."*
 
 **Cosa dire:**
 
-- **Il primo posto sono i dati** (+0.26 AP50 da 50 a 490 scene): domina tutto il resto, e nessuna
-  scelta architetturale si avvicina.
-- **"Perché 50→490 se ormai siamo a 3520 scene?"** — domanda attesa, e la risposta è "righelli
-  diversi". Quella riga è la *curva di scala* del righello interno su project-val, che esiste solo
-  fino a 490 scene: è la riga storica che ha stabilito la direzione. Le run grandi vivono sullo
-  split ufficiale 1201/312 e stanno sotto la tabella: per-bundle AP50 **0.548** (ScanNet, 1201
-  scene) → **0.604** (+ScanNet++ +Infinigen, 3520 scene, a convergenza), `id_switch` 0.441 → 0.414;
-  il loro corrispettivo 3D è la riga extra-data della headline (0.042 / 0.138 / 0.504 →
-  0.057 / 0.166 / 0.516). Le due curve non si sommano e non si confrontano. **Caveat da dire da
-  soli:** la riga a 3520 scene è confrontata *a convergenza*, non a passi uguali — "più dati" e
-  "più compute" non sono ancora separati, ed è ciò che chiude la seconda riga della slide 19.
-- Poi le due leve multi-vista (+0.183 e +0.147), che però portano il ⚠ perché sono misurate **solo
-  in 2D**.
-- Poi le leve che hanno un numero 3D: **ancore 3D** (+66 % di AP50 3D in entrambi i ponti),
-  **larghezza del bundle** 8→16 viste (+46 % AP50 3D unposed) e i **parametri di lifting**.
-- In fondo, i risultati **negativi**, che sono altrettanto importanti: **nessun singolo componente
-  del decoder** (two-stage, encoder, denoising, box init) vale più di 0.046, e la **risoluzione
-  delle maschere** è neutra. Cioè: non c'è un trucco architetturale che stiamo trascurando.
-- L'ultima colonna dice su quale righello ogni Δ è stato misurato. **Due righe dicono "solo 2D".**
-  Tieni il dito lì e passa alla slide 16.
+- Il problema in una frase: la headline vive sul righello 3D, ma le due leve che portano la
+  consistenza multi-vista — **cross-frame attention** e **bundle features** — erano misurate solo
+  sulle metriche 2D interne. Tutte le altre leve (ancore 3D, larghezza bundle, lifting) hanno un
+  numero 3D. Queste due no.
+- Perché conta per il paper: un revisore chiederà perché la tabella delle ablation non è sullo
+  stesso righello della tabella dei risultati. È una domanda giusta, e ora ha una risposta in corso.
+- **I due prezzi, e non vanno mai mediati** — è la ragione per cui sono due job:
+  - *"niente cross-frame attention"*: il checkpoint sullo split ufficiale **esiste già** → costa
+    **una singola run di valutazione 3D** (~1 h). Job 11986399.
+  - *"feature per-frame"*: di quel braccio **non esisteva alcun checkpoint** sullo split ufficiale
+    → serve **una nuova run di addestramento** da 12 epoche (~19 h) prima di poterlo valutare.
+    Job 11986440.
+- In entrambi i casi **una variabile sola**: stesso decoder, stesso backbone congelato, stesso
+  split, stessa schedule della run di controllo.
+
+**Nota:** finché non atterrano, le due leve non hanno un numero 3D quotabile. Non anticipare un
+segno: l'unica cosa che si può dire è che sono in misura.
 
 ---
 
-## Slide 15 — Four conclusions
-
-**Punto della slide:** le quattro conclusioni che sopravvivono a tutto il resto. Se il pubblico
-ricorda solo una slide di contenuto tecnico, deve essere questa.
-
-**Apertura:** *"Four things I would defend in a rebuttal."*
-
-**Cosa dire:**
-
-1. **Limitati dai dati, non dall'architettura.** La prova non è la curva: è che il checkpoint
-   *leak-free* addestrato su 1201 scene **batte** quello che aveva **visto** le scene di validazione
-   (0.083 contro 0.052 AP50, righello 3D). Più dati battono la fuga di dati — un risultato
-   controintuitivo che chiude la questione.
-   **Cos'è il "leak", se lo chiedono** — ed è una domanda giusta, perché oggi non esiste più: prima
-   che il progetto passasse allo split ufficiale, alcuni checkpoint erano addestrati sulle scene
-   0000–0489, che **si sovrappongono** alle scene su cui venivano poi validati. Il modello veniva
-   cioè valutato in parte su scene già viste, e il numero era gonfiato. Da quando si usa lo split
-   ufficiale **1201 train / 312 val**, disgiunti, il problema non c'è più: **ogni numero di questo
-   deck è leak-free**. L'unico punto in cui la parola ritorna è la slide 16: il checkpoint
-   `feature_mode single` che esiste già è uno di quelli vecchi, ed è esattamente per questo che il
-   suo numero sarebbe solo diagnostico e serve una run nuova.
-2. **A legare ora è il lifting, non il decoder** — AP25 è circa **4×** AP50: cioè gli oggetti li
-   troviamo (AP25), ma i confini 3D non sono abbastanza precisi da superare la soglia più severa.
-   Il problema è il ponte, non le maschere.
-3. **E non è nemmeno la risoluzione**: sulla griglia 37×37 il GT fa 0.956 AP50, il modello ~0.69.
-   Il collo di bottiglia è il **riconoscimento**.
-4. **Riconoscimento e identità cross-vista sono assi separati.** Un meccanismo può comprare identità
-   senza comprare accuratezza — le ancore 3D sono esattamente questo caso. Corollario operativo:
-   un meccanismo di identità si valuta sul righello 3D, mai sull'AP 2D da sola.
-
-Ripeti prima di iniziare: **ogni Δ va letto contro la dispersione di seed misurata, 0.009**. Sotto
-quella soglia è rumore.
-
----
-
-## Slide 16 — The hole in the ablation table → decisione (a)
-
-**Punto della slide:** è la prima domanda concreta. Non è "abbiamo un problema", è "ecco due prezzi,
-scegliete".
-
-**Apertura:** *"Here is the first decision. The two strongest levers in this study have no 3D
-number, and putting them on the 3D ruler costs two very different amounts."*
-
-**Cosa dire:**
-
-- Il problema in una frase: la headline vive sul righello 3D, ma le **due leve più decisive** —
-  cross-frame attention (+0.183) e bundle features (+0.147), cioè **20× e 16×** la dispersione di
-  seed — sono misurate **solo in 2D**. Tutte le altre leve (ancore 3D, larghezza bundle, lifting)
-  hanno un numero 3D. Queste due no.
-- Perché conta per il paper: un revisore chiederà perché la tabella delle ablation non è sullo stesso
-  righello della tabella dei risultati. È una domanda giusta.
-- **I due prezzi, e non vanno mai mediati:**
-  - *"niente cross-frame attention"*: il checkpoint **esiste già** (job 9503176), addestrato sullo
-    split ufficiale 1201, senza leak → costa **una singola run di valutazione 3D**. Praticamente
-    gratis.
-  - *"feature per-frame"*: il checkpoint esistente (job 8950613) è addestrato su scene 0000–0489,
-    che **si sovrappongono al validation split** → quel numero sarebbe *leaked* e quindi solo
-    diagnostico. Serve **una nuova run di addestramento**.
-- La domanda che poni: **facciamo solo la metà gratis, o anche la nuova run?**
-
----
-
-## Slide 17 — Positioning → decisione (b)
+## Slide 13 — Positioning — what the field already owns
 
 **Punto della slide:** dire per primi ciò che un revisore direbbe contro di noi. È l'unico modo di
 avere credibilità sulla slide successiva.
 
-**Apertura:** *"Before I claim anything: 'frozen VGGT plus a decoder' is the dominant pattern of the
+**Sintesi in una frase:** *"Before I claim anything: 'frozen VGGT plus a decoder' is the dominant pattern of the
 last twelve months. The architecture on its own is not a contribution — so let me be precise about
 what is and is not ours."*
 
@@ -555,12 +454,12 @@ verificabile in dieci secondi.
 
 ---
 
-## Slide 18 — What IS ours
+## Slide 14 — What IS ours
 
 **Punto della slide:** dopo aver ceduto tutto, dire i tre claim che restano — e che sono
 difendibili.
 
-**Apertura:** *"So what is left is not a mechanism. It is three things."*
+**Sintesi in una frase:** *"So what is left is not a mechanism. It is three things."*
 
 **Cosa dire:**
 
@@ -570,9 +469,16 @@ difendibili.
    è il contributo con la vita più lunga.
 2. **Risultati 3D competitivi da un backbone strettamente congelato**, a ~0.8 GPU-days contro ~16.
    Tutti gli altri adattano il backbone. È il claim con l'impatto pratico più immediato.
-3. **Consistenza intrinseca alla query, non a posteriori — e ora misurata**: view consistency
-   0.734, identity switches 0.414. Il punto è "misurata": prima era un'affermazione architetturale,
-   ora è un numero.
+3. **Consistenza intrinseca alla query, non a posteriori — e ora misurata su un righello
+   pubblicato.** Il punto è cambiato dal 2026-08-27, e il cambiamento va capito bene: prima
+   citavamo `view_consistency` 0.734 e `id_switch` 0.414, che sono **definizioni nostre** senza
+   alcun corrispettivo pubblicato — nessuno dei tre competitor riporta una metrica di consistenza
+   cross-view. Ora l'eval riporta **HOTA / AssA / DetA / IDF1**, le metriche della letteratura di
+   tracking, con le viste del bundle lette come istanti temporali e una query come una traccia.
+   **La mappatura è esatta per costruzione, non inventata** — ed è proprio la proprietà che la
+   metrica deve certificare: non c'è nulla da tracciare, appaiare o fondere prima. I numeri
+   arrivano con i job di ri-scoring (slide 15); fino ad allora la vecchia coppia va citata solo
+   con l'etichetta "definita dal progetto".
 
 **Tieni pronto "why not just splat?":** i metodi basati su Gaussian Splatting / NeRF ottengono la
 consistenza multi-vista per costruzione, ma richiedono **ottimizzazione per scena**. Il nostro è
@@ -581,146 +487,123 @@ feed-forward, senza ottimizzazione, non richiede geometria GT né sensore di pro
 
 ---
 
-## Slide 19 — In flight
+## Slide 15 — In flight
 
-**Punto della slide:** far vedere che i due assi non matched si stanno già chiudendo, e che una run
-fallita è stata diagnosticata invece che nascosta.
+**Punto della slide:** far vedere che gli assi non appaiati si stanno chiudendo, che una run fallita
+è stata diagnosticata invece che nascosta, e che una riga è già stata **chiusa** e ha spostato la
+headline.
 
-**Apertura:** *"Four things are running right now, and one of them already failed once."*
+**Sintesi in una frase:** *"Six things are in the queue or just finished, one of them already
+failed once, and one of them changed the headline this morning."*
 
 **Cosa dire:**
 
-- **Le due run senza ScanNet** sono quelle che rendono il confronto **training-matched**: addestrano
-  sulla mistura di IGGT **meno ASE**, e non vedono mai ScanNet. Insieme alle due run con ScanNet
-  completano un quadrato 2×2 {± ScanNet} × {± RE10K}, in cui ogni lato è **una variabile sola**.
-  Formulazione obbligatoria: *"la mistura di IGGT meno ASE, con RE10K sottocampionato"* — mai *"i
-  dati di addestramento di IGGT"*.
-- **Più dati ⇄ più compute**: separa i due al vertice della scala; è la coppia rilanciata a learning
-  rate dimezzato.
+- **Le due run senza ScanNet** rendono il confronto **training-matched**: addestrano sulla mistura
+  di IGGT **meno ASE**, e non vedono mai ScanNet. Insieme alle due con ScanNet completano un
+  quadrato 2×2 {± ScanNet} × {± RE10K}, in cui ogni lato è **una variabile sola**. Formulazione
+  obbligatoria: *"la mistura di IGGT meno ASE, con RE10K sottocampionato"* — mai *"i dati di
+  addestramento di IGGT"*. Una delle due è **finita** e le sue valutazioni 3D stanno girando ora.
+- **Più dati ⇄ più compute**: separa i due al vertice della scala; è la coppia rilanciata a
+  learning rate dimezzato. Una delle due è finita.
 - **La run RE10K** — dire sempre **SAM2-supervised**, maschere generate da un modello.
-- **Viste per scena 17 → 50 / 100**: chiude l'ultimo asse di *valutazione* non matched.
+- **Le due righe nuove di oggi**: la tabella delle ablation sul righello 3D (slide 12) e il
+  ri-scoring sulle metriche di identità formali (slide 14).
+- **Viste per scena 17 → 50**: **chiusa**, ed è la riga che ha spostato la headline della slide 8.
+  Vale la pena dirlo esplicitamente: era l'ultimo asse di *valutazione* non appaiato.
 - **La run fallita.** Raccontala per intero, è un punto di forza: la prima run su RE10K è
   **divergita** — miglior epoca la 2 su 17, loss di training in salita, AP50 di training crollato a
-  **0.006**, e celle 3D **sotto** il controllo ScanNet-only proprio sul dominio su cui si
-  addestrava. La causa è stata isolata **una variabile alla volta** fino al **learning rate**;
+  **0.006**. La causa è stata isolata **una variabile alla volta** fino al **learning rate**;
   dimezzandolo il collasso sparisce. **Quella run non va mai citata come "quanto valgono i dati
   RE10K"**: prezza una run rotta, non una sorgente di dati.
 
 ---
 
-## Slide 20 — Open, and permanently out of reach
+## Slide 16 — Open, and permanently out of reach
 
-**Punto della slide:** distinguere ciò che è **aperto e quantificato** da ciò che è **impossibile per
-sempre** — e non promettere mai il secondo.
+**Punto della slide:** distinguere ciò che è **aperto e quantificato** da ciò che è **impossibile
+per sempre** — e non promettere mai il secondo.
 
-**Apertura:** *"Two things are open and costed. Five are permanently out of reach, and I want them
-on the record rather than in a promise."*
+**Sintesi in una frase:** *"One thing is open and costed. The rest are permanently out of reach, and
+I want them on the record rather than in a promise."*
 
-**Cosa dire:** la parte che conta è la seconda metà, e il tono deve essere fattuale.
+**Cosa dire:**
 
-- Il training set di FAST3DIS è **irriproducibile a qualunque scala**: 9.2 TB **e** il 40 % della
-  lista di scene non pubblicato. Conseguenza permanente: **ogni confronto con FAST3DIS è un
-  confronto cross-training-set**, e lo diciamo noi.
+- **ASE — e qui va corretta una formulazione che questo progetto usava male.** ASE **è scaricabile
+  pubblicamente**, e la sua ground truth per scena **contiene la segmentazione di istanza 2D**, cioè
+  esattamente la supervisione su cui ci addestriamo; il downloader accetta **intervalli di scene**.
+  A ~230 MB per scena, un **pilota da 1000 scene costa ~230 GB**, che sta nella nostra quota. Quello
+  che compra: la nostra replica di IGGT smette di essere "la loro mistura meno ASE" e diventa
+  completa. *"ASE non ha annotazioni"* era vero **su questo cluster**, non in assoluto: non ripetere
+  la versione corta.
+- **Quello che resta impossibile non è il dato, è la lista di scene.** Il 40 % delle scene usate da
+  FAST3DIS non è pubblicato: **ogni confronto con FAST3DIS resta un confronto cross-training-set**,
+  a qualunque dimensione di download. Lo diciamo noi.
 - InsScene-15K è **incompleto** nella parte pubblicata: qualunque replica è **parziale** e deve
   dirlo.
-- FAST3DIS **non dichiara su quali scene valuta**: non rivendichiamo insiemi di valutazione identici.
+- FAST3DIS **non dichiara su quali scene valuta**: non rivendichiamo insiemi di valutazione
+  identici.
 
 **Domanda attesa — "ma la nostra GT a 19 classi non è un problema, visto che riportiamo
 class-agnostic?"** Sono due cose diverse e vanno tenute separate: *class-agnostic* è come
 **valutiamo** (le etichette vengono ignorate al momento del punteggio), *19 classi* è come il
 modello è stato **addestrato**. Il vincolo morde in un punto solo: SegVGGT addestra un checkpoint
 a **200** classi e pubblica una colonna **class-aware** su ScanNet200; noi quella colonna non
-possiamo produrla, perché con 19 classi possiamo dire *se* un'istanza è stata trovata, non se è
-stata chiamata con la giusta etichetta fra 200. Quindi limita la colonna class-aware su ScanNet200,
-**non** la riga headline (che è class-agnostic su ScanNetv2).
+possiamo produrla. Quindi limita la colonna class-aware su ScanNet200, **non** la riga headline
+(che è class-agnostic su ScanNetv2).
 
 Il messaggio implicito, da non dire in modo difensivo: questi non sono nostri limiti, sono proprietà
 delle release altrui — e noi le stiamo dichiarando al posto loro.
 
 ---
 
-## Slide 21 — Where we stand, and the two questions
+## Slide 17 — Where we stand
 
-**Punto della slide:** chiudere con le tre righe 3D e riportare la discussione sulle due decisioni.
+**Punto della slide:** chiudere con le tre righe 3D, senza aprire discussioni nuove.
 
-**Apertura:** *"Three rulers, one summary, and the two questions I opened with."*
+**Sintesi in una frase:** *"Three rulers, one summary."*
 
 **Cosa dire:**
 
-- Riga 1 (unposed, class-agnostic): **è il paper.** Guidiamo su AP50 e AP25, pareggiamo su AP con
-  FAST3DIS, siamo avanti a IGGT su tutte e tre.
-- Riga 2 (posed, class-aware): dietro a SegVGGT — **2.3× è il ponte, ~4.6× è reale**.
+- Riga 1 (unposed, class-agnostic, **50 viste**): **è il paper.** A viste appaiate guidiamo su tutte
+  e tre le colonne contro entrambi i competitor unposed.
+- Riga 2 (posed, class-aware): dietro a SegVGGT — **2.3× è il ponte, ×2.8 è il residuo reale sulla
+  riga con ancore 3D**.
 - Riga 3 (altri tre benchmark): lo zero-shot fallisce unposed e sopravvive posed → **geometria, non
   maschere**.
 - La nota † va letta, non saltata: la riga posed è **class-aware perché è ciò che SegVGGT pubblica**;
   le run di scaling sono class-agnostic e **non hanno affatto una colonna class-aware**, quindi non
   possono comparire su quella riga — **non** perché vadano peggio.
-- Poi fermati sulle due domande e **taci**. La (a) ha due prezzi (slide 16). La (b) è: il contributo
-  sul tavolo è lo studio controllato più una riga competitiva a backbone congelato, con le run
-  training-matched ancora in corso.
 
----
-
-## Slide B1 (backup) — The two lifting parameters
-
-**Punto della slide:** rispondere alla riga "*best lifting knobs (sensitivity, not headline)*" della
-tabella headline, che da sola non si capisce.
-
-**Apertura:** *"One row in that table is a tuned row, and I want to be explicit about why it is not
-the headline."*
-
-**Cosa dire:**
-
-- I *knobs* ("manopole") sono i **due soli iperparametri del ponte 2D→3D**, e **nessuno dei due fa
-  parte del modello**: (i) il **raggio di voto** — quanto lontano un pixel proiettato può arrivare
-  per rivendicare un vertice della mesh; (ii) il **filtro sulla confidenza della profondità** —
-  quanta della profondità predetta meno affidabile viene buttata prima del lifting.
-- **La riga headline gira con entrambi ai default.** La riga ottimizzata (0.055 / 0.185 / 0.571) è
-  riportata come **analisi di sensibilità**, mai come risultato: lo sweep gira sullo stesso split di
-  validazione su cui riportiamo, quindi citarne l'argmax sarebbe **tuning sul test set**. Dillo tu,
-  con questa parola.
-- **Come si giustifica allora?** Serve a dimostrare che il vantaggio **non è un artefatto di
-  tuning**: sul checkpoint con ancore 3D **ogni punto della griglia sta sopra FAST3DIS**, e il punto
-  **peggiore** dello sweep è ancora **1.44×** il suo AP50. Cioè: comunque si giri la manopola, la
-  conclusione non cambia — che è l'unico uso legittimo di uno sweep.
-- Se vogliono la parte fisica: il raggio di voto smette di aiutare non appena copre l'errore di
-  registrazione — oltre quel punto i voti raggiungono già tutti i vertici che raggiungeranno mai,
-  e la curva si appiattisce. Il filtro di confidenza ha un ottimo intermedio: filtrare troppo butta
-  via geometria utile.
-
-**Nota di coerenza:** la riga della slide 14 "Lifting parameters: +0.016 → +0.047 3D AP50, più di
-quasi ogni ablation del decoder" è **lo stesso fatto visto da un'altra angolazione** — e supporta la
-conclusione 2 della slide 15 (a legare è il lifting, non il decoder). Non è una contraddizione con
-"non è la headline": una cosa può essere il fattore più grande *e* non essere quotabile come
-risultato.
-
-**Perché è passata in backup:** non serve al filo del discorso — la riga "tuned" della headline ora si spiega da sola in due righe sulla slide 8. Questa slide si tira fuori solo se qualcuno chiede *"e se aveste scelto i parametri di lifting a posteriori?"*: la risposta è il punto peggiore dello sweep, ancora 1.44× FAST3DIS.
+**La riga di chiusura** è deliberatamente una sola frase: su un setting appaiato asse per asse,
+viste comprese, un backbone **congelato** con un decoder addestrato guida i due competitor unposed —
+e la distanza che resta verso lo stato dell'arte posed è ormai in gran parte prezzata.
 
 ---
 
 ## Domande ostili — risposte pronte (nessuna di queste ha una slide)
 
-**"Come sapete che la vostra implementazione di MaskDINO non è buggata?"**
-Il porting è verificato contro l'upstream su COCO: con i pesi COCO rilasciati da MaskDINO, il nostro
-decoder riproduce il loro risultato pubblicato su val2017 — **46.133 mask AP / 51.549 box AP** contro
-**46.1 / 51.5**, cioè a +0.004 AP. E, indipendentemente, il **codice upstream addestrato con la
-nostra ricetta** arriva a **34.55 segm AP** contro il **34.3** del nostro braccio: questo certifica
-matcher, criterio e denoising anche sul percorso di *addestramento*, non solo su quello di
-inferenza. **È una prova di correttezza, non un risultato del progetto: non va mai messa accanto a
-un numero ScanNet.**
+**"Perché adesso guidate su tutte e tre le colonne, quando prima era un pareggio su AP?"**
+Perché è cambiato **il righello, non il modello**: è lo stesso checkpoint valutato al budget di
+viste dei competitor (50) invece che a 17. A 17 viste su AP era ed è un pareggio. Dirlo per primi.
 
-**"E i vostri numeri 2D?"**
-Esistono e sono forti (per-frame AP50 0.699 a 490 scene, 0.729 con la ricetta dati migliore; 0.515
-per-bundle contro 0.199 della testa baseline ritirata), ma sono **codice di metrica nostro su
-maschere per-vista a 37×37**: nessun numero pubblicato vive su quel righello. Servono a scegliere
-checkpoint e a ordinare ablation. Non li metto accanto a un competitor, ed è per questo che non sono
-in queste slide.
+**"Le vostre metriche di consistenza multi-vista sono standard?"**
+Le due che il progetto usava internamente — `view_consistency` e `id_switch` — **no, erano nostre**,
+e nessuno dei tre competitor pubblica una metrica di consistenza cross-view. Per questo dal
+2026-08-27 riportiamo **HOTA / AssA / DetA / IDF1**, le metriche della letteratura di tracking, con
+le viste del bundle lette come istanti temporali e una query come una traccia. La mappatura è esatta
+per costruzione, non inventata: una query **è** un'identità su tutte le viste. La best practice del
+campo per questo claim resta comunque l'**AP 3D**, che è la nostra headline.
 
 **"Perché non fate finetuning del backbone? Andreste meglio."**
-Quasi certamente sì — SegVGGT compra così buona parte del suo ~4.6×. È una scelta: il claim che
-stiamo difendendo è *"quanto lontano arriva un backbone congelato a 1/20 del compute"*. Scongelarlo
-risponderebbe a una domanda diversa e cancellerebbe il claim numero 2.
+Quasi certamente sì — SegVGGT compra così buona parte del suo residuo. È una scelta: il claim che
+difendiamo è *"quanto lontano arriva un backbone congelato a 1/20 del compute"*. Scongelarlo
+risponderebbe a una domanda diversa e cancellerebbe il claim numero 2 della slide 14.
+
+**"E i vostri numeri 2D?"**
+Esistono e sono forti, ma sono **codice di metrica nostro su maschere per-vista a 37×37**: nessun
+numero pubblicato vive su quel righello. Servono a scegliere checkpoint e a ordinare ablation. Non
+li metto accanto a un competitor, ed è per questo che non sono in queste slide.
 
 **"Quanto è vecchia questa foto?"**
-I numeri sono congelati al 2026-08-26 (`docs/FACTSHEET.md`); le run della slide 19 sono in corso e
-cambieranno la colonna training-matched, non la riga headline.
+I numeri sono al **2026-08-27** (`docs/FACTSHEET.md`); le run della slide 15 sono in corso e
+cambieranno la colonna training-matched e la tabella delle ablation, non la riga headline.

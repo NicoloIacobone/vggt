@@ -46,7 +46,7 @@ from models.maskdino.model import MaskDINOVGGTModel
 from train.common import (DEFAULT_SCANS_ROOT, append_jsonl, build_scheduler, resolve_scene_dirs)
 from train.maskdino_data import (bundle_index, frame_index, gather_batch, gather_bundle_batch,
                                  gather_token_xyz, prepare_scenes)
-from train.eval_metrics import CONSISTENCY_KEYS
+from train.eval_metrics import CONSISTENCY_KEYS, TRACKING_KEYS
 from train.maskdino_eval import eval_scenes, fmt, mean_metric, visualize
 
 # ------------------------------------------------------------------------------------------
@@ -217,11 +217,18 @@ def build_argparser():
     p.add_argument("--save_checkpoint", type=str, default=None)
     p.add_argument("--resume", type=str, default=None)
     p.add_argument("--no_visualize", action="store_true")
+    # Score an existing checkpoint on the validation protocol and exit — no training, no
+    # optimizer, no checkpoint written. The one way to put a NEW metric on an OLD run without
+    # retraining it; use it with --resume.
+    p.add_argument("--eval_only", action="store_true",
+                   help="load --resume, run one validation pass, write metrics.jsonl, exit")
     return p
 
 
 def main():
     args = build_argparser().parse_args()
+    if args.eval_only and not args.resume:
+        raise SystemExit("--eval_only needs --resume <checkpoint.pth>: there is nothing to score.")
     if args.schedule_epochs is None:
         args.schedule_epochs = args.num_epochs
     if args.cache_device is None:
@@ -252,7 +259,9 @@ def main():
     device = args.device if (args.device != "cuda" or torch.cuda.is_available()) else "cpu"
     print(f"Using device: {device} (feature cache on {args.cache_device}, {args.cache_dtype})")
 
-    train_dirs = resolve_scene_dirs(args.train_scenes, args.scans_root)
+    # --eval_only scores the val split alone, so the train list need not resolve (and normally
+    # cannot: an eval-only job stages the val tar only).
+    train_dirs = [] if args.eval_only else resolve_scene_dirs(args.train_scenes, args.scans_root)
     val_dirs = resolve_scene_dirs(args.val_scenes, args.scans_root) if args.val_scenes else []
     print(f"Train scenes ({len(train_dirs)}), val scenes ({len(val_dirs)})")
 
@@ -311,7 +320,10 @@ def main():
         print(f"✓ Resumed from {args.resume} at epoch {start_epoch}")
 
     print("\n=== Caching frozen-backbone features ===")
-    train_scenes = prepare_scenes(model, train_dirs, args, device, "train")
+    # --eval_only never touches the train split, and caching its features would dominate the
+    # job (the cache is the expensive part, not the forward pass). Skip it outright.
+    train_scenes = ([] if args.eval_only
+                    else prepare_scenes(model, train_dirs, args, device, "train"))
     val_scenes = prepare_scenes(model, val_dirs, args, device, "val")
     if args.multi_frame:
         # One sample = one bundle of --num_frames frames, sharing a query set.
@@ -335,7 +347,7 @@ def main():
     else:
         train_eval_scenes = train_scenes
     print(f"Train scenes scored at each eval: {len(train_eval_scenes)}/{len(train_scenes)}")
-    if not train_samples:
+    if not train_samples and not args.eval_only:
         raise SystemExit("No training frames with ground-truth instances — check the GT tree.")
 
     run_dir = Path(args.save_checkpoint).parent if args.save_checkpoint else None
@@ -345,11 +357,35 @@ def main():
     best_bundle_path = run_dir / "checkpoint_best_bundle.pth" if run_dir and args.multi_frame else None
     if run_dir:
         run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "config.json").write_text(json.dumps(vars(args), indent=2, default=str))
+        if not args.eval_only:      # --eval_only must not overwrite the run's own record
+            (run_dir / "config.json").write_text(json.dumps(vars(args), indent=2, default=str))
 
-    print("\n=== Initial metrics (untrained head) ===")
-    for name, m in eval_scenes(model, val_scenes, args, device).items():
-        print(f"  [val] {name}: {fmt(m)}")
+    if not args.eval_only:
+        print("\n=== Initial metrics (untrained head) ===")
+        for name, m in eval_scenes(model, val_scenes, args, device).items():
+            print(f"  [val] {name}: {fmt(m)}")
+
+    if args.eval_only:
+        # One validation pass on the resumed head, then out. Deliberately placed AFTER the
+        # feature cache so it walks the exact same path a periodic eval does — same scenes,
+        # same bundles, same --eval_num_frames pin — and its numbers are comparable to the
+        # run's own metrics.jsonl rows.
+        print("\n" + "=" * 70 + "\nEVAL ONLY\n" + "=" * 70)
+        va = eval_scenes(model, val_scenes, args, device)
+        keys = ["mIoU", "AP50", "AP75", "mAP", "class_acc", "num_pred",
+                "mIoU_all", "AP50_all", "AP75_all", "mAP_all"]
+        if args.multi_frame:
+            keys += [f"bundle_{k}" for k in keys]
+            keys += [f"bundle_{k}" for k in CONSISTENCY_KEYS]
+            keys += [f"bundle_{k}" for k in TRACKING_KEYS]
+        record = {"epoch": start_epoch, "eval_only": True}
+        record.update({f"val_{k}": mean_metric(va, k) for k in keys})
+        for k in keys:
+            print(f"  val_{k:32s} {mean_metric(va, k):.4f}")
+        if metrics_path:
+            append_jsonl(metrics_path, record)
+            print(f"\n✓ appended one eval_only row to {metrics_path}")
+        return
 
     print("\n" + "=" * 70 + "\nTRAINING\n" + "=" * 70)
     best = {"val_mIoU": -1.0, "epoch": -1}
@@ -420,6 +456,12 @@ def main():
                       f"{mean_metric(va, 'bundle_view_consistency'):.3f} "
                       f"id_switch={mean_metric(va, 'bundle_id_switch'):.3f} "
                       f"(matched {mean_metric(va, 'bundle_num_matched'):.1f}/bundle)")
+                # the same claim in the tracking literature's own vocabulary — these are the
+                # numbers quoted outward; the pair above stays the internal diagnostic.
+                print(f"    val HOTA={mean_metric(va, 'bundle_hota'):.3f} "
+                      f"AssA={mean_metric(va, 'bundle_assa'):.3f} "
+                      f"DetA={mean_metric(va, 'bundle_deta'):.3f} "
+                      f"IDF1={mean_metric(va, 'bundle_idf1'):.3f}")
             if args.eval_full_res:
                 # the full-resolution ruler (docs/MASKDINO.md §6.5) — same detections, 518x518
                 print(f"    val full-res  mIoU={mean_metric(va, 'full_mIoU'):.3f} "
@@ -434,6 +476,7 @@ def main():
             if args.multi_frame:
                 keys += [f"bundle_{k}" for k in keys]
                 keys += [f"bundle_{k}" for k in CONSISTENCY_KEYS]   # §6.6
+                keys += [f"bundle_{k}" for k in TRACKING_KEYS]     # HOTA/AssA/DetA/IDF1
             if args.eval_full_res:
                 # after the bundle expansion: bundle_* stays on the mask grid (§6.5)
                 keys += [f"full_{k}" for k in ("mIoU", "AP50", "AP75", "mAP", "class_acc",

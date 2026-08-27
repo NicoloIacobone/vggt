@@ -19,6 +19,9 @@ of pixels across all frames.
 
 `multiview_consistency_metrics` (docs/MASKDINO.md §6.6) is the exception: it needs the frame
 axis kept separate, because it measures whether ONE query explains an instance in EVERY view.
+`tracking_consistency_metrics` answers that same question with the FORMAL metrics of the
+tracking literature — HOTA / AssA / DetA / IDF1, views read as timesteps — which is what the
+outward-facing consistency claim is quoted on; the pair above stays as the internal diagnostic.
 """
 
 import numpy as np
@@ -127,6 +130,163 @@ def multiview_consistency_metrics(
     return {"view_consistency": float(np.mean(consistency)),
             "id_switch": float(np.mean(switches)),
             "num_matched": float(len(consistency))}
+
+
+# The keys `tracking_consistency_metrics` returns (the eval prefixes them with `bundle_`).
+TRACKING_KEYS = ["hota", "assa", "deta", "idf1", "num_gt_tracks", "num_pred_tracks"]
+
+# The standard HOTA localisation sweep (Luiten et al., IJCV 2021): alpha = 0.05 : 0.05 : 0.95.
+HOTA_ALPHAS = np.arange(0.05, 0.99, 0.05)
+
+
+def _per_view_presence_and_similarity(pred_masks: torch.Tensor, gt_masks: torch.Tensor,
+                                      mask_threshold: float):
+    """
+    Turn a bundle into the (detections, similarities) form the tracking metrics are defined on.
+
+    A bundle's S views are the S timesteps of a sequence, each GT instance is a ground-truth
+    trajectory, and each shared query is a predicted track — the mapping is exact here because a
+    query IS one identity across the whole bundle by construction (docs/MASKDINO.md §8), so no
+    tracker association step has to be invented to score us.
+
+    Returns:
+        present_gt (np.ndarray): [N_gt, S] bool — the instance has pixels in that view
+        present_pred (np.ndarray): [N_pred, S] bool
+        sims (list[np.ndarray]): per view, the [n_gt_t, n_pred_t] IoU of the present ones only
+    """
+    pred_bin = (torch.sigmoid(pred_masks) > mask_threshold).flatten(2)    # [N, S, K]
+    gt_bin = (gt_masks > 0.5).flatten(2)                                  # [N_gt, S, K]
+    present_pred = pred_bin.any(dim=2).cpu().numpy()                      # [N, S]
+    present_gt = gt_bin.any(dim=2).cpu().numpy()                          # [N_gt, S]
+
+    sims = []
+    for t in range(pred_bin.shape[1]):
+        g = np.nonzero(present_gt[:, t])[0]
+        p = np.nonzero(present_pred[:, t])[0]
+        if g.size == 0 or p.size == 0:
+            sims.append(np.zeros((g.size, p.size)))
+            continue
+        iou = mask_iou_matrix(pred_bin[p, t], gt_bin[g, t])               # [n_p, n_g]
+        sims.append(iou.t().cpu().numpy())                                # [n_g, n_p]
+    return present_gt, present_pred, sims
+
+
+@torch.no_grad()
+def tracking_consistency_metrics(pred_masks: torch.Tensor,
+                                 gt_masks: torch.Tensor,
+                                 mask_threshold: float = 0.5,
+                                 idf1_threshold: float = 0.5) -> Dict[str, float]:
+    """
+    Cross-view identity scored with the FORMAL metrics of the tracking literature.
+
+    `multiview_consistency_metrics` above answers the same question with project-defined numbers.
+    Those have no published counterpart — SegVGGT, FAST3DIS and IGGT report no cross-view
+    consistency metric at all — so the claim "consistency is intrinsic to the query" is stated
+    here in the vocabulary a reviewer already has, with the bundle's views read as timesteps:
+
+      - HOTA = sqrt(DetA x AssA), averaged over the standard alpha sweep (Luiten et al., IJCV
+        2021). The single number.
+      - AssA : association accuracy — the formal counterpart of `id_switch`. It asks, over all
+        matched detections, how much of each identity's trajectory the same track explains.
+      - DetA : detection accuracy — the formal counterpart of `view_consistency`.
+      - IDF1 : identity F1 of the globally optimal one-to-one identity assignment
+        (Ristani et al., ECCVW 2016), the MOTChallenge identity metric.
+
+    Both follow the TrackEval reference implementation: HOTA matches per view under the global
+    alignment score (so a locally better but identity-breaking match is not rewarded), IDF1
+    matches identities once for the whole bundle.
+
+    Args:
+        pred_masks (torch.Tensor): [N_pred, S, h, w] mask LOGITS (frame axis must be axis 1).
+        gt_masks (torch.Tensor): [N_gt, S, h, w] binary GT volumes, all-zero where not visible.
+        mask_threshold (float): probability threshold to binarize predicted masks.
+        idf1_threshold (float): the IoU at which IDF1 calls a detection a match (0.5, standard).
+
+    Returns:
+        dict with keys `hota`, `assa`, `deta`, `idf1`, `num_gt_tracks`, `num_pred_tracks`.
+        Degenerate bundles (no GT, no predictions) return all-zeros — read them next to the two
+        track counts, since a zero there means "undefined", not "perfect".
+    """
+    empty = {k: 0.0 for k in TRACKING_KEYS}
+    if pred_masks.shape[0] == 0 or gt_masks.shape[0] == 0:
+        return empty
+
+    present_gt, present_pred, sims = _per_view_presence_and_similarity(
+        pred_masks, gt_masks, mask_threshold)
+    n_gt, n_pred = present_gt.shape[0], present_pred.shape[0]
+    num_gt_dets = int(present_gt.sum())
+    num_pred_dets = int(present_pred.sum())
+    if num_gt_dets == 0 or num_pred_dets == 0:
+        return empty
+
+    counts = {"num_gt_tracks": float((present_gt.any(axis=1)).sum()),
+              "num_pred_tracks": float((present_pred.any(axis=1)).sum())}
+
+    # --- pass 1: the global alignment score, over the whole bundle -----------------------------
+    # How much of the two identities' lifetimes co-occur, in the Jaccard sense. HOTA uses it to
+    # break per-view ties in favour of the assignment that keeps identities whole.
+    potential = np.zeros((n_gt, n_pred))
+    gt_count = np.zeros((n_gt, 1))
+    pred_count = np.zeros((1, n_pred))
+    for t, sim in enumerate(sims):
+        g = np.nonzero(present_gt[:, t])[0]
+        p = np.nonzero(present_pred[:, t])[0]
+        gt_count[g] += 1
+        pred_count[0, p] += 1
+        if sim.size:
+            potential[np.ix_(g, p)] += sim
+    alignment = potential / np.maximum(1.0, gt_count + pred_count - potential)
+
+    # --- pass 2: one matching per alpha ---------------------------------------------------------
+    deta, assa, hota = [], [], []
+    for alpha in HOTA_ALPHAS:
+        matches = np.zeros((n_gt, n_pred))
+        tp = 0
+        for t, sim in enumerate(sims):
+            if sim.size == 0:
+                continue
+            g = np.nonzero(present_gt[:, t])[0]
+            p = np.nonzero(present_pred[:, t])[0]
+            score = alignment[np.ix_(g, p)] * sim
+            rows, cols = linear_sum_assignment(-score)
+            keep = sim[rows, cols] >= alpha - np.finfo(float).eps
+            rows, cols = rows[keep], cols[keep]
+            matches[g[rows], p[cols]] += 1
+            tp += int(rows.size)
+        fn, fp = num_gt_dets - tp, num_pred_dets - tp
+        d = tp / max(1.0, tp + fn + fp)
+        # AssA: each matched detection contributes its identity pair's trajectory-level Jaccard.
+        ass_iou = matches / np.maximum(1.0, gt_count + pred_count - matches)
+        a = float((matches * ass_iou).sum() / max(1.0, tp))
+        deta.append(d)
+        assa.append(a)
+        hota.append(float(np.sqrt(d * a)))
+
+    # --- IDF1: one identity assignment for the whole bundle -------------------------------------
+    hits = np.zeros((n_gt, n_pred))
+    for t, sim in enumerate(sims):
+        if sim.size == 0:
+            continue
+        g = np.nonzero(present_gt[:, t])[0]
+        p = np.nonzero(present_pred[:, t])[0]
+        hits[np.ix_(g, p)] += (sim >= idf1_threshold)
+    # Square cost matrix over real + dummy identities, as in the MOTChallenge formulation: an
+    # unmatched GT track costs all its detections as FN, an unmatched predicted track as FP.
+    size = n_gt + n_pred
+    fn_mat = np.zeros((size, size))
+    fp_mat = np.zeros((size, size))
+    fn_mat[:n_gt, :] = gt_count
+    fp_mat[:, :n_pred] = pred_count
+    fn_mat[:n_gt, :n_pred] -= hits
+    fp_mat[:n_gt, :n_pred] -= hits
+    rows, cols = linear_sum_assignment(fn_mat + fp_mat)
+    id_fn = float(fn_mat[rows, cols].sum())
+    id_fp = float(fp_mat[rows, cols].sum())
+    id_tp = num_gt_dets - id_fn
+    idf1 = id_tp / max(1e-9, id_tp + 0.5 * id_fn + 0.5 * id_fp)
+
+    return {"hota": float(np.mean(hota)), "assa": float(np.mean(assa)),
+            "deta": float(np.mean(deta)), "idf1": float(idf1), **counts}
 
 
 def _voc_ap(recall: np.ndarray, precision: np.ndarray) -> float:

@@ -9,14 +9,18 @@ reconstruction model. The goal is **not** to modify VGGT, but to attach and trai
 **3D multi-view consistent instance segmentation** on top of the frozen VGGT-1B backbone.
 Supervision is the **official ScanNet v2 2D instance annotations**.
 
-The active model is a **MaskDINO decoder** (`models/maskdino/`). Single-frame at 490 scenes:
-val mIoU **0.669** / AP50 **0.699**, against the retired baseline head's 0.451 / 0.294 on the same
-per-frame protocol. `--multi_frame` (shared queries across a bundle) is implemented; widening the
-bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULTS.md`.
+The active model is a **MaskDINO decoder** (`models/maskdino/`), trained on the official ScanNet v2
+1201/312 split or larger. On the official 3D instance benchmark, unposed and class-agnostic, at the
+competitors' own **50 views**, it scores **0.053 / 0.170 / 0.542** (AP/AP50/AP25) from a strictly
+frozen backbone — ahead of FAST3DIS's 0.038 / 0.096 / 0.316 and IGGT's 0.028 / 0.112 / 0.287 on all
+three. Improving the 2D→3D lifting (registration, not coverage) is the open work. All numbers:
+`docs/RESULTS.md`; anything outward-facing: `docs/FACTSHEET.md`.
 
-`legacy/` is frozen on purpose — the previous hand-rolled head, kept because
-`scripts/eval_perframe.py` and `demos/demo_gradio.py` still import it. Its story is archived in
-`docs/old/`; do not surface it in new work.
+`legacy/` is frozen on purpose. It holds the previous hand-rolled head — kept because
+`scripts/eval_perframe.py` and `demos/demo_gradio.py` still import it — the dataset builders, and,
+since 2026-08-27, the whole **COCO backbone-swap arm** under `legacy/coco/` (that port check is
+complete and is not a ruler this project reports on). Their story is in `docs/old/`; do not surface
+any of it in new work.
 
 ### Docs — read in this order
 
@@ -26,25 +30,21 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
 - `docs/FACTSHEET.md` — **for anything outward-facing (slides, supervisor updates, abstract
   drafts): read ONLY this, and read nothing else.** Frozen read-out of the numbers, the seven
   rulers **in two tiers** (Tier 1 = the 3D rulers that face the published competitors; Tier 2 =
-  the internal 2D rulers and the COCO port check, backup only), the positioning, and what is
+  the internal 2D rulers, backup only), the positioning, and what is
   still open. Every number cleared for
   quoting is on that page; a number that is not there is not cleared. It never contradicts
   RESULTS.md — if it does, RESULTS.md wins and FACTSHEET.md is the bug.
 - `docs/MASKDINO.md` — **the primary document.** Architecture, deviations from upstream MaskDINO,
   the protocols, the evaluation rules, the multi-frame mechanisms.
-- `docs/RESULTS.md` — **every number, one home.** Read §1 before quoting anything: per-frame,
-  per-bundle and 3D numbers are **not** interchangeable.
-- `docs/COMMANDS.md` — the full command catalogue (tests, training, 3D ruler, COCO, dataset
+- `docs/RESULTS.md` — **every number, one home.** Everything in it is on the official 1201/312
+  split or larger; read §1 before quoting anything, because 2D and 3D numbers are **not**
+  interchangeable and only the 3D ones face a published paper.
+- `docs/COMMANDS.md` — the full command catalogue (tests, training, 3D ruler, dataset
   rebuilds) with the caveats each one needs.
-- `docs/MASKDINO_COCO.md` — the COCO backbone-swap study. Contains the **mask-resolution ceiling
-  measurement** (§1) — read it before proposing anything that depends on mask or token resolution —
-  and the **upstream-MaskDINO control** (§6, complete 2026-08-12): trained under our recipe it lands
-  at 34.55 AP vs our own arm's 34.3, which certifies our matcher/criterion/DN on the *training*
-  path and prices the recipe at ~11.6 AP against upstream's released 46.1.
 - `docs/DATASET.md` — GT provenance, the tars, mask conventions, how a job gets the data.
 - `docs/MULTIDATASET.md` — the multi-dataset training arm (ScanNet + ScanNet++ + Infinigen, plus
   RE10K in its own arm, `--class_agnostic`). Its rows are **class-agnostic** and never comparable
-  to RESULTS' §2/§3/§6. Anything trained on RE10K is additionally **SAM2-supervised** — the masks
+  to RESULTS' §6. Anything trained on RE10K is additionally **SAM2-supervised** — the masks
   are model output, not ground truth — and carries a separate labelled row (§1.3, §11).
 - `docs/todo.md` — open work only.
 - `docs/RELATED_WORK.md` — competitor landscape & positioning. Read before framing any result as a
@@ -54,10 +54,17 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
   this one the training side. **§6 is the live competitor-matched programme** — every axis, its
   state, and the job that closes it; §6.5 is the one-screen status table.
 - `docs/SEGVGGT_ANALYSIS.md` — the closest competitor, dissected: no training code, where the
-  ×10.7→~4.6× residual AP50 gap goes, and the conceptual difference.
-- `docs/SUPERVISOR_COMPARISON.md`, `docs/RIEPILOGO_PROGETTO_IT.md` — send-outward summaries derived
-  from the two files above. If a number changes there, change it here too.
-- `docs/old/` — archive. Nothing in it is current; don't cite it as a source of truth.
+  residual AP50 gap goes (**×2.8 on the `--anchor_3d` checkpoint**, once the ×2.3 bridge is taken
+  out — always quote the residual with the checkpoint it was measured on), and the conceptual
+  difference.
+- `docs/slides/` — the current supervisor deck (`supervisors_<date>.md`, Marp) plus its speaker
+  notes and the short `_summary` deck. Derived from FACTSHEET; if a number changes there, change
+  it here too.
+- `docs/old/` — archive. Nothing in it is current; don't cite it as a source of truth. Since
+  2026-08-27 it also holds everything from before the official-split era: the COCO backbone-swap
+  study (`MASKDINO_COCO.md`, `MASKDINO_HISTORY.md`), the project-val and retired-head tables
+  (`RESULTS_HISTORY.md`), the closed todos (`todo_archive_20260827.md`) and the superseded
+  outward summaries (`SUPERVISOR_COMPARISON.md`, `RIEPILOGO_PROGETTO_IT.md`).
 
 ## Environment & core commands
 
@@ -118,8 +125,8 @@ for t in tests/test_*.py; do python "$t"; done
 bash tests/test_train_maskdino_sh_lists.sh          # slurm scene-list logic, DRY_RUN
 bash tests/test_train_maskdino_multi_sh.sh          # …the multi-dataset driver, incl. errexit
 bash tests/test_eval_3d_matrix_sh.sh                # …the cross-dataset eval grid, DRY_RUN
-# exception: tests/test_maskdino_upstream_control.py needs the REFERENCE env
-/cluster/home/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
+# the whole suite runs under myenv and needs no backbone weights. The retired COCO arm's tests
+# live in legacy/coco/tests/ and are not part of it.
 
 # Training (the entry point)
 sbatch slurm/train_maskdino.sh                      # 50 scenes, ~20k steps
@@ -169,13 +176,16 @@ models/maskdino/          the model — see docs/MASKDINO.md §5 for the per-fil
   anchor3d.py             --anchor_3d: 3D anchors instead of 2D DAB boxes (the §8.3 ablation)
   matcher.py criterion.py ms_deform_attn.py box_ops.py utils.py
 
-scripts/train_maskdino.py entry point: CLI, construction, epoch loop, checkpointing
+scripts/train_maskdino.py entry point: CLI, construction, epoch loop, checkpointing;
+                          `--eval_only` scores a finished run without training (slurm/eval_only_maskdino.sh)
 scripts/eval_perframe.py  scores a legacy checkpoint on the same protocol (the baseline)
 train/maskdino_data.py    per-frame GT + frozen-backbone feature cache + batching
 train/maskdino_eval.py    per-frame scoring over cached scenes + figures
 train/perframe.py         the protocol itself, shared by both scorers
 train/common.py           scene paths, photometric jitter, LR schedule, metrics.jsonl
-train/eval_metrics.py     mIoU / AP50 / AP75 / mAP / class_acc
+train/eval_metrics.py     mIoU / AP50 / AP75 / mAP / class_acc; cross-view identity —
+                          HOTA / AssA / DetA / IDF1 (the formal, published ones) next to the
+                          project's own view_consistency / id_switch (docs/MASKDINO.md §6.6.1)
 data/scannet_overfit.py   the dataset loader
 
 the 3D ruler (docs/MASKDINO.md §9) and its four benchmarks (§9.12)

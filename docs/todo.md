@@ -251,14 +251,10 @@ In effort order — each step also de-risks the next:
       became a measured claim. `id_switch` improves in both seeds (−0.089, −0.064). This retires
       the "single run vs single control" objection for the headline comparison.
 
-## 3. Resolution stream — CLOSED 2026-07-30 (docs/MASKDINO.md §7.7)
+## 3. Resolution stream — CLOSED, archived
 
-The mask grid is decoupled from the token grid ("VGGT is not an FPN" is answered,
-docs/MASKDINO_COCO.md §1.2), the 37×37 GT-only ceiling on ScanNet is 0.956 AP50 vs the model's
-~0.69, and `--mask_upsample 2` is neutral on the full-resolution ruler too. **Recognition
-binds, not resolution — nothing left to do here on ScanNet.** The only surviving idea (a
-700/1036 px token-grid arm) is bounded by the 0.956→0.99 ceiling gap and stays parked in
-"Longer-term".
+Closed 2026-07-30; the verdict (recognition binds, not mask resolution) is
+`docs/MASKDINO.md` §7.7. Item history: `docs/old/todo_archive_20260827.md`.
 
 ## 4. Watching
 
@@ -602,9 +598,9 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       ruler (§10.4).
 
 - [x] **6g. Upstream MaskDINO trained under OUR recipe — DONE 2026-08-12, and it AGREES**
-      (docs/MASKDINO_COCO.md §6 row 2 + §6.1; jobs 10094393 → 10228029 → 10279969 → 10427048,
+      (docs/old/MASKDINO_COCO.md §6 row 2 + §6.1; jobs 10094393 → 10228029 → 10279969 → 10427048,
       87 948 iters). Built as `third_party/maskdino_control/` (own README); driver
-      `slurm/train_maskdino_upstream.sh`; tests `tests/test_maskdino_upstream_control.py` (5/5, needs
+      `legacy/coco/slurm/train_maskdino_upstream.sh`; tests `legacy/coco/tests/test_maskdino_upstream_control.py` (5/5, needs
       the **reference** env). 8 axes moved to our values, 22 asserted still at upstream's.
       **§4.1 gate PASSED: segm AP 52.1 @600 vs our `resnet50` arm's 54.3** — the two implementations
       track each other point-for-point, which was the first evidence for `matcher.py`,
@@ -623,9 +619,9 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       arch into a silent ~10× slowdown (`build_ops.sh`, and an unwrapped kernel call at startup);
       torch 1.10 **rejects** `PYTORCH_CUDA_ALLOC_CONF=expandable_segments`; and a 600-step gate
       measures the LR schedule unless the cosine's horizon is pinned to the real budget
-      (`CONTROL.LR_HORIZON_ITERS`, MASKDINO_COCO.md §4.1 — two failed attempts read as a broken loss).
+      (`CONTROL.LR_HORIZON_ITERS`, docs/old/MASKDINO_COCO.md §4.1 — two failed attempts read as a broken loss).
       Plus a fourth, mid-run: **the scratch purge ate the reference venv** and surfaced as
-      `UnidentifiedImageError` on a perfectly good COCO jpg (MASKDINO_COCO.md §6.1). Resumed from
+      `UnidentifiedImageError` on a perfectly good COCO jpg (docs/old/MASKDINO_COCO.md §6.1). Resumed from
       `/cluster/work` at zero cost; the 40 000 eval is the only casualty.
 - [x] **6i. Move the MaskDINO reference venv off scratch — DONE 2026-08-12.** `$MASKDINO_ROOT/myenv`
       had been purged once mid-run (6g) and the project's own `myenv/` once before (2026-08-07,
@@ -637,7 +633,7 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       them would have left half the problem. Verified before deleting the original: identical file
       counts, and a checksum `rsync -nc` differing on exactly the 43 `myenv/bin/` scripts whose
       shebang/`VIRTUAL_ENV` were rewritten (129 bytes = 43 × 3 chars, the path shortening).
-      No `.so` carried an RPATH into scratch. `tests/test_maskdino_upstream_control.py` passes
+      No `.so` carried an RPATH into scratch. `legacy/coco/tests/test_maskdino_upstream_control.py` passes
       6/6 under the moved venv, which is the §7.6 re-verification this item asked for.
       **What made it more than a rename**, and is now fixed so the next move IS one: the control
       configs inherit upstream's own COCO yaml by **absolute path**, and the overfit gate inherits
@@ -646,7 +642,7 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       `_BASE_` at `$MASKDINO_ROOT`, following the relative chain, never editing the yaml on disk,
       and raising rather than silently falling back to detectron2 defaults. Wired into
       `train_control.py::setup` and the reference test; 23 CPU checks in
-      `tests/test_maskdino_control_paths.py`, which runs under the **project** venv (the module is
+      `legacy/coco/tests/test_maskdino_control_paths.py`, which runs under the **project** venv (the module is
       stdlib-only on purpose).
 - [ ] **6h. Optional second control: upstream's OWN recipe** (finetuned backbone, LSJ@1024, same
       87 948 iters, ~3 days). 6g alone cannot separate "our recipe" from "our implementation" — it
@@ -706,25 +702,33 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       *"our ScanNet200 column is class-agnostic; SegVGGT's is class-aware; the two are not
       comparable"* (`docs/RESULTS.md` §7.4).
 
-## Recently closed (2026-07-29/30, 2026-08-01) — details in docs/MASKDINO.md §7.4.1, §7.7, §8.2
-
-- [x] `--bundles_per_scene 4` (job 8950610) — **saturates** (0.699 / 0.722 vs b2's
-      0.694 / 0.729, inside noise). Views-per-scene lever exhausted at 2; do NOT fold 4 into
-      the default recipe.
-- [x] `--no-cross_frame_attn` at N=490 (job 8950617) — bundle AP50 0.494 → 0.311.
-      **Cross-frame attention is the main carrier of the multi-view result** — the only
-      individually-decisive component found anywhere in this track.
-- [x] `--multi_frame` on per-frame features (job 8950613) — bundle AP50 0.494 → 0.347.
-      **Bundle features are required for multi-view consistency**, despite costing −0.048
-      per-frame as a standalone change (§8.1). Consistency has a measured price.
-- [x] 2026-07-30: resolution question closed (§7.7, oracle + two full-res runs); multi-view
-      best moved to **0.539 / 0.515** (job 9071415, §8.2); COCO r50/dinov2 arms final
-      (MASKDINO_COCO.md §6).
-- [x] 2026-08-01: COCO `vggt` arm COMPLETE (job 9262006). **vggt final 37.7 AP vs dinov2 38.8**
-      (−1.1 AP at identical geometry); best checkpoint vggt 39.7 @75k vs dinov2 41.3 @85k
-      (−1.6 AP). Both trail early (14.1 vs 23.4 at overfit-gate), converge mid-training, diverge
-      late. Verdict: 3D pretraining costs ~1–1.6 AP on 2D semantics (docs/MASKDINO_COCO.md §6,
-      reading 3).
+- [ ] **6n. A partial ASE download — costed 2026-08-27, not started.** ASE **is** publicly
+      available (projectaria.com/datasets/ase + a HuggingFace mirror) and its per-scene GT
+      **includes 2D instance segmentation**; the downloader takes `--scene-ids` ranges. Budget:
+      ~23 TB / 100 k scenes ≈ **230 MB/scene**, so a **1 000-scene pilot ≈ 230 GB** against
+      ~2.34 TB free scratch. **Gate the decision to scale on the pilot's measured inode count**
+      (`find <chunk> -type f | wc -l`), not on its size — scratch is quota'd on files, and the
+      InsScene mirror shipped 1 468 small zips where ~120 were expected. What it buys: arm I
+      becomes the **complete** IGGT replication instead of "minus ASE", and it is the only route
+      to training on FAST3DIS's own source. What it does not buy: a FAST3DIS-matched training
+      set — their 40 % scene list is unpublished, permanently (§5). Work: licence acceptance,
+      one fetch job, a `train/` adapter mirroring `slurm/build_insscene2d.py`.
+- [ ] **6o. Land the ablation-table hole on the 3D ruler — LAUNCHED 2026-08-27.** Job
+      **11986399** = the 3D eval of `--no-cross_frame_attn` (existing official-split checkpoint,
+      `maskdino_sf_list1201_mf_noxframe_20260803_111855`). Job **11986440** = a new 12-epoch
+      `--feature_mode single` training run on the official 1201/312 split, because no leak-free
+      checkpoint of that arm existed; its 3D eval follows. Both are single-variable against the
+      control `maskdino_sf_list1201_mf_20260802_133826`. Closes the ⚠ rows of
+      `docs/FACTSHEET.md` §4.
+- [ ] **6p. Formal cross-view identity metrics — IMPLEMENTED, re-scoring in flight 2026-08-27.**
+      `view_consistency` / `id_switch` are project-defined and have **no published counterpart**
+      (verified: SegVGGT, FAST3DIS and IGGT report no cross-view consistency metric at all).
+      `train/eval_metrics.py::tracking_consistency_metrics` adds **HOTA / AssA / DetA / IDF1**
+      (`docs/MASKDINO.md` §6.6.1) with the bundle's views read as timesteps; jobs **11986564 /
+      11986565** re-score the headline `--anchor_3d` checkpoint and its control via the new
+      `--eval_only` path. When they land: put HOTA/AssA on the slides and demote the custom pair
+      to an internal diagnostic. Still to re-score: **A-long** (the 0.734 / 0.414 row), which
+      needs the multi-dataset val staged.
 
 ## Longer-term / low priority
 

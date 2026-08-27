@@ -190,8 +190,9 @@ that ruler, so for a strictly selection-leak-free row score the final `checkpoin
 | ScanNetv2 / ScanNet200 | FAST3DIS 50; SegVGGT every 20th frame (~75–120) | **17.42** | the gap — `scannet_frames_25k` is every 100th frame |
 | queries kept | SegVGGT 600 | 100 | **measured neutral** (0.138 → 0.140, `docs/MASKDINO.md` §9.8.1); struck as an explanation |
 
-So the mismatch is confined to the two ScanNet columns, and it runs *against* us — we lead the
-published cluster on a third of their views. `docs/DATASET.md` §2.3 builds the dense export that
+So the mismatch was confined to the two ScanNet columns, and **it is closed since 2026-08-27**:
+at their own 50 views the lead widens (`docs/RESULTS.md` §5.4). The "a third of their views"
+caveat is retired. `docs/DATASET.md` §2.3 builds the dense export that
 closes it (job 11839821 → 11840376); scored at `--num_frames 50` it is FAST3DIS's budget exactly,
 and at full stride it is SegVGGT's sampling. **Run the 17-frame cell on the dense tar too**: its
 jpegs are the original `.sens` payloads while the 25k export re-compressed them (~102 KB vs

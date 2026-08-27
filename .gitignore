@@ -155,3 +155,7 @@ skyseg.onnx
 # SLURM job logs (see slurm/logs/)
 slurm/logs/*.log
 slurm/logs/*.err
+
+# gradio demo dumps uploads next to the repo root (demos/demo_gradio.py::handle_uploads)
+input_images_*/
+.gradio/

@@ -168,7 +168,7 @@ def _bundle_scene(s, hh, mem, name="sceneA"):
 
 def test_eval_reports_consistency_keys():
     print("=== Testing eval_scenes integration (keys are purely additive) ===")
-    from train.eval_metrics import CONSISTENCY_KEYS
+    from train.eval_metrics import CONSISTENCY_KEYS, TRACKING_KEYS
     from train.maskdino_eval import eval_scenes
 
     torch.manual_seed(0)
@@ -188,7 +188,9 @@ def test_eval_reports_consistency_keys():
     old = {"mIoU", "AP50", "AP75", "mAP", "class_acc", "num_pred", "num_gt"}
     old |= {f"{k}_all" for k in old} | {f"bundle_{k}" for k in old} \
         | {f"bundle_{k}_all" for k in old}
-    assert set(m) == old | {f"bundle_{k}" for k in CONSISTENCY_KEYS}, sorted(set(m) ^ old)
+    expected = old | {f"bundle_{k}" for k in CONSISTENCY_KEYS} \
+        | {f"bundle_{k}" for k in TRACKING_KEYS}
+    assert set(m) == expected, sorted(set(m) ^ expected)
 
     # the single-frame path stays exactly as it was: no bundle_* keys at all
     single = Namespace(multi_frame=False, eval_topk=100, score_threshold=0.25,

@@ -201,8 +201,9 @@ that a reader of the tar list knows they are here and why they are not in the ta
 **Built 2026-08-26** (todo 6k; array job 11839821 → pack 11840376). `scannet_frames25k_val312`
 is every 100th raw frame, i.e. **17.42 frames/scene** — while FAST3DIS evaluates on **50**
 uniformly sampled views and SegVGGT on **every 20th frame** (~75–120). That was the last
-unmatched axis of the protocol comparison (`docs/TRAINING_COMPARABILITY.md` §6.3), and it runs
-*against* us: we lead the published cluster on a third of their views.
+unmatched axis of the protocol comparison (`docs/TRAINING_COMPARABILITY.md` §6.3). **Closed
+2026-08-27** by the dense export below: scored at `--num_frames 50` the lead *widens*
+(`docs/RESULTS.md` §5.4), so the "a third of their views" caveat is retired — never repeat it.
 
 | Tar | Contents |
 |---|---|
@@ -210,8 +211,8 @@ unmatched axis of the protocol comparison (`docs/TRAINING_COMPARABILITY.md` §6.
 
 Built by `legacy/dataset_build/scripts/extract_sens_frames25k.py` (streams the whole `.sens`,
 ~1.15 GB/scene at ~68 MB/s, writes only the kept frames) driven by
-`slurm/build_frames_dense_val312.sh` (16-task array, resumable per scene via a `.complete`
-marker) and packed by `slurm/pack_frames_dense_val312.sh`. Unlike every other build in this file
+`legacy/dataset_build/slurm/build_frames_dense_val312.sh` (16-task array, resumable per scene via a `.complete`
+marker) and packed by `legacy/dataset_build/slurm/pack_frames_dense_val312.sh`. Unlike every other build in this file
 it writes to **scratch**, not `$TMPDIR`: ~94 k files against §5.1's 1.0 M soft quota, and an
 array cannot share a node-local tree across tasks.
 

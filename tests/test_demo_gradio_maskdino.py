@@ -124,7 +124,15 @@ def test_scene_button_reports_missing_data_instead_of_crashing():
     dg.SEG["scenes"] = [{"name": "scene0011_00", "split": "val",
                            "scene_dir": "/nonexistent/scene0011_00/raw_data"}]
     dg.SEG["scene_labels"] = ["scene0011_00 (val)"]
-    _, target_dir, paths, msg, panel = dg.load_checkpoint_scene("scene0011_00 (val)")
+    # run from a scratch cwd: load_checkpoint_scene creates its `input_images_<ts>/` upload dir
+    # BEFORE it discovers the scene is unreadable, and that dir would land in the repo root.
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            _, target_dir, paths, msg, panel = dg.load_checkpoint_scene("scene0011_00 (val)")
+        finally:
+            os.chdir(cwd)
     assert target_dir == "None" and paths is None, (target_dir, paths)
     assert "scene0011_00" in msg and "Could not read" in msg, msg
     assert "Could not read" in panel, panel

@@ -118,7 +118,7 @@ for the 500-scene tar, ~35 GB for the 1201-scene one. Provenance and layout: `do
 |---|---:|---|
 | `dataset/insscene15k` | 522 GB | Public mirror of <https://huggingface.co/datasets/lifuguan/InsScene-15K> (Apache-2.0). Only needed to **rebuild** the `insscene2d` tars, which are included. |
 | `dataset/blendedmvs` + its backup tar | 243 GB | Belongs to the earlier distillation work, not the MaskDINO track. |
-| `scratch/coco` | 20 GB | Public COCO 2017 download; needed only for the backbone-swap study (`docs/MASKDINO_COCO.md`). |
+| `scratch/coco` | 20 GB | Public COCO 2017 download; needed only for the backbone-swap study (`docs/old/MASKDINO_COCO.md`). |
 | `myenv/` in both repos, pip cache | ~11 GB | Rebuild — see §2. |
 | `~/.claude/.credentials.json`, and `~/.claude/{backups,sessions,session-env,shell-snapshots,ide}` | small | Live OAuth tokens and volatile session state. Excluded on purpose; nothing to restore. |
 | `~/.claude/backups/.claude.json.backup.1786628316095` | tiny | The one file the build job could not read (it was rotated away mid-zip). No project data. This is why the archive has 14350 of 14351 manifest entries. |

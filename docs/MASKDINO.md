@@ -217,6 +217,7 @@ is the last layer only — identical cache footprint to every other run.
 | `tests/test_maskdino_viz.py` | identity-keyed figure colouring: stable slots, winner-takes-all painting, colour survives per-frame reordering/filtering (§6.4) |
 | `tests/test_maskdino_fullres.py` | the `--eval_full_res` ruler (§6.5): helpers, the grid-vs-full ruler difference, full_* keys in both eval paths |
 | `tests/test_maskdino_consistency.py` | the cross-view consistency metrics (§6.6): planted-perfect and planted-switch cases, the case volume IoU cannot see, degenerate inputs, additive `bundle_*` keys |
+| `tests/test_maskdino_tracking_metrics.py` | the FORMAL cross-view metrics (§6.6.1): HOTA/AssA/DetA/IDF1, that a switch costs association where a miss does not, per-view queries collapsing AssA, degenerate inputs, additive `bundle_*` keys |
 | `tests/maskdino_fixtures.py` | `_tiny_head`, `_synthetic_targets` shared by the three test modules |
 | `scripts/eval_3d_maskdino.py` | the 3D ruler (§9): official ScanNet 3D instance benchmark eval of a `--multi_frame` checkpoint |
 | `train/scannet3d.py` | 3D benchmark data (§9): minimal PLY reader, superpoints, per-vertex GT ids, 25k frame/pose loading, class tables |
@@ -308,7 +309,7 @@ IoU memory and says nothing extra about cross-view consistency). Off by default;
 the ruler-difference demonstration (a grid-perfect prediction scores 0.5 mIoU on full-res striped
 GT). The GT-only ceiling of each grid on this ruler comes from
 `scripts/scannet_mask_resolution_oracle.py` (`sbatch slurm/scannet_oracle.sh`) — the ScanNet
-analogue of the COCO oracle (docs/MASKDINO_COCO.md §1); run/quote it before arguing about mask
+analogue of the COCO oracle (docs/old/MASKDINO_COCO.md §1); run/quote it before arguing about mask
 resolution on ScanNet. When quoting: `full_*` numbers are still *our* metric implementation on
 *our* split — they make mask-resolution claims honest, they do not make numbers
 leaderboard-comparable (docs/RELATED_WORK.md). Note the 518×518 id map is itself a square resize
@@ -355,6 +356,44 @@ no existing key, threshold or scoring path changed, and the single-frame eval is
 per-view-perfect queries that hands the object off in every frame scores 0.25/0.75 where one
 shared query scores 1.00/0.00.
 
+**6.6.1 The FORMAL version — `bundle_hota` / `bundle_assa` / `bundle_deta` / `bundle_idf1`
+(added 2026-08-27).** The two keys above are **project-defined**: they have no published
+counterpart, because none of the three competitors reports a cross-view consistency metric at all
+(SegVGGT, FAST3DIS and IGGT all report 3D AP only — which is itself the field's best practice for
+this claim, and is what §9 measures). An outward-facing consistency claim therefore cannot rest on
+them. `train/eval_metrics.py::tracking_consistency_metrics` states the same claim in the
+vocabulary of the tracking literature, which a reviewer already has:
+
+| key | what it is | replaces |
+|---|---|---|
+| `bundle_hota` | **HOTA** = √(DetA × AssA), averaged over the standard α = 0.05:0.05:0.95 sweep (Luiten et al., IJCV 2021) | the single headline number |
+| `bundle_assa` | **AssA**, association accuracy | `bundle_id_switch` |
+| `bundle_deta` | **DetA**, detection accuracy | `bundle_view_consistency` |
+| `bundle_idf1` | **IDF1**, identity F1 of the globally optimal one-to-one identity assignment (Ristani et al., ECCVW 2016) | — |
+
+The mapping onto our setting is exact rather than invented, and that is the point worth making
+out loud: **a bundle's S views are the S timesteps of a sequence, and one query is one track by
+construction** (§8.2). Nothing has to be tracked, matched or fused first — which is precisely the
+property the metric is being asked to certify. Both follow the TrackEval reference implementation:
+HOTA matches per view under the *global alignment score*, so a locally better but identity-breaking
+assignment is not rewarded; IDF1 matches identities once for the whole bundle.
+
+Why this is strictly more informative than the pair it replaces: **AssA and DetA price the two
+failure modes apart.** On the planted fixtures of `tests/test_maskdino_tracking_metrics.py`, one
+switched view of four and one *missed* view of four cost exactly the same DetA (0.875), but the
+switch costs AssA 0.599 against the miss's 0.893. A shared query scores AssA 1.00 where per-view
+queries score 0.25 at identical DetA 1.00 — the same case §6.6 motivates itself with, now on a
+published ruler.
+
+Purely additive: `multiview_consistency_metrics` still runs and still reports, as the internal
+diagnostic. Tests: `tests/test_maskdino_tracking_metrics.py` (7 cases, CPU).
+
+**Scoring an existing checkpoint on a new metric.** `scripts/train_maskdino.py --eval_only
+--resume <ckpt>` loads a finished run, runs one validation pass through the same eval path a
+periodic eval uses, appends one `eval_only` row to that run's `metrics.jsonl` and exits — no
+training, no optimizer, and it deliberately does **not** overwrite the run's `config.json`. It is
+the way any metric added after a run can still be put on that run.
+
 **No measurement yet.** The metric was added after job 9071415 (§8.2, the current multi-view
 best) finished, and it is computed inside the eval loop rather than from a saved artefact, so
 the first numbers come from the next `--multi_frame` run. Expect the ablations of §7.4.1 to be
@@ -363,10 +402,11 @@ block is what carries cross-view identity.
 
 ## 7. Results
 
-**Every number lives in `docs/RESULTS.md`** — one home per fact. This section keeps only the two
-measurements whose *method* belongs next to the architecture (§7.6, §7.7) plus one engineering
-note. The run-by-run narrative that used to sit here — job ids, dated readings, the machinery
-check — is archived verbatim in `docs/old/MASKDINO_RESULTS_HISTORY.md`.
+**Every number lives in `docs/RESULTS.md`** — one home per fact. This section keeps only the one
+measurement whose *method* belongs next to the architecture (§7.7, the resolution verdict) plus one
+engineering note. The run-by-run narrative that used to sit here — job ids, dated readings, the
+machinery check — is archived verbatim in `docs/old/MASKDINO_RESULTS_HISTORY.md`, and the COCO
+port check (§7.6) in `docs/old/MASKDINO_HISTORY.md`.
 
 Subsection numbers are kept stable because the rest of the repo cites them.
 
@@ -376,7 +416,8 @@ Subsection numbers are kept stable because the rest of the repo cites them.
 | §7.2, §7.2.1 | data scaling 50→190→490, single-frame ablations | `RESULTS.md` §2 |
 | §7.3 | the retired baseline head on this protocol | `RESULTS.md` §1, §2 |
 | §7.4, §7.4.1 | bundle features, mask upsample, view draws, multi-frame ablations | `RESULTS.md` §2, §3 |
-| §7.5 | 77-scene official-val read-out | `RESULTS.md` §1.1 |
+| §7.5 | 77-scene official-val read-out | archive |
+| §7.6 | COCO upstream-equivalence check | `docs/old/MASKDINO_HISTORY.md` |
 | §7.8, §7.8.1 | official 1201/312 runs; what cross-frame attention buys | `RESULTS.md` §6 |
 
 Four standing conclusions from that body of runs, kept here because the rest of this document
@@ -399,75 +440,6 @@ thresholds (~1600 frames × ~180 ms ≈ 5 min per eval). Two fixes: `--eval_topk
 `test_topk_per_image` — protocol-correct *and* 3× faster per frame) and `--eval_train_scenes 10`
 (the train metric is only an overfit read-out). Eval went ~180 s → ~6 s.
 
-### 7.6 Upstream-equivalence check on COCO (job 8967932, 2026-07-29)
-
-Everything above measures the port against *our own* baselines, which cannot detect a bug that
-is faithfully wrong in both. This check closes that loop: it drives **our** ported modules with
-**upstream's released COCO weights** and asks whether they reproduce upstream's published COCO
-val2017 numbers.
-
-`scripts/coco_transplant_eval.py` loads
-`maskdino_r50_50ep_300q_hid1024_3sd1_instance_maskenhanced_mask46.1ap_box51.5ap.pth`
-(config `maskdino_R50_bs16_50ep_3s.yaml` — the one our defaults mirror) into upstream's
-detectron2 harness, then swaps in our `MaskDINODecoder` and our `MSDeformAttnEncoder`.
-`--mode baseline` leaves upstream untouched and is the control.
-
-**The decoder accepts upstream's weights at `strict=True`: 333/333 parameters, names and shapes.**
-
-| COCO val2017, 5000 images | segm AP | segm AP50 | box AP | box AP50 |
-|---|---|---|---|---|
-| upstream model zoo, row "MaskDINO (hid 1024)" — *this checkpoint* | 46.1 | — | 51.5 | — |
-| `--mode baseline` (upstream code, this env) | 46.129 | 69.021 | 51.540 | 70.509 |
-| **`--mode ours` (ported modules)** | **46.133** | 69.036 | **51.549** | 70.514 |
-
-**The 46.1 / 51.5 target is the README model-zoo figure for the exact checkpoint used, not a
-paper table value** — get this right, the paper's numbers are different. Table 3's 50-epoch /
-300-query ResNet-50 rows are **46.0 / 50.5** (plain) and **46.3 / 51.7** (‡, mask-enhanced box
-init). The ‡ row corresponds to the *other* released checkpoint, `hid2048` (52 M params,
-286 GFLOPs); ours is the narrower `hid1024` variant (47 M, 226 GFLOPs — encoder FFN 1024 instead
-of 2048, which is also why `maskdino_R50_bs16_50ep_3s.yaml` is the matching config). Comparing
-our run against 46.3 would be comparing against a wider model we never ran.
-
-The comparison that actually carries the verdict is **ours vs `--mode baseline`** — same code
-path, same env, same weights, same data — and there the gap is 0.004 AP.
-
-**Δ = +0.004 segm AP / +0.009 box AP.** On CPU the two modes are *bit-identical* to every
-printed digit; the ~0.005 AP drift appears only on GPU, because upstream calls the fused CUDA
-MSDeformAttn kernel there while our port always uses the `grid_sample` core (§2.1). That is the
-one intended difference, and it is worth 0.01 AP.
-
-**Verified as a live path, not a no-op.** `transplant()` asserts the modules are ours
-(`models.maskdino.decoder` / `models.maskdino.pixel_decoder`, 6 + 9 ported `MSDeformAttn`
-instances), and `--perturb 1.05` scales one weight inside *our* decoder: segm AP moves
-55.702 → 55.608 on the 10-image subset. Identical numbers therefore mean equivalence, not a
-silent fallback to upstream code.
-
-**One trap this surfaced, worth knowing before touching level plumbing.** Upstream's pixel
-decoder returns `multi_scale_features` LOW→HIGH resolution and its decoder walks that list
-*backwards* (`idx = num_feature_levels-1-i`); our port takes it HIGH→LOW and walks forwards.
-Both flatten the same tensors in the same order only because the adapter reverses the list.
-The decoder's own `input_proj` is an empty `nn.Sequential` under this config, so its index
-convention carries no weights and the difference is invisible in a state-dict diff.
-
-**Scope — what this does and does not certify.**
-
-| Certified by this check | Not exercised |
-|---|---|
-| `ms_deform_attn.py` (encoder *and* decoder) | `matcher.py`, `criterion.py` — training only |
-| `pixel_decoder.py`: encoder layer/stack, reference points | DN query generation in `decoder.py` |
-| `decoder.py`: two-stage selection, DAB anchors, iterative box refinement, mask-enhanced box init, prediction heads | `multiframe.py` — no upstream counterpart |
-| `decoder_layers.py`, `utils.py`, `box_ops.masks_to_boxes` | the VGGT ViTDet pyramid (§3) — no COCO counterpart |
-
-The right-hand column is not a known problem, just untested by *this* route; the loss path still
-rests on `tests/test_maskdino_loss.py` (perfect-prediction zero loss) and the overfit tests.
-Since the multi-frame work edits the matcher and the criterion, that is the column to extend
-next if more assurance is wanted.
-
-Reproduce: `sbatch slurm/coco_transplant.sh` (~32 min on one RTX 3090, both modes; results land in
-`/cluster/work/igp_psr/niacobone/distillation/output/coco_transplant/`).
-COCO val2017 lives at `/cluster/scratch/niacobone/coco` — **global scratch is purged after
-15 days**, so re-download (§ the script header) if it has vanished.
-
 ### 7.7 The resolution verdict (2026-07-30, jobs 9073136 / 9072738 / 9072749 / 9072761)
 
 Three mutually consistent measurements close the "is the 37×37 grid the bottleneck?" question
@@ -485,7 +457,7 @@ on ScanNet. All on the full-resolution ruler of §6.5.
 | 518×518 (sanity) | 1.000 | 1.000 | 1.000 | 1.000 |
 
 Contrast with COCO, where the same grid caps a perfect model at 44.7 AP
-(docs/MASKDINO_COCO.md §1): ScanNet's furniture-scale objects lose only ~0.04 AP50 of ceiling
+(docs/old/MASKDINO_COCO.md §1): ScanNet's furniture-scale objects lose only ~0.04 AP50 of ceiling
 to the 37×37 quantisation. The model sits at ~0.69 AP50 against a 0.956 ceiling —
 **recognition binds, not resolution.**
 
@@ -509,7 +481,7 @@ Three readings:
    bounds what it could buy (~0.004 AP50 ceiling over ×2).
 
 **Consequence for the plan:** mask resolution work on ScanNet is de-prioritised; the honest
-lever for boundary quality would be the token grid (docs/MASKDINO_COCO.md §1.3, VGGT at higher
+lever for boundary quality would be the token grid (docs/old/MASKDINO_COCO.md §1.3, VGGT at higher
 input resolution), and even that is bounded by the 0.956→0.99 ceiling gap. Quote §7.7 whenever
 resolution comes up.
 
@@ -1142,32 +1114,13 @@ so the 18-class headline structurally pays ~1/18 of its mass wherever otherfurni
   pose** + intrinsics per frame, 5 436 frames, non-finite poses excluded at load time —
   `legacy/dataset_build/{scripts/repack_frames25k.py, slurm/download_frames25k_val312.sh}`.
 
-### 9.4 Honesty: which checkpoint may quote which number
+### 9.4 The split rule — which checkpoint may quote a 3D number
 
-The official val-312 split overlaps our conventional training range (scenes 0000–0489), so **any
-existing checkpoint's 3D numbers are DIAGNOSTIC only** — they verify the pipeline, they are not
-reportable. The reportable number needs a checkpoint trained on the official 1201-scene split
-(tar built, docs/todo.md 1c) with val-312 never seen. A further caveat for the current diagnostic
-checkpoint (`maskdino_sf_n490_mf_b2jit_20260730_105117/checkpoint_best.pth`): it is the epoch-17
-mIoU-selected checkpoint — the epoch-19 AP50-selected one that carried the 0.515 bundle headline
-did not survive the 2026-07-30 output cleanup (bundle AP50 0.461 at epoch 17).
-
-### 9.5 Diagnostic runs on the leaked checkpoint (2026-08-01, jobs 9327269 / 9327271)
-
-Numbers: `docs/RESULTS.md` §5. Full narrative and per-scene readings:
-`docs/old/MASKDINO_RESULTS_HISTORY.md`. Kept here because two of its findings are structural and
-the rest of §9 argues from them:
-
-1. **Geometry binds, not recognition.** AP25 ≈ 4–5× AP50: objects are found and coarsely
-   localised, but the lifted masks miss the >0.5-IoU bar. Median camera-centre RMS after Sim(3) is
-   **0.14 m** and ICP point RMS **~0.10 m** — the same order as the vote radius, and VGGT's own
-   depth/pose drift over a whole-scan S≈17 bundle, not a 2D mask-quality problem (the same model
-   scores 0.65–0.67 per-frame AP50). This is the price of "no GT geometry at inference".
-2. **Coverage is the second cap:** ~15 % of mesh vertices receive any vote, ~63 % of annotated
-   vertices get assigned. Every unassigned GT instance is a hard FN.
-3. **S-generalisation works as designed:** bundles of 3–55 frames (median 15) through a model
-   trained at S=8, no failures — `CrossFrameAttention` has no frame positional encoding, and the
-   two-stage top-k just unions over more frames.
+**A 3D number is reportable only if the checkpoint that produced it never saw val-312.** In
+practice that means training on the official 1201-scene split (`docs/todo.md` 1c); every number
+in this section and in `docs/RESULTS.md` §5–§7 satisfies it. Checkpoints from before that split
+existed cannot, and their 3D readings are archived, not reported
+(`docs/old/MASKDINO_HISTORY.md` §9.4/§9.5).
 
 ### 9.6 The REPORTABLE number (2026-08-03, jobs 9503137 / 9503139)
 
@@ -1591,11 +1544,14 @@ ballpark", which was comparing across settings.
 **On the `--anchor_3d` checkpoint the collapse goes the other way, and the result is the strongest
 row in this project (job 9866391, 2026-08-06, 312 scenes, 0 failures, all lifting knobs at
 defaults).** 0.038 / 0.112 / 0.360 class-aware → **0.042 / 0.138 / 0.504 class-agnostic** — i.e.
-like-for-like it **leads FAST3DIS (0.038 / 0.096 / 0.316) and IGGT (0.028 / 0.112 / 0.287) on
-AP50 and AP25, matches FAST3DIS on AP and leads IGGT on it**, on a strictly frozen backbone
-against their LoRA-adapted ones, with ~17 views/scene against FAST3DIS's 50, and untuned.
-⚠ The AP column is a *tie*, not a lead — §8.3's seed-1 replicate put our AP at 0.039 against
-0.038, inside our own 0.003 seed spread; "ahead on all three" was a seed-0-only reading.
+like-for-like **at this 17-view budget** it leads FAST3DIS (0.038 / 0.096 / 0.316) and IGGT
+(0.028 / 0.112 / 0.287) **on AP50 and AP25, matches FAST3DIS on AP and leads IGGT on it**, on a
+strictly frozen backbone against their LoRA-adapted ones, and untuned.
+⚠ At 17 views the AP column is a *tie*, not a lead — §8.3's seed-1 replicate put our AP at 0.039
+against 0.038, inside our own 0.003 seed spread; "ahead on all three" was a seed-0-only reading
+**of this row**. ⚠ **Superseded as the headline since 2026-08-27**: at the competitors' own 50
+views the same checkpoint scores 0.053 / 0.170 / 0.542 and leads on all three
+(`docs/RESULTS.md` §5.4). Quote the view budget with the claim, always.
 This falsified the prediction recorded in todo 1e
 ("expect the claim to weaken"): the sign of the collapse is **checkpoint-dependent**, not a
 property of the setting. Why it flips — the collapse costs a head whose class-aware mean is

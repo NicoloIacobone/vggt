@@ -52,8 +52,6 @@ python tests/test_demo_gradio_maskdino.py  # the Gradio glue: checkpoint-kind ro
 python tests/test_dualview3d.py       # synced side-by-side 3D (MASKDINO.md §9.7): filtering
                                       # asserted vertex-for-vertex against the GLB path, panels
                                       # share points, payload round-trip, .ply → HTML
-python tests/test_coco_maskdino.py    # COCO track: both pixel-decoder pyramid modes, head
-                                      # round-trip, GT helpers, instance inference + RLE, overfit
 bash tests/test_train_maskdino_sh_lists.sh  # slurm scene-list logic via DRY_RUN: numeric-range
                                       # back-compat, TRAIN_LIST/VAL_LIST split files, filtering
 bash tests/test_train_maskdino_multi_sh.sh  # the multi-dataset driver's lists + CAP_*. Its
@@ -63,16 +61,17 @@ bash tests/test_train_maskdino_multi_sh.sh  # the multi-dataset driver's lists +
 bash tests/test_eval_3d_matrix_sh.sh   # the cross-dataset eval grid (§4.1): the 4x2 cells, the
                                       # three ways a checkpoint may be named, and the chain job
                                       # run the way SLURM runs it (spooled copy, foreign cwd)
-python tests/test_collect_eval3d_matrix.py  # the §7 collector: default-cell filter, --run/--only
-python tests/test_maskdino_control_paths.py  # keeps the COCO control runnable after the upstream
-                                      # clone moves: _BASE_ re-rooting at $MASKDINO_ROOT (todo 6i)
+python tests/test_collect_eval3d_matrix.py  # the eval-matrix collector: default-cell filter,
+                                      # --run/--only
+python tests/test_coco_rle.py         # the COCO compressed-RLE decoder used to read RE10K's SAM2
+                                      # masklets (pure numpy, no pycocotools) — NOT the COCO study
+python tests/test_maskdino_tracking_metrics.py  # HOTA/AssA/DetA/IDF1: a switch costs association
+                                      # where a miss does not, per-view queries collapse AssA
 ```
 
-One test does **not** run under `myenv/` — it needs detectron2 0.6, i.e. the reference env:
-
-```bash
-/cluster/home/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
-```
+**Every test runs under `myenv/` and none needs backbone weights.** The retired COCO arm's two
+tests moved to `legacy/coco/tests/` with the rest of that arm; one of them needed the detectron2
+reference env and is no longer part of this suite.
 
 ---
 
@@ -201,6 +200,31 @@ sbatch --dependency=afterok:<job> --export=ALL,TRAIN_JOB=<job> slurm/chain_eval3
 sbatch splits that list on whitespace and would read the second word as the script name.
 `--learning_rate 5e-5` is load-bearing for any mixture at or past A-long's size (§10.5, §11.3),
 and the control must run at the same LR or the comparison moves two variables.
+
+### 2.9 Score a finished run on a metric that did not exist when it ran
+
+`--eval_only` loads a checkpoint, runs one validation pass through the same path a periodic eval
+uses, appends one `eval_only` row to that run's `metrics.jsonl`, and exits. No training, no
+optimizer, and the run's own `config.json` is left alone. Pass the SAME data/protocol flags the
+run was trained with — `--eval_only` scores whatever bundle geometry you give it.
+
+`slurm/eval_only_maskdino.sh` is the job form: it stages the **val tar only** (the train split is
+never resolved or cached in this mode), scores the official 312-scene val split and appends the
+row. Pass the run's own protocol flags in `EXTRA_ARGS` — the eval scores whatever bundle geometry
+it is given, so a mismatch there silently changes the ruler.
+
+```bash
+OUT=/cluster/work/igp_psr/niacobone/distillation/output
+sbatch --export=ALL,CHECKPOINT=$OUT/<run_dir>/checkpoint_best_bundle.pth,\
+EXTRA_ARGS='--multi_frame --feature_mode bundle --anchor_3d' slurm/eval_only_maskdino.sh
+
+DRY_RUN=1 CHECKPOINT=... bash slurm/eval_only_maskdino.sh    # echo the command, stage nothing
+```
+
+The metrics it prints include `bundle_hota` / `bundle_assa` / `bundle_deta` / `bundle_idf1`
+(MASKDINO.md §6.6.1) — the reason the flag exists.
+
+---
 
 ## 3. Full-resolution ruler (MASKDINO.md §6.5)
 
@@ -378,55 +402,14 @@ python scripts/visualize_maskdino.py --checkpoint <run_dir>/checkpoint_best.pth 
 
 ---
 
-## 6. Upstream-equivalence check (MASKDINO.md §7.6)
+## 6–7. The COCO arm — RETIRED, archived 2026-08-27
 
-Drives **our** ported decoder/encoder with upstream MaskDINO's released COCO weights and checks we
-reproduce their published val2017 numbers. Needs the **reference** env, not `myenv/`, and a GPU of
-sm ≤ 86 (3090/A100) because that torch build predates Ada.
-
-```bash
-sbatch slurm/coco_transplant.sh                                # both modes, 5000 imgs, ~32 min
-LD_LIBRARY_PATH=/cluster/home/niacobone/MaskDINO/myenv/lib/python3.9/site-packages/torch/lib \
-  /cluster/home/niacobone/MaskDINO/myenv/bin/python scripts/coco_transplant_eval.py \
-  --mode ours --limit 10          # CPU-runnable smoke test; --mode baseline is the control
-```
-
----
-
-## 7. COCO backbone-swap study (docs/MASKDINO_COCO.md)
-
-Trains the **same** decoder on COCO with a frozen, swappable backbone. Parallel scripts throughout
-(COCO cannot use the ScanNet feature cache: 618 GB); nothing in the ScanNet path is shared. Each job
-self-resubmits until `<run_dir>/summary.json` exists.
-
-```bash
-sbatch --export=ALL,BACKBONE=resnet50 slurm/train_maskdino_coco.sh   # the control
-sbatch --export=ALL,BACKBONE=vggt     slurm/train_maskdino_coco.sh   # the question
-sbatch --export=ALL,BACKBONE=dinov2   slurm/train_maskdino_coco.sh   # same token geometry as VGGT
-# The GT-only resolution ceiling — run/quote this BEFORE arguing about mask resolution:
-myenv/bin/python scripts/coco_mask_resolution_oracle.py   # 37x37 caps a PERFECT model at 44.7 AP
-```
-
-### 7.1 The upstream control arm (§6's fourth row; third_party/maskdino_control/README.md)
-
-Official MaskDINO, **our** recipe — 12 ep / frozen R50 / 518 squash + hflip / our cosine / clip 0.1.
-Runs under the **reference** env (`$MASKDINO_ROOT/myenv`, py3.9 + detectron2 0.6), not `myenv/`; the
-upstream clone is imported and never edited, so `docs/MASKDINO.md` §7.6 stays reproducible.
-
-```bash
-bash third_party/maskdino_control/build_ops.sh                   # ONCE: MSDeformAttn for sm_80
-python third_party/maskdino_control/make_overfit_root.py --n 64  # ONCE: the gate's COCO root
-/cluster/home/niacobone/MaskDINO/myenv/bin/python tests/test_maskdino_upstream_control.py
-
-sbatch --time=4:00:00 --export=ALL,GATE=1 slurm/train_maskdino_upstream.sh  # §4.1 gate, must be >40
-sbatch slurm/train_maskdino_upstream.sh                                     # 87 948 iters, A100 80GB
-```
-
-Two things that bite: the clone's shipped MSDeformAttn `.so` is **sm_86-only**, and upstream's bare
-`except:` turns a wrong arch into a silent ~10× slowdown instead of a crash — hence `build_ops.sh`
-and the unwrapped kernel call at startup. And the batch job needs **A100 80 GB**: detectron2 has no
-gradient accumulation, and halving `IMS_PER_BATCH` while doubling iterations would change the
-optimisation and destroy the comparison.
+The port check is complete and COCO is not a ruler this project reports on. The whole arm — the
+upstream-equivalence transplant, `train_maskdino_coco.sh`, the resolution oracle and the
+upstream-MaskDINO control (with its `third_party/maskdino_control/` clone glue and both tests) —
+now lives under **`legacy/coco/`**, mirroring the layout it had here. The write-ups are
+`docs/old/MASKDINO_COCO.md` and `docs/old/MASKDINO_HISTORY.md` §7.6. Nothing in it is quotable
+next to a ScanNet number.
 
 ---
 
