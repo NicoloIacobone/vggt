@@ -262,13 +262,15 @@ The headline lives on the 3D benchmark. But the **two mechanisms that carry mult
 | what | what it settles | job | state |
 |---|---|---|---|
 | **The two no-ScanNet arms** | train on IGGT's mixture **minus ASE**, never on ScanNet → makes the competitor comparison **training-matched** | 11839134 · 11839135 | one **done**, one running; the done one's 3D evals are scoring now |
-| **More data ⇄ more compute** | separates the two at the top end; re-run at a halved learning rate after the first pair destabilised | 11831105 · 11830142 | one **done**, one running |
-| **RE10K arm** (**SAM2-supervised** — masks are model output, not GT) | whether a fourth, model-labelled source helps | 11830140 | running |
+| **More data ⇄ more compute** | separates the two at the top end; re-run at a halved learning rate after the first pair destabilised | 11831105 · 11830142 | **both done** |
+| **RE10K arm** (**SAM2-supervised** — masks are model output, not GT) | whether a fourth, model-labelled source helps | 11830140 | **done — it COSTS in-domain**, see below; 3D matrices scoring |
 | **The ablation table on the 3D ruler** (slide 12) | cross-frame attention and bundle features, priced on the headline's own ruler | 11986399 · 11986440 | **first half DONE** — 57 % of the 3D AP50; second running |
 | **Formal identity metrics** (slide 14) | re-scores the headline checkpoint and its control on HOTA / AssA / DetA / IDF1 | 11986564 · 11986565 | **launched today** |
 | ~~Views per scene, 17 → 50~~ | the last unmatched *evaluation* axis | 11841445 ff. | **DONE — and it moved the headline (slide 8)** |
 
-**One arm already failed, which is why the RE10K arm is a re-run.** The first attempt **diverged**: best epoch 2 of 17, training loss rising, training AP50 collapsing to **0.006**. The cause was isolated one variable at a time to the **learning rate**; halving it removes the collapse. That run prices a broken optimisation, not a data source, and is not what RE10K is worth.
+**The RE10K arm and its control both landed today, and the answer is negative in-domain.** Against its same-learning-rate control, at a gradient-step budget matched to within 1 % and the same ScanNet val-312, adding 1500 SAM2-supervised RE10K scenes costs **−0.051 per-bundle AP50** (5.7× the seed spread) and worsens cross-view identity. Read it as **displacement, not as "bad data"**: at fixed compute the fourth source buys its steps from the other three. It also does not settle the question RE10K was added for — that one is *out-of-domain*, and those 3D matrices are still scoring.
+
+*(The earlier attempt at this arm diverged — best epoch 2 of 17, training AP50 collapsing to 0.006. The cause was isolated one variable at a time to the learning rate; halving it removed the collapse, and this run is the converged replacement.)*
 
 ---
 

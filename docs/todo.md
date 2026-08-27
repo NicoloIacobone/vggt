@@ -722,6 +722,15 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
   - [ ] **`--feature_mode single` — job 11986440, running.** A new 12-epoch run on the official
         1201/312 split, because no leak-free checkpoint of that arm existed; its 3D eval follows.
         Until it lands, the +0.147 bundle-features figure stays retired-ruler evidence.
+- [x] **6q. RE10K at matched compute — ANSWERED NEGATIVE in-domain 2026-08-27.** D-long (11830140,
+      +1500 SAM2-supervised RE10K scenes) against A-long′ (11830142) at lr 5e-5, gradient-step
+      budgets matched to within 1 % (85 340 vs 84 480 — the 17-vs-24 epoch difference is what
+      holds them equal), same ScanNet val-312: **per-bundle AP50 0.5753 → 0.5241 (−0.051, 5.7× the
+      seed spread)**, per-frame 0.6821 → 0.6522, `id_switch` 0.4035 → 0.4587. Read as
+      **displacement at fixed compute**, not "bad data" — each ScanNet scene is seen 17 times
+      instead of 24. **Does not settle the out-of-domain question RE10K was added for**; the 3D
+      matrices (11996431 ff.) do, and are scoring. `docs/MULTIDATASET.md` §11.7. The LR diagnosis
+      of §11.3 held: best epoch 15 of 17, loss monotone.
 - [ ] **6p. Formal cross-view identity metrics — IMPLEMENTED, re-scoring in flight 2026-08-27.**
       `view_consistency` / `id_switch` are project-defined and have **no published counterpart**
       (verified: SegVGGT, FAST3DIS and IGGT report no cross-view consistency metric at all).

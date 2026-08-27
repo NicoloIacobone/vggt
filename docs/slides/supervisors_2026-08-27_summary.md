@@ -89,13 +89,13 @@ section.dense { font-size: 19px; }
 | what | what it settles | state |
 |---|---|---|
 | **The two no-ScanNet arms** | train on IGGT's mixture **minus ASE**, never on ScanNet → makes the comparison **training-matched** | one done, one running |
-| **More data ⇄ more compute** | separates the two at the top end | one done, one running |
-| **RE10K arm** (**SAM2-supervised** — masks are model output, not GT) | whether a fourth, model-labelled source helps | running |
+| **More data ⇄ more compute** | separates the two at the top end | **both done** |
+| **RE10K arm** (**SAM2-supervised** — masks are model output, not GT) | whether a fourth, model-labelled source helps | **done — costs 0.051 per-bundle AP50 in-domain** at matched compute; out-of-domain still scoring |
 | **The ablation table on the 3D ruler** | cross-frame attention and bundle features, priced on the headline's own ruler | **first half done: removing cross-frame attention costs 57 % of the 3D AP50**; second running |
-| **Formal identity metrics** | HOTA / AssA / DetA / IDF1 on the headline checkpoint and its control | **launched today** |
+| **Formal identity metrics** | HOTA / AssA / DetA / IDF1 on the headline checkpoint and its control | re-launched today after the first run exposed a scoring bug |
 | ~~Views per scene, 17 → 50~~ | the last unmatched *evaluation* axis | **DONE — and it moved the headline** |
 
-**One arm already failed, which is why the RE10K arm is a re-run.** The first attempt **diverged** — training loss rising, training AP50 collapsing to 0.006. The cause was isolated one variable at a time to the **learning rate**; halving it removes the collapse. That run prices a broken optimisation, not a data source.
+**The RE10K result, in one line.** Against its same-learning-rate control, at a gradient-step budget matched to within 1 %, adding 1500 SAM2-supervised RE10K scenes **costs 0.051 per-bundle AP50** in-domain — 5.7× the seed spread. Read it as **displacement at fixed compute**, not as "bad data", and note it does not settle the *out-of-domain* question RE10K was added for. *(An earlier attempt at this arm diverged; the learning rate was the cause, and this is the converged replacement.)*
 
 ---
 

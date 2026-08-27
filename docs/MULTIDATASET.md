@@ -837,7 +837,47 @@ first attempt, which the LR alone explains.
 | smoke, 24 scenes / 2 epochs (job 11642515) | **passed 2026-08-24** — loss 252.6 → 224.1, all four sources cached |
 | arm D at lr 1e-4 (job 11642516) + its matrix (11642519) | **DIVERGED 2026-08-25** — §11.2 |
 | the two divergence diagnostics (11744294 / 11744296) | **done 2026-08-25** — §11.3, the LR is the cause |
-| **D-long** (11830140) + **A-long′** (11830142), + matrices (11830144 / 11830145) | launched 2026-08-26 |
+| **D-long** (11830140) + **A-long′** (11830142), + matrices (11830144 / 11830145) | **both done 2026-08-27** — §11.7; the 3D matrices are scoring (11996431 ff.) |
+
+### 11.7 The answer in 2D — RE10K COSTS in-domain accuracy at matched compute (2026-08-27)
+
+Both arms finished: D-long 17 epochs, A-long′ 24. **The pair is compute-matched, not
+epoch-matched, and that is deliberate** — the epoch counts were chosen to hold the gradient-step
+budget constant, and they do to within 1 %:
+
+| arm | train mix | scenes | epochs | **steps** |
+|---|---|---|---|---|
+| **A-long′** (11830142) | ScanNet 1201 + ScanNet++ 853 + Infinigen 1466 | 3520 | 24 | **84 480** |
+| **D-long** (11830140) | 〃 **+ RE10K 1500** (SAM2-supervised) | 5020 | 17 | **85 340** |
+
+Both at lr 5e-5, both `--class_agnostic`, and both validated on the **same** ScanNet val-312 — so
+the only difference in the comparison is the 1500 RE10K scenes.
+
+| | A-long′ (no RE10K) | D-long (+RE10K) | Δ |
+|---|---|---|---|
+| **per-bundle AP50** | **0.5753** | 0.5241 | **−0.051** |
+| per-frame AP50 | **0.6821** | 0.6522 | −0.030 |
+| `id_switch` (lower better) | **0.4035** | 0.4587 | +0.055 |
+| `view_consistency` (higher better) | **0.7301** | 0.7169 | −0.013 |
+
+**1. Every axis moves the wrong way, and the margin is real.** −0.051 per-bundle AP50 is ~5.7× the
+measured 0.009 seed spread. This is not noise.
+
+**2. Read it as DISPLACEMENT, not as "RE10K is bad data".** At a fixed step budget, adding a
+fourth source of a different distribution buys its steps from the others: each ScanNet scene is
+seen 17 times instead of 24. The honest claim is *"at matched compute, RE10K costs in-domain
+accuracy"* — not *"RE10K is worthless"*. Separating the two needs a step-matched-per-source run,
+which nothing here provides.
+
+**3. It does not settle the question RE10K was added for.** RE10K's case was always
+**out-of-domain** generalisation, and this is the ScanNet in-domain ruler. The 3D cross-dataset
+matrices (11996431 ff., chained off D-long) are what can answer it, and they are still scoring.
+Until they land, quote this as the in-domain price only.
+
+**4. The learning-rate diagnosis held.** D-long's best epoch is 15 of 17 with the loss falling
+monotonically (83.3 → 82.5 → 82.0), against arm D's best epoch 2 of 17 with training AP50
+collapsing to 0.006 (§11.2). Halving the LR removed the collapse exactly as §11.3 predicted, and
+the run above prices a converged model rather than a broken one.
 
 ## 12. The ZERO-SHOT arms — matching what the competitors train on (todo 6l, 2026-08-26)
 
