@@ -747,9 +747,12 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       AssA 0.584 / DetA 0.314 / IDF1 0.492. **It revised a claim**: `id_switch` says `--anchor_3d`
       cuts identity errors by −0.088, AssA says +0.005 — an order-of-magnitude disagreement on the
       same two checkpoints, because `id_switch` flips on near-ties. Jobs **11997568 / 11997569**
-      re-score the seed-1 replicates to get the first seed spread for these metrics; **no Δ is
-      quotable either way until they land**. Still to re-score: **A-long** (the 0.734 / 0.414
-      row), which needs the multi-dataset val staged.
+      re-scored the seed-1 replicates. **SETTLED 2026-08-27** (§6.6.3): the first seed spread for
+      these metrics is HOTA 0.011 / AssA 0.005 / DetA 0.017 / IDF1 0.021, and **every formal Δ for
+      `--anchor_3d` is inside it** (AssA +0.0011). Only `id_switch` sees the effect (−0.076 vs a
+      0.027 spread). **The identity half of the `--anchor_3d` claim is retired**; its +66 % 3D
+      AP50 is untouched. Still to re-score: **A-long** (the 0.734 / 0.414 row), which needs the
+      multi-dataset val staged.
 
 ## Longer-term / low priority
 

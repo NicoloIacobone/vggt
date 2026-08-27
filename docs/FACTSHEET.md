@@ -174,7 +174,7 @@ Read every Δ against the **measured seed spread of 0.009 per-bundle AP50**.
 |---|---|---|---|
 | **Training data, 1201 → 3520 scenes** | +0.023 unposed 3D AP50 at matched views (0.170 → 0.193); +0.056 per-bundle AP50 | dominates every decoder ingredient | **Tier 1 (D)** + Tier 2 (C) |
 | **View budget, 17 → 50** | +24 % unposed 3D AP50 (0.137 → 0.170); **saturates by 50** | 〃 | **Tier 1 (D)** |
-| **`--anchor_3d`** | +66 % 3D AP50 in *both* bridges; `id_switch` −0.089 | AP-neutral in 2D (inside noise) | **Tier 1 (D + E)** |
+| **`--anchor_3d`** | +66 % 3D AP50 in *both* bridges | AP-neutral in 2D; **no formal identity metric distinguishes it from the control** across two seeds (§5 ⚠) | **Tier 1 (D + E)** |
 | **Bundle width 8 → 16** | +0.027 per-bundle AP50; `id_switch` −0.113; +46 % unposed 3D AP50 | 3× seed noise | **Tier 1 (D)** |
 | Lifting knobs (`--vote_radius`, depth conf.) | +0.016 → +0.047 3D AP50 | larger than most decoder ablations | **Tier 1 (D)** |
 | **Cross-frame attention** | **removing it costs 57 % of the 3D AP50** (0.067 → 0.029; class-agnostic 0.050 → 0.021) | the largest single-mechanism effect in the project | **Tier 1 (D)** — landed 2026-08-27 |
@@ -231,14 +231,18 @@ anything.
    checkpoint: **HOTA 0.422 / AssA 0.584 / DetA 0.314 / IDF1 0.492** (§6.6.2). Quote these as
    **levels**.
 
-   ⚠ **Do NOT quote `id_switch` −0.089 as an identity result any more.** The formal counterpart of
-   that exact quantity, AssA, moves by **+0.005** on the same two checkpoints — the two disagree
-   on the magnitude by more than an order of magnitude, because `id_switch` flips on near-ties
-   between queries segmenting the same object while AssA asks how much of each identity's
-   trajectory is actually explained. The seed spread for HOTA/AssA has never been measured, so
-   **no Δ on these metrics is quotable in either direction** until jobs 11997568 / 11997569 land.
-   The **+66 % 3D AP50** of `--anchor_3d` is untouched by this: it is measured on the benchmark,
-   not on an identity metric.
+   ⚠ **The identity claim for `--anchor_3d` is RETIRED in its old form** (settled 2026-08-27
+   across two seeds, `docs/MASKDINO.md` §6.6.3). **No formal cross-view identity metric
+   distinguishes it from the control**: HOTA, AssA, DetA and IDF1 each move by less than their own
+   seed spread (AssA +0.0011 against a spread of 0.0046). Only the project's own `id_switch` sees
+   an effect (−0.076 against a 0.027 spread), because it flips on near-ties between queries
+   segmenting the same object. The only supported wording is: *"3D anchors reduce our own
+   `id_switch`; no published tracking metric distinguishes them from the control."* The
+   **+66 % 3D AP50** of `--anchor_3d` is untouched — it is measured on the benchmark, not on an
+   identity metric.
+
+   ⚠ **Read any future Δ on these metrics against ~0.01–0.02**, not against the 0.009 per-bundle
+   AP50 spread used elsewhere: the measured spreads are HOTA 0.011, DetA 0.017, IDF1 0.021.
 
 ### "Why not just splat?" — keep ready for reviewers
 

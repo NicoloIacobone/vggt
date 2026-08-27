@@ -78,7 +78,9 @@ section.dense { font-size: 19px; }
 
 1. **The controlled comparison nobody has run.** One backbone, one dataset, one protocol, decoder ingredients varied one at a time — including **3D anchors vs 2D boxes inside the same decoder**, which no published paper has put head-to-head.
 2. **Competitive 3D results from a strictly frozen backbone**, at ~0.8 GPU-days against ~16, with no adaptation of any kind.
-3. **Consistency intrinsic to the query, not post-hoc — and now measured on a published ruler.** The evaluation reports **HOTA / AssA / DetA / IDF1**, the tracking literature's own metrics, with a bundle's views read as timesteps and one query as one track. That mapping is exact rather than invented, which is the point. *Numbers land with the re-scoring jobs on the next slide.*
+3. **Consistency intrinsic to the query, not post-hoc — and now measured on a published ruler.** The evaluation reports **HOTA / AssA / DetA / IDF1**, the tracking literature's own metrics, with a bundle's views read as timesteps and one query as one track. That mapping is exact rather than invented, which is the point. On the headline checkpoint: **HOTA 0.42, AssA 0.58, DetA 0.31, IDF1 0.49**.
+
+⚠ **Switching to them already cost us a claim, and that is the exercise working.** Across two seeds, the secondary claim that 3D anchors improve cross-view *identity* **does not hold** — every published metric moves by less than its own seed spread, while only our own `id_switch` sees an effect. The mechanism's real result, **+66 % 3D AP50**, is measured on the benchmark and untouched.
 
 ---
 

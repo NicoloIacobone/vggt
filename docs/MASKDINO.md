@@ -430,11 +430,44 @@ bridges** (§8.3, `docs/RESULTS.md` §5) and that is measured on the benchmark r
 any of this. What is now in doubt is only the *identity* half of the claim, and only its
 magnitude.
 
-**Open until the seed spread exists.** These are two checkpoints, one seed each, and no seed
-spread has ever been measured for HOTA/AssA — so +0.005 cannot yet be called "inside noise" *or*
-"a real gain". Jobs **11997568 / 11997569** re-score the seed-1 replicates of both arms, which
-gives that spread. Until they land, quote the formal numbers as levels (HOTA ≈ 0.42, AssA ≈ 0.58
-on the headline checkpoint) and **do not quote the Δ in either direction**.
+#### 6.6.3 The seed spread — SETTLED, and the formal metrics see nothing (jobs 11997568/11997569)
+
+Both arms re-scored at `--seed 1`, same protocol. This is the first seed spread ever measured for
+these metrics, and it is **large relative to the effect**:
+
+| | HOTA | AssA | DetA | IDF1 | `id_switch` | `view_consistency` |
+|---|---|---|---|---|---|---|
+| control, seed 0 | 0.4183 | 0.5791 | 0.3130 | 0.4841 | 0.4982 | 0.7167 |
+| control, seed 1 | 0.4080 | 0.5837 | 0.2966 | 0.4634 | 0.4710 | 0.7173 |
+| `--anchor_3d`, seed 0 | 0.4217 | 0.5837 | 0.3144 | 0.4921 | 0.4099 | 0.7224 |
+| `--anchor_3d`, seed 1 | 0.4104 | 0.5812 | 0.2996 | 0.4772 | 0.4074 | 0.7279 |
+| **worst within-arm seed spread** | **0.0112** | **0.0046** | **0.0165** | **0.0208** | 0.0272 | 0.0055 |
+| **mechanism Δ (seed mean)** | +0.0029 | +0.0011 | +0.0022 | +0.0109 | **−0.0759** | +0.0082 |
+| verdict | inside | inside | inside | inside | **outside** | marginal |
+
+**1. No formal cross-view identity metric distinguishes `--anchor_3d` from the control.** Every
+one of HOTA, AssA, DetA and IDF1 moves by less than its own seed spread — AssA by 0.0011 against a
+spread of 0.0046. Across two seeds, on the published metrics, the two checkpoints are the same
+model as far as identity is concerned.
+
+**2. Only the project's own metric sees the effect.** `id_switch` −0.0759 against a spread of
+0.0272 is a real signal *of `id_switch`*. `view_consistency` +0.0082 against 0.0055 is 1.5× its
+spread at n=2 — marginal at best, and not something to quote.
+
+**3. So the identity half of the `--anchor_3d` claim does not survive contact with the formal
+metrics, and must be retired in its old form.** The correct statement is: *"3D anchors reduce our
+own `id_switch` by 0.076, outside that metric's seed spread; no published tracking metric
+distinguishes them from the control."* Anything stronger is not supported.
+
+⚠ **This does not touch the mechanism's actual result.** `--anchor_3d` is worth **+66 % 3D AP50 in
+both bridges** (§8.3, `docs/RESULTS.md` §5), measured on the benchmark ruler. That is what the
+mechanism is for and it is unaffected — what has gone is a *secondary* identity claim that was
+resting on a metric only we compute.
+
+**4. Any future Δ on these metrics needs to clear ~0.01–0.02.** The spreads above (HOTA 0.011,
+DetA 0.017, IDF1 0.021) are the bar, and they are much larger than the 0.009 per-bundle AP50
+spread the rest of the project reads against. These metrics are noisy at n=2; a mechanism claiming
+them needs more seeds, not just a bigger number.
 
 **The unfiltered pool, for the record.** The same rows on the raw `--eval_topk` pool read HOTA
 0.186 / 0.179, DetA 0.066 / 0.063, IDF1 0.134 / 0.126 — the numbers that exposed the pool bug
