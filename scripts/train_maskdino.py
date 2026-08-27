@@ -378,6 +378,7 @@ def main():
             keys += [f"bundle_{k}" for k in keys]
             keys += [f"bundle_{k}" for k in CONSISTENCY_KEYS]
             keys += [f"bundle_{k}" for k in TRACKING_KEYS]
+            keys += [f"bundle_{k}_all" for k in TRACKING_KEYS]
         record = {"epoch": start_epoch, "eval_only": True}
         record.update({f"val_{k}": mean_metric(va, k) for k in keys})
         for k in keys:
@@ -477,6 +478,7 @@ def main():
                 keys += [f"bundle_{k}" for k in keys]
                 keys += [f"bundle_{k}" for k in CONSISTENCY_KEYS]   # §6.6
                 keys += [f"bundle_{k}" for k in TRACKING_KEYS]     # HOTA/AssA/DetA/IDF1
+                keys += [f"bundle_{k}_all" for k in TRACKING_KEYS]  # …on the unfiltered pool
             if args.eval_full_res:
                 # after the bundle expansion: bundle_* stays on the mask grid (§6.5)
                 keys += [f"full_{k}" for k in ("mIoU", "AP50", "AP75", "mAP", "class_acc",

@@ -189,7 +189,8 @@ def test_eval_reports_consistency_keys():
     old |= {f"{k}_all" for k in old} | {f"bundle_{k}" for k in old} \
         | {f"bundle_{k}_all" for k in old}
     expected = old | {f"bundle_{k}" for k in CONSISTENCY_KEYS} \
-        | {f"bundle_{k}" for k in TRACKING_KEYS}
+        | {f"bundle_{k}" for k in TRACKING_KEYS} \
+        | {f"bundle_{k}_all" for k in TRACKING_KEYS}
     assert set(m) == expected, sorted(set(m) ^ expected)
 
     # the single-frame path stays exactly as it was: no bundle_* keys at all

@@ -51,6 +51,32 @@ def mask_iou_matrix(pred_binary: torch.Tensor, gt_binary: torch.Tensor) -> torch
     return inter / union.clamp(min=1e-6)
 
 
+def confident_detections(class_logits: torch.Tensor, score_threshold: float,
+                         background_class: int = 0, score_mode: str = "sigmoid") -> torch.Tensor:
+    """
+    The boolean "this query is a detection" mask, in ONE place.
+
+    `compute_instance_segmentation_metrics` and `tracking_consistency_metrics` must agree on what
+    counts as a submitted detection, or their numbers describe different prediction sets. The
+    tracking metrics care more than AP does: AP ranks by score and a low-scoring false positive
+    only costs precision at the tail, while HOTA/DetA/IDF1 count every unmatched detection as a
+    hard FP, so an unfiltered 100-query pool crushes them regardless of mask quality.
+
+    Args:
+        class_logits (torch.Tensor): [N, C] class logits (background column at `background_class`).
+        score_threshold (float): the operating point.
+        background_class (int): the column that means "no object".
+        score_mode (str): "sigmoid" (MaskDINO) or "softmax".
+
+    Returns:
+        torch.Tensor: [N] bool.
+    """
+    probs = (torch.sigmoid(class_logits) if score_mode == "sigmoid"
+             else torch.softmax(class_logits, dim=-1))
+    scores, labels = probs.max(dim=-1)
+    return (labels != background_class) & (scores >= score_threshold)
+
+
 # The keys `multiview_consistency_metrics` returns (the eval prefixes them with `bundle_`).
 CONSISTENCY_KEYS = ["view_consistency", "id_switch", "num_matched"]
 
@@ -196,8 +222,18 @@ def tracking_consistency_metrics(pred_masks: torch.Tensor,
     alignment score (so a locally better but identity-breaking match is not rewarded), IDF1
     matches identities once for the whole bundle.
 
+    ⚠ **Pass the THRESHOLDED prediction pool.** Unlike `multiview_consistency_metrics`, which is
+    deliberately threshold-free because it only ever reports ratios over matched instances, these
+    are absolute and FP-sensitive: every unmatched predicted detection is a hard false positive in
+    DetA and IDF1. Handing them the raw top-100 query pool reports the query budget, not the
+    model — measured on the official split, DetA reads 0.066 unfiltered against 0.464 at the
+    normal operating point, with AssA barely moving. `train/maskdino_eval.py` filters with
+    `confident_detections` before calling; `_all`-suffixed keys carry the unfiltered variant for
+    completeness.
+
     Args:
-        pred_masks (torch.Tensor): [N_pred, S, h, w] mask LOGITS (frame axis must be axis 1).
+        pred_masks (torch.Tensor): [N_pred, S, h, w] mask LOGITS (frame axis must be axis 1),
+            already filtered to the submitted detections.
         gt_masks (torch.Tensor): [N_gt, S, h, w] binary GT volumes, all-zero where not visible.
         mask_threshold (float): probability threshold to binarize predicted masks.
         idf1_threshold (float): the IoU at which IDF1 calls a detection a match (0.5, standard).
@@ -392,8 +428,8 @@ def compute_instance_segmentation_metrics(
         raise ValueError(f"score_mode must be 'softmax' or 'sigmoid', got {score_mode!r}")
     scores_all, labels_all = probs.max(dim=-1)
 
-    # Keep only confident, non-background detections.
-    keep = (labels_all != background_class) & (scores_all >= score_threshold)
+    # Keep only confident, non-background detections (shared with the tracking metrics).
+    keep = confident_detections(class_logits, score_threshold, background_class, score_mode)
     pred_bin = (torch.sigmoid(pred_masks[keep]) > mask_threshold)
     pred_labels = labels_all[keep]
     pred_scores = scores_all[keep]

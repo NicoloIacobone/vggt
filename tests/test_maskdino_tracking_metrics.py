@@ -214,12 +214,63 @@ def test_eval_reports_tracking_keys():
     print("✅ four additive bundle_* keys on the multi-frame path, per-frame path unchanged\n")
 
 
+def test_unfiltered_pool_destroys_deta_but_not_assa():
+    """
+    The bug this pins: these metrics count every unmatched prediction as a hard FP.
+
+    Feeding them the raw top-k query pool reports the QUERY BUDGET, not the model — DetA and
+    IDF1 collapse while AssA, which averages only over matched detections, barely moves. That is
+    exactly what the first re-scoring run showed on the official split (DetA 0.066 unfiltered),
+    and it is why `train/maskdino_eval.py` filters with `confident_detections` first.
+    """
+    print("=== Testing that an unfiltered prediction pool crushes DetA, not AssA ===")
+    from train.eval_metrics import tracking_consistency_metrics
+
+    s, hw = 4, 12
+    gt = torch.stack([_volume(s, hw, [(1, 4, 1, 4)] * s),
+                      _volume(s, hw, [(6, 9, 6, 9)] * s)])
+    good = torch.stack([gt[0], gt[1]])
+
+    # the two real detections, plus 30 junk queries that fire somewhere harmless every view
+    junk = torch.stack([_volume(s, hw, [(10, 11, (i % 10), (i % 10) + 1)] * s) for i in range(30)])
+    pool = torch.cat([good, junk])
+
+    filtered = tracking_consistency_metrics(good * 2 * LOGIT - LOGIT, gt)
+    unfiltered = tracking_consistency_metrics(pool * 2 * LOGIT - LOGIT, gt)
+
+    assert filtered["deta"] == 1.0, filtered
+    assert unfiltered["deta"] < 0.15, unfiltered           # 2 of 32 tracks are real
+    assert unfiltered["idf1"] < 0.25, unfiltered
+    # association is measured over matched detections only, so it survives the junk
+    assert unfiltered["assa"] == filtered["assa"] == 1.0, (filtered, unfiltered)
+    print(f"✅ DetA {filtered['deta']:.2f} → {unfiltered['deta']:.3f} with 30 junk queries, "
+          f"while AssA holds at {unfiltered['assa']:.2f}\n")
+
+
+def test_confident_detections_is_the_shared_filter():
+    """AP and the tracking metrics must score the same submitted set, from one definition."""
+    print("=== Testing the shared confident-detection filter ===")
+    from train.eval_metrics import confident_detections
+
+    # [N, C] sigmoid logits; column 0 is background (never selected by the max)
+    logits = torch.tensor([[-9.0, 4.0, -9.0],     # confident class 1
+                           [-9.0, -9.0, -0.2],    # sigmoid(-0.2) = 0.45, below 0.5
+                           [-9.0, -9.0, -9.0]])   # nothing fires
+    keep = confident_detections(logits, score_threshold=0.5)
+    assert keep.tolist() == [True, False, False], keep.tolist()
+    # a lower operating point admits the middle query
+    assert confident_detections(logits, 0.4).tolist() == [True, True, False]
+    print("✅ one filter, used by both AP and the tracking metrics\n")
+
+
 if __name__ == "__main__":
     test_planted_perfect()
     test_switch_costs_association_a_miss_does_not()
     test_more_switches_are_strictly_worse()
     test_per_view_queries_collapse_association()
     test_edge_cases()
+    test_unfiltered_pool_destroys_deta_but_not_assa()
+    test_confident_detections_is_the_shared_filter()
     test_bounded_and_hota_is_the_geometric_mean()
     test_eval_reports_tracking_keys()
     print("All test_maskdino_tracking_metrics tests passed! ✅")

@@ -385,8 +385,27 @@ switch costs AssA 0.599 against the miss's 0.893. A shared query scores AssA 1.0
 queries score 0.25 at identical DetA 1.00 — the same case §6.6 motivates itself with, now on a
 published ruler.
 
+**⚠ These are scored on the SUBMITTED detections, and that is not a detail.** Unlike the pair
+above — deliberately threshold-free, because it only ever reports ratios over *matched* instances
+— HOTA, DetA and IDF1 are absolute and FP-sensitive: every unmatched predicted detection is a hard
+false positive. Handing them the raw `--eval_topk` pool reports the **query budget**, not the
+model. Measured on the official split (job 11986564, first run): the raw 100-query pool gives
+**DetA 0.066** where the same checkpoint at the normal operating point gives a healthy figure,
+while **AssA moves by <0.01** — exactly the asymmetry the metric definitions predict. So
+`train/maskdino_eval.py` filters with `confident_detections` (one shared definition of "a
+submitted detection", used by the AP path too, so the two can never drift) and reports the
+unfiltered variant under an `_all` suffix. This mirrors the thresholded / threshold-free
+convention §6.2 already uses for AP.
+
+**The eval path is validated against the old metric.** On the same checkpoints, `--eval_only`
+reproduces the documented `id_switch` delta of `--anchor_3d` to the third decimal: 0.4982 →
+0.4099, i.e. **−0.088** against the −0.089 recorded in §8.3 from the original training runs. AssA
+moves the same way (0.5401 → 0.5474), which is the cross-check that the formal metric is measuring
+what the custom one was measuring.
+
 Purely additive: `multiview_consistency_metrics` still runs and still reports, as the internal
-diagnostic. Tests: `tests/test_maskdino_tracking_metrics.py` (7 cases, CPU).
+diagnostic. Tests: `tests/test_maskdino_tracking_metrics.py` (9 cases, CPU), including the
+unfiltered-pool trap above.
 
 **Scoring an existing checkpoint on a new metric.** `scripts/train_maskdino.py --eval_only
 --resume <ckpt>` loads a finished run, runs one validation pass through the same eval path a

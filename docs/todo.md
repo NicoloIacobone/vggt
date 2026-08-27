@@ -726,9 +726,14 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       `train/eval_metrics.py::tracking_consistency_metrics` adds **HOTA / AssA / DetA / IDF1**
       (`docs/MASKDINO.md` §6.6.1) with the bundle's views read as timesteps; jobs **11986564 /
       11986565** re-score the headline `--anchor_3d` checkpoint and its control via the new
-      `--eval_only` path. When they land: put HOTA/AssA on the slides and demote the custom pair
-      to an internal diagnostic. Still to re-score: **A-long** (the 0.734 / 0.414 row), which
-      needs the multi-dataset val staged.
+      `--eval_only` path. **First run exposed a real bug and was re-launched (11994637/11994639):**
+      the metrics were being scored on the raw `--eval_topk` pool, so DetA/IDF1 measured the query
+      budget rather than the model (DetA 0.066); they now score the *submitted* detections, with
+      the unfiltered variant kept under `_all` (`docs/MASKDINO.md` §6.6.1). The run did validate
+      the path — `id_switch` reproduced at −0.088 against the recorded −0.089. When the re-run
+      lands: put HOTA/AssA on the slides and demote the custom pair to an internal diagnostic.
+      Still to re-score: **A-long** (the 0.734 / 0.414 row), which needs the multi-dataset val
+      staged.
 
 ## Longer-term / low priority
 
