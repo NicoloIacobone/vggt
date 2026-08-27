@@ -94,7 +94,7 @@ Four labels travel with every 3D number. A number without them is not comparable
 
 - **Neither variant needs camera intrinsics or extrinsics.** A 3D anchor reaches a view through a *soft nearest-patch* — a softmax over the distances between the anchor and that view's patch positions — not through a perspective projection, which is what keeps it usable when the predicted cameras are imprecise.
 - One variable: same decoder, same frozen backbone, same training data, same protocol.
-- **The headline row is the 3D-anchor one.** It is worth **+66 % 3D AP50 in *both* bridges**, and it also improves cross-view identity, while being neutral in 2D accuracy.
+- **The headline row is the 3D-anchor one.** It is worth **+66 % 3D AP50 in *both* bridges** — measured on the benchmark, and that is the claim. It is neutral in 2D accuracy. ⚠ Its effect on cross-view *identity* is **being re-measured**: the project's own metric said the gain was large, the formal association metric (AssA) says it is +0.005. See slide 14.
 - **Neither mechanism is ours.** 3D-anchored queries are already published by **FAST3DIS**; queries shared across views are already published by **SegVGGT**. What nobody has run is the **two of them against each other inside one decoder** — that is the contribution (slide 13).
 
 ---
@@ -249,9 +249,9 @@ The headline lives on the 3D benchmark. But the **two mechanisms that carry mult
 
 1. **The controlled comparison nobody has run.** One backbone, one dataset, one protocol, decoder ingredients varied one at a time — including **3D vs 2D anchors inside the same decoder**.
 2. **Competitive 3D results from a strictly frozen backbone**, at **~0.8 GPU-days against ~16**, with no adaptation of any kind — where everyone else LoRA-adapts.
-3. **Consistency intrinsic to the query, not post-hoc — and measured on a published ruler.** As of today the evaluation reports **HOTA / AssA / DetA / IDF1**, the tracking literature's own metrics, with a bundle's views read as timesteps and one query read as one track. That mapping is exact rather than invented, which is the point: nothing has to be tracked, matched or fused first. *Numbers land with the re-scoring jobs on slide 15.*
+3. **Consistency intrinsic to the query, not post-hoc — and now measured on a published ruler.** The evaluation reports **HOTA / AssA / DetA / IDF1**, the tracking literature's own metrics, with a bundle's views read as timesteps and one query read as one track. That mapping is exact rather than invented, which is the point: nothing has to be tracked, matched or fused first. On the headline checkpoint: **HOTA 0.42, AssA 0.58, DetA 0.31, IDF1 0.49**.
 
-**Why this replaced what was here before.** The consistency numbers this project had been quoting were **its own definitions**, with no published counterpart — none of the three competitors reports a cross-view consistency metric at all. A claim that is the centre of the design should not rest on a metric only we compute.
+**Why this mattered more than expected.** The consistency numbers this project had been quoting were **its own definitions**, with no published counterpart — none of the three competitors reports a cross-view consistency metric at all. Switching to the formal ones immediately changed a claim: where our own `id_switch` said 3D anchors cut identity errors by a large margin (−0.088), **AssA — the published counterpart of exactly that quantity — moves by +0.005**. `id_switch` flips on near-ties between queries segmenting the same object; AssA asks how much of each identity's trajectory is actually explained. The seed spread for these metrics is being measured before either number is quoted as an effect. *(The +66 % 3D AP50 from 3D anchors is untouched by this — it is measured on the benchmark, not on an identity metric.)*
 
 ---
 
@@ -265,7 +265,8 @@ The headline lives on the 3D benchmark. But the **two mechanisms that carry mult
 | **More data ⇄ more compute** | separates the two at the top end; re-run at a halved learning rate after the first pair destabilised | 11831105 · 11830142 | **both done** |
 | **RE10K arm** (**SAM2-supervised** — masks are model output, not GT) | whether a fourth, model-labelled source helps | 11830140 | **done — it COSTS in-domain**, see below; 3D matrices scoring |
 | **The ablation table on the 3D ruler** (slide 12) | cross-frame attention and bundle features, priced on the headline's own ruler | 11986399 · 11986440 | **first half DONE** — 57 % of the 3D AP50; second running |
-| **Formal identity metrics** (slide 14) | re-scores the headline checkpoint and its control on HOTA / AssA / DetA / IDF1 | 11986564 · 11986565 | **launched today** |
+| **Formal identity metrics** (slide 14) | HOTA / AssA / DetA / IDF1 on the headline checkpoint and its control | 11994637 · 11994639 | **DONE — and they revised an identity claim** (slide 14) |
+| **Seed spread for those metrics** | whether the +0.005 AssA of 3D anchors is an effect or noise — no spread has ever been measured for them | 11997568 · 11997569 | launched today |
 | ~~Views per scene, 17 → 50~~ | the last unmatched *evaluation* axis | 11841445 ff. | **DONE — and it moved the headline (slide 8)** |
 
 **The RE10K arm and its control both landed today, and the answer is negative in-domain.** Against its same-learning-rate control, at a gradient-step budget matched to within 1 % and the same ScanNet val-312, adding 1500 SAM2-supervised RE10K scenes costs **−0.051 per-bundle AP50** (5.7× the seed spread) and worsens cross-view identity. Read it as **displacement, not as "bad data"**: at fixed compute the fourth source buys its steps from the other three. It also does not settle the question RE10K was added for — that one is *out-of-domain*, and those 3D matrices are still scoring.

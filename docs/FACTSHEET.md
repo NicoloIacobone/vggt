@@ -227,10 +227,18 @@ anything.
 3. **Consistency intrinsic to the query, not post-hoc** — and now *measured on a published
    ruler*: since 2026-08-27 the eval reports **HOTA / AssA / DetA / IDF1**
    (`docs/MASKDINO.md` §6.6.1), the tracking literature's own metrics, with a bundle's views read
-   as timesteps and one query as one track *by construction*. ⚠ **Numbers pending** — the
-   re-scoring jobs are in flight; until they land, the only measured figures are the project's own
-   `bundle_view_consistency` **0.734** / `bundle_id_switch` **0.414** (A-long), which must be
-   labelled **project-defined, no published counterpart** wherever they appear.
+   as timesteps and one query as one track *by construction*. On the headline `--anchor_3d`
+   checkpoint: **HOTA 0.422 / AssA 0.584 / DetA 0.314 / IDF1 0.492** (§6.6.2). Quote these as
+   **levels**.
+
+   ⚠ **Do NOT quote `id_switch` −0.089 as an identity result any more.** The formal counterpart of
+   that exact quantity, AssA, moves by **+0.005** on the same two checkpoints — the two disagree
+   on the magnitude by more than an order of magnitude, because `id_switch` flips on near-ties
+   between queries segmenting the same object while AssA asks how much of each identity's
+   trajectory is actually explained. The seed spread for HOTA/AssA has never been measured, so
+   **no Δ on these metrics is quotable in either direction** until jobs 11997568 / 11997569 land.
+   The **+66 % 3D AP50** of `--anchor_3d` is untouched by this: it is measured on the benchmark,
+   not on an identity metric.
 
 ### "Why not just splat?" — keep ready for reviewers
 

@@ -743,8 +743,13 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       the unfiltered variant kept under `_all` (`docs/MASKDINO.md` §6.6.1). The run did validate
       the path — `id_switch` reproduced at −0.088 against the recorded −0.089. When the re-run
       lands: put HOTA/AssA on the slides and demote the custom pair to an internal diagnostic.
-      Still to re-score: **A-long** (the 0.734 / 0.414 row), which needs the multi-dataset val
-      staged.
+      **Re-run DONE 2026-08-27** (`docs/MASKDINO.md` §6.6.2): headline checkpoint HOTA 0.422 /
+      AssA 0.584 / DetA 0.314 / IDF1 0.492. **It revised a claim**: `id_switch` says `--anchor_3d`
+      cuts identity errors by −0.088, AssA says +0.005 — an order-of-magnitude disagreement on the
+      same two checkpoints, because `id_switch` flips on near-ties. Jobs **11997568 / 11997569**
+      re-score the seed-1 replicates to get the first seed spread for these metrics; **no Δ is
+      quotable either way until they land**. Still to re-score: **A-long** (the 0.734 / 0.414
+      row), which needs the multi-dataset val staged.
 
 ## Longer-term / low priority
 

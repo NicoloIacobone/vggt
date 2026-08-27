@@ -399,9 +399,47 @@ convention §6.2 already uses for AP.
 
 **The eval path is validated against the old metric.** On the same checkpoints, `--eval_only`
 reproduces the documented `id_switch` delta of `--anchor_3d` to the third decimal: 0.4982 →
-0.4099, i.e. **−0.088** against the −0.089 recorded in §8.3 from the original training runs. AssA
-moves the same way (0.5401 → 0.5474), which is the cross-check that the formal metric is measuring
-what the custom one was measuring.
+0.4099, i.e. **−0.088** against the −0.089 recorded in §8.3 from the original training runs.
+
+#### 6.6.2 The first formal numbers — and they do NOT corroborate the `id_switch` claim (2026-08-27)
+
+Jobs 11994637 / 11994639, official val-312, submitted-detection pool.
+
+| checkpoint | HOTA | AssA | DetA | IDF1 | `id_switch` |
+|---|---|---|---|---|---|
+| control (no anchors) | 0.4183 | 0.5791 | 0.3130 | 0.4841 | 0.4982 |
+| **`--anchor_3d`** (the headline checkpoint) | **0.4217** | **0.5837** | **0.3144** | **0.4921** | **0.4099** |
+| Δ | **+0.0034** | **+0.0046** | +0.0014 | +0.0080 | **−0.0883** |
+
+**This is the finding that justifies the whole exercise.** The project's own `id_switch` says 3D
+anchors improve cross-view identity by a large margin (−0.088, quoted wherever that mechanism is
+described). **AssA — the formal, published counterpart of exactly that quantity — moves by
++0.005.** The two metrics disagree about the *size* of the effect by more than an order of
+magnitude, and they agree only on its sign.
+
+The mechanism of the disagreement is in the definitions. `id_switch` asks a *winner-take-all*
+question per view — "is the top-IoU query in this view someone other than the bundle-matched
+one?" — so it flips on near-ties between queries that are segmenting the same object almost
+equally well. AssA asks how much of each identity's trajectory the associated track actually
+explains, so a change in who wins a near-tie barely moves it. **A mechanism can therefore buy a
+large `id_switch` improvement while changing association quality very little**, which appears to
+be what `--anchor_3d` does.
+
+⚠ **Do not restate this as "3D anchors do not help".** They are worth **+66 % 3D AP50 in both
+bridges** (§8.3, `docs/RESULTS.md` §5) and that is measured on the benchmark ruler, unaffected by
+any of this. What is now in doubt is only the *identity* half of the claim, and only its
+magnitude.
+
+**Open until the seed spread exists.** These are two checkpoints, one seed each, and no seed
+spread has ever been measured for HOTA/AssA — so +0.005 cannot yet be called "inside noise" *or*
+"a real gain". Jobs **11997568 / 11997569** re-score the seed-1 replicates of both arms, which
+gives that spread. Until they land, quote the formal numbers as levels (HOTA ≈ 0.42, AssA ≈ 0.58
+on the headline checkpoint) and **do not quote the Δ in either direction**.
+
+**The unfiltered pool, for the record.** The same rows on the raw `--eval_topk` pool read HOTA
+0.186 / 0.179, DetA 0.066 / 0.063, IDF1 0.134 / 0.126 — the numbers that exposed the pool bug
+above. AssA is almost unchanged there (0.547 / 0.540), exactly as its definition predicts. They
+are kept under the `_all` suffix and are not quotable.
 
 Purely additive: `multiview_consistency_metrics` still runs and still reports, as the internal
 diagnostic. Tests: `tests/test_maskdino_tracking_metrics.py` (9 cases, CPU), including the
