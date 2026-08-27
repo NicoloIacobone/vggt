@@ -177,13 +177,16 @@ Read every Δ against the **measured seed spread of 0.009 per-bundle AP50**.
 | **`--anchor_3d`** | +66 % 3D AP50 in *both* bridges; `id_switch` −0.089 | AP-neutral in 2D (inside noise) | **Tier 1 (D + E)** |
 | **Bundle width 8 → 16** | +0.027 per-bundle AP50; `id_switch` −0.113; +46 % unposed 3D AP50 | 3× seed noise | **Tier 1 (D)** |
 | Lifting knobs (`--vote_radius`, depth conf.) | +0.016 → +0.047 3D AP50 | larger than most decoder ablations | **Tier 1 (D)** |
-| **Cross-frame attention** | +0.183 per-bundle AP50 | 20× seed noise | **no Tier-1 number** ⚠ — 3D eval in flight (§6.5) |
+| **Cross-frame attention** | **removing it costs 57 % of the 3D AP50** (0.067 → 0.029; class-agnostic 0.050 → 0.021) | the largest single-mechanism effect in the project | **Tier 1 (D)** — landed 2026-08-27 |
 | **Bundle features** | +0.147 per-bundle AP50 (−0.048 per-frame) | 16× | **no Tier-1 number** ⚠ — training run in flight (§6.5) |
 | Mask resolution 37² → 74² | −0.022 (neutral) | **not the bottleneck** | `MASKDINO.md` §7.7 |
 
-⚠ The two effect sizes marked *no Tier-1 number* were measured on the **retired project-val 2D
-ruler** (`docs/old/RESULTS_HISTORY.md`). They are quoted here as the reason the two jobs in §6.5
-were launched, not as results — and they may not go on a slide next to a competitor number.
+⚠ The one effect size still marked *no Tier-1 number* was measured on the **retired project-val
+2D ruler** (`docs/old/RESULTS_HISTORY.md`). It is quoted here as the reason the job in §6.5 was
+launched, not as a result — and it may not go on a slide next to a competitor number.
+**Cross-frame attention no longer needs that caveat**: its 3D number landed 2026-08-27
+(`RESULTS.md` §5.5, single-variable verified by a `config.json` diff), and it is the strongest
+mechanism result the project holds.
 
 ### The four conclusions
 
@@ -328,14 +331,14 @@ The headline lives on Tier 1 (3D). Two of the study's strongest levers are measu
 **Both halves are now in flight** (2026-08-27). They cost very differently, which is why they are
 two jobs and not one:
 
-| half | what was launched | job |
-|---|---|---|
-| `--no-cross_frame_attn` | one 3D eval of the existing official-split checkpoint (`maskdino_sf_list1201_mf_noxframe_20260803_111855`) | **11986399** |
-| `--feature_mode single` | a **new 12-epoch training run** on the official 1201/312 split — no usable checkpoint existed, and the only one that did was trained on a range overlapping val-312 | **11986440** (+ its 3D eval to follow) |
+| half | what was launched | job | state |
+|---|---|---|---|
+| `--no-cross_frame_attn` | one 3D eval of the existing official-split checkpoint | **11986399** | **DONE 2026-08-27** — removing it costs **57 % of the 3D AP50** (`RESULTS.md` §5.5) |
+| `--feature_mode single` | a **new 12-epoch training run** on the official 1201/312 split — no usable checkpoint existed, and the only one that did was trained on a range overlapping val-312 | **11986440** | running; its 3D eval follows |
 
-Single variable in both cases: same decoder, same frozen backbone, same split, same schedule as
-the control run `maskdino_sf_list1201_mf_20260802_133826`. Until they land, the +0.183 / +0.147
-figures in §4 stay labelled as retired-ruler evidence, not results.
+Single variable in both cases, and for the finished half that is **verified, not assumed**: a
+`config.json` diff of the two runs returns exactly one differing key. Until the second half lands,
+the +0.147 bundle-features figure in §4 stays labelled as retired-ruler evidence, not a result.
 
 ---
 

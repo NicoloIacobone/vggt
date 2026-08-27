@@ -713,13 +713,15 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       to training on FAST3DIS's own source. What it does not buy: a FAST3DIS-matched training
       set — their 40 % scene list is unpublished, permanently (§5). Work: licence acceptance,
       one fetch job, a `train/` adapter mirroring `slurm/build_insscene2d.py`.
-- [ ] **6o. Land the ablation-table hole on the 3D ruler — LAUNCHED 2026-08-27.** Job
-      **11986399** = the 3D eval of `--no-cross_frame_attn` (existing official-split checkpoint,
-      `maskdino_sf_list1201_mf_noxframe_20260803_111855`). Job **11986440** = a new 12-epoch
-      `--feature_mode single` training run on the official 1201/312 split, because no leak-free
-      checkpoint of that arm existed; its 3D eval follows. Both are single-variable against the
-      control `maskdino_sf_list1201_mf_20260802_133826`. Closes the ⚠ rows of
-      `docs/FACTSHEET.md` §4.
+- [ ] **6o. Land the ablation-table hole on the 3D ruler — HALF DONE 2026-08-27.**
+  - [x] **`--no-cross_frame_attn` — job 11986399, DONE** (`docs/RESULTS.md` §5.5). 312 scenes, 0
+        failures, defaults. Removing it costs **57 % of the 3D AP50** (0.067 → 0.029 class-aware,
+        0.050 → 0.021 class-agnostic) — the largest single-mechanism effect in the project, and
+        the ratio holds across both label settings. Single variable verified by a `config.json`
+        diff: exactly one differing key.
+  - [ ] **`--feature_mode single` — job 11986440, running.** A new 12-epoch run on the official
+        1201/312 split, because no leak-free checkpoint of that arm existed; its 3D eval follows.
+        Until it lands, the +0.147 bundle-features figure stays retired-ruler evidence.
 - [ ] **6p. Formal cross-view identity metrics — IMPLEMENTED, re-scoring in flight 2026-08-27.**
       `view_consistency` / `id_switch` are project-defined and have **no published counterpart**
       (verified: SegVGGT, FAST3DIS and IGGT report no cross-view consistency metric at all).

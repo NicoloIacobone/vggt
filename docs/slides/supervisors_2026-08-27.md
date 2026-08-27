@@ -211,16 +211,19 @@ Two notes on the rows in bold. **Views** was the last unmatched *evaluation* axi
 
 ## 12. Closing the ablation table on the 3D ruler
 
-The headline lives on the 3D benchmark. But the **two mechanisms that carry multi-view consistency** — cross-frame attention, and letting a query see the whole bundle's features rather than one view's — have so far only ever been measured on the project's internal 2D metrics. 3D anchors, bundle width and the lifting parameters all have 3D numbers; those two did not.
+The headline lives on the 3D benchmark. But the **two mechanisms that carry multi-view consistency** — cross-frame attention, and letting a query see the whole bundle's features rather than one view's — had only ever been measured on the project's internal 2D metrics. 3D anchors, bundle width and the lifting parameters all had 3D numbers; those two did not. Both were launched today; **the first has landed.**
 
-**Both were launched today**, and they cost very differently, which is why they are two jobs and not one:
-
-| half | what it needed | job |
+| Checkpoint | 18-class AP / AP50 / AP25 | class-agnostic |
 |---|---|---|
-| **no cross-frame attention** | a 3D eval of a checkpoint that already exists on the official split | **11986399** — ~1 h |
-| **per-frame features** | a **new 12-epoch training run**: no checkpoint of this arm existed on the official split | **11986440** — ~19 h, then its 3D eval |
+| the control — full model, official split | 0.023 / 0.067 / 0.268 | 0.013 / 0.050 / 0.320 |
+| **without cross-frame attention** | **0.010 / 0.029 / 0.167** | **0.005 / 0.021 / 0.214** |
+| ratio | 0.46× / **0.43×** / 0.62× | 0.38× / **0.42×** / 0.67× |
 
-Single variable in both cases: same decoder, same frozen backbone, same split, same schedule as the control. When they land, every lever in the study is priced on the ruler the headline is on.
+- **Removing cross-frame attention costs 57 % of the 3D AP50** — far more than any decoder ingredient measured anywhere in this project, and now on the **same ruler as the headline** rather than on an internal one. The effect survives the label setting (0.43× class-aware, 0.42× class-agnostic), so it is not an artefact of class collapse.
+- **AP25 falls least.** Objects are still found without it; what degrades is whether the fused 3D instance clears the 0.5-IoU bar — the same signature as everything else here: the mechanism buys quality, the lifting step converts it into AP50.
+- **Single variable, verified not assumed:** a config diff of the two runs returns exactly one differing key.
+
+**The other half is still running** (`--feature_mode single`, job 11986440): no leak-free checkpoint of that arm existed, so it needed a new 12-epoch training run before it could be evaluated at all. That asymmetry in price is why they were two jobs and not one.
 
 ---
 
@@ -261,7 +264,7 @@ Single variable in both cases: same decoder, same frozen backbone, same split, s
 | **The two no-ScanNet arms** | train on IGGT's mixture **minus ASE**, never on ScanNet → makes the competitor comparison **training-matched** | 11839134 · 11839135 | one **done**, one running; the done one's 3D evals are scoring now |
 | **More data ⇄ more compute** | separates the two at the top end; re-run at a halved learning rate after the first pair destabilised | 11831105 · 11830142 | one **done**, one running |
 | **RE10K arm** (**SAM2-supervised** — masks are model output, not GT) | whether a fourth, model-labelled source helps | 11830140 | running |
-| **The ablation table on the 3D ruler** (slide 12) | cross-frame attention and bundle features, priced on the headline's own ruler | 11986399 · 11986440 | **launched today** |
+| **The ablation table on the 3D ruler** (slide 12) | cross-frame attention and bundle features, priced on the headline's own ruler | 11986399 · 11986440 | **first half DONE** — 57 % of the 3D AP50; second running |
 | **Formal identity metrics** (slide 14) | re-scores the headline checkpoint and its control on HOTA / AssA / DetA / IDF1 | 11986564 · 11986565 | **launched today** |
 | ~~Views per scene, 17 → 50~~ | the last unmatched *evaluation* axis | 11841445 ff. | **DONE — and it moved the headline (slide 8)** |
 

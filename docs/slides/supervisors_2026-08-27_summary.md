@@ -91,7 +91,7 @@ section.dense { font-size: 19px; }
 | **The two no-ScanNet arms** | train on IGGT's mixture **minus ASE**, never on ScanNet → makes the comparison **training-matched** | one done, one running |
 | **More data ⇄ more compute** | separates the two at the top end | one done, one running |
 | **RE10K arm** (**SAM2-supervised** — masks are model output, not GT) | whether a fourth, model-labelled source helps | running |
-| **The ablation table on the 3D ruler** | cross-frame attention and bundle features, priced on the headline's own ruler | **launched today** |
+| **The ablation table on the 3D ruler** | cross-frame attention and bundle features, priced on the headline's own ruler | **first half done: removing cross-frame attention costs 57 % of the 3D AP50**; second running |
 | **Formal identity metrics** | HOTA / AssA / DetA / IDF1 on the headline checkpoint and its control | **launched today** |
 | ~~Views per scene, 17 → 50~~ | the last unmatched *evaluation* axis | **DONE — and it moved the headline** |
 

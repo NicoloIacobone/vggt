@@ -347,6 +347,41 @@ unposed too.
 **1.71×** (from 1.84×). Their row is class-aware and ours class-agnostic, so this is a
 *direction*, not a like-for-like ratio — §5.1's decomposition is where that gap is priced.
 
+### 5.5 THE ABLATION TABLE ON THE 3D RULER — cross-frame attention (todo 6o, 2026-08-27)
+
+Job 11986399, 312 scenes, 0 failures, all lifting knobs at defaults, unposed. The first **Tier-1**
+number for the mechanism that carries multi-view consistency: until now cross-frame attention was
+measured only on the retired 2D project-val ruler, which is the hole §8.4 marks with ⚠.
+
+**Single variable, verified rather than assumed:** a `config.json` diff of the two runs returns
+exactly one differing key, `cross_frame_attn`. Same 1201 train scenes, same 312 val scenes, same
+schedule, same everything else.
+
+| checkpoint | 18-class AP/AP50/AP25 | class-agnostic |
+|---|---|---|
+| the control — `maskdino_sf_list1201_mf_20260802_133826` | 0.023 / 0.067 / 0.268 | 0.013 / 0.050 / 0.320 |
+| **`--no-cross_frame_attn`** — `…_mf_noxframe_20260803_111855` | **0.010 / 0.029 / 0.167** | **0.005 / 0.021 / 0.214** |
+| Δ | −0.012 / **−0.038** / −0.101 | −0.008 / **−0.029** / −0.106 |
+| ratio | 0.46× / **0.43×** / 0.62× | 0.38× / **0.42×** / 0.67× |
+
+**1. Cross-frame attention is worth ~2.3× the 3D AP50.** Removing it costs **57 %** of the
+class-aware AP50 and 58 % of the class-agnostic one. That is far larger than any decoder
+ingredient measured anywhere in this project, and it is now on the **same ruler as the headline**
+rather than on a retired 2D one.
+
+**2. It survives the label setting.** The ratio is 0.43× class-aware and 0.42× class-agnostic —
+so this is not an artefact of the class collapse that makes other rows checkpoint-dependent (§5,
+§9.11).
+
+**3. AP25 falls least** (0.62×/0.67× against 0.43×/0.42× at AP50). Objects are still found without
+cross-frame attention; what degrades is whether the fused 3D instance is *good enough* to clear the
+0.5-IoU bar. That is the same signature as everything else in this section — the mechanism buys
+mask/identity quality, and the lifting step is what converts it into AP50.
+
+**Still open: the other half.** `--feature_mode single` has no leak-free checkpoint, so it needed a
+new training run (job 11986440, official split, 12 epochs); its 3D eval follows. Until it lands the
+ablation table is half on Tier 1.
+
 ## 6. Official 1201/312 split — first runs (2026-08-02)
 
 **A new ruler, on purpose.** Train = the full official ScanNet v2 train split (1201 scenes,
