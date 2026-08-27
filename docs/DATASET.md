@@ -196,6 +196,35 @@ can only be trained with `--class_agnostic`. Provenance, the two exclusions, the
 verification, the build and the runs are all in **`docs/MULTIDATASET.md`** — this entry exists so
 that a reader of the tar list knows they are here and why they are not in the table above.
 
+### 2.5 The DENSE ScanNet val-312 frame export — matching the competitors' view counts
+
+**Built 2026-08-26** (todo 6k; array job 11839821 → pack 11840376). `scannet_frames25k_val312`
+is every 100th raw frame, i.e. **17.42 frames/scene** — while FAST3DIS evaluates on **50**
+uniformly sampled views and SegVGGT on **every 20th frame** (~75–120). That was the last
+unmatched axis of the protocol comparison (`docs/TRAINING_COMPARABILITY.md` §6.3), and it runs
+*against* us: we lead the published cluster on a third of their views.
+
+| Tar | Contents |
+|---|---|
+| **`scannet_frames_dense_val312.tar.zst`** | Same layout and same loaders as `scannet_frames25k_val312.tar.zst` — `scans25k/<scene>/{color/<idx:06d>.jpg, depth/<idx:06d>.png, pose/<idx:06d>.txt, intrinsics_{color,depth}.txt}` — at **stride 20** (SegVGGT's sampling), capped at 150 frames/scene. `sample_frames25k` then subsamples uniformly to whatever `--num_frames` asks for, so `--num_frames 50` is FAST3DIS's budget exactly. |
+
+Built by `legacy/dataset_build/scripts/extract_sens_frames25k.py` (streams the whole `.sens`,
+~1.15 GB/scene at ~68 MB/s, writes only the kept frames) driven by
+`slurm/build_frames_dense_val312.sh` (16-task array, resumable per scene via a `.complete`
+marker) and packed by `slurm/pack_frames_dense_val312.sh`. Unlike every other build in this file
+it writes to **scratch**, not `$TMPDIR`: ~94 k files against §5.1's 1.0 M soft quota, and an
+array cannot share a node-local tree across tasks.
+
+**Verified against the official export**, not assumed — same scene (`scene0011_00`) at stride
+100: identical frame stems, **depth pixel-identical** (max |diff| 0 of uint16 mm), poses equal to
+5e-6, intrinsics to 5e-3. **The color jpegs are NOT byte-identical**: the official 25k export
+re-compressed them (102 KB against our 260 KB for the same frame, max per-pixel |diff| ~45),
+while ours are the `.sens` payload verbatim. Consequence for reporting: a dense-tar run will not
+reproduce a published 25k-tar number to the last digit, so **the view-count comparison must run
+its own 17-frame control on the dense tar** — dense-vs-dense is the single-variable form.
+Parser format guards + the synthetic-`.sens` regression: `tests/test_sens_frames_extract.py`
+(23 CPU checks).
+
 ## 3. Mask conventions (both GTs)
 
 - uint8 `{0, 255}` PNGs at the scene's color-camera resolution (1296×968; 640×480 for the 9

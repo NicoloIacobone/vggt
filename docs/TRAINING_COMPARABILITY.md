@@ -120,3 +120,105 @@ This is a depth/MVS training corpus. Treat the whole directory as unusable for i
    IGGT's own reporting setting, so it is a fair column, not a concession.
 8. **Licences.** ScanNet / ScanNet++ require the signed TOS (held). Replica is **CC-BY-NC-4.0** —
    research use fine, redistribution not. InsScene-15K is Apache-2.0. ASE requires Project Aria terms.
+
+## 6. The competitor-matched programme (opened 2026-08-26)
+
+§1–§5 audited the mismatch. This section is what is being **done** about it: every axis on which
+a published row and one of ours differ, with the state of each. It is the home of the
+"same setting, same epochs, same training and validation data" question — read it with
+`docs/todo.md` 6k/6l, which track the jobs.
+
+### 6.1 Two things that were checked before anything was launched
+
+**(a) "For IGGT only Aria/ASE is missing" — TRUE, with one structural addition.** IGGT trains on
+InsScene-15K = ASE + Infinigen + RE10K + ScanNet++ (§1). The mirror on work holds three of those
+four and the fourth is not published (§4, §5.3). But the gap was never only ASE: **every arm we
+have ever trained also contains ScanNet**, which IGGT's does not — so no existing checkpoint is
+IGGT-matched, whatever the mirror holds. Matching IGGT means *removing* ScanNet as well as adding
+its three sources, which is what arm **I** does (§6.2).
+
+**(b) "Another competitor uses a different setting with geometric GT" — TRUE, and it is SegVGGT.**
+Its evaluator projects the GT benchmark cloud into each view with ScanNet's **GT poses and sensor
+depth**, quoting their own §: *"We utilize the ground-truth depth maps and camera poses during this
+mapping stage for fair comparison."* We already implement exactly that bridge as
+`--transfer_mode gt_projection`, oracle-licensed at round-trip purity 0.9999, and report it as its
+own column (`docs/RESULTS.md` §5.1, §8.3). **That axis needs no new work** — it is matched.
+
+### 6.2 The zero-shot arms — matching what the competitors TRAIN on
+
+The single largest remaining mismatch is not the protocol, it is that **FAST3DIS and IGGT never
+train on ScanNet and we always do**. Every "we lead FAST3DIS/IGGT" row in `docs/RESULTS.md` §8.2
+is therefore *favourable to us on the training axis*, and a reviewer sees that before anything
+else. Two arms close it, both launched 2026-08-26, both `--class_agnostic --anchor_3d`, lr 5e-5,
+step-matched to the arms already in flight, and both scored on the same 4 × 2 matrix:
+
+| arm | train sources | scenes | epochs | steps | job | what it matches |
+|---|---|---|---|---|---|---|
+| **I** | ScanNet++ + Infinigen + RE10K@1500 | 3819 | 22 | 84 018 | 11839134 | **IGGT's training set minus ASE** — and no target-benchmark data at all |
+| **I-gt** | ScanNet++ + Infinigen | 2319 | 36 | 83 484 | 11839135 | the same, minus the SAM2-supervised source: a **GT-only** zero-shot row |
+
+Together with the two arms already running they form a **complete 2 × 2** at ~84 k steps and one
+learning rate — `{± ScanNet} × {± RE10K}`:
+
+| | no RE10K | + RE10K@1500 |
+|---|---|---|
+| **+ ScanNet** | A-long′ 11830142 (3520) | D-long 11830140 (5020) |
+| **no ScanNet** | **I-gt 11839135 (2319)** | **I 11839134 (3819)** |
+
+so "how much of our ScanNet lead is ScanNet training data" and "what does SAM2 supervision add"
+are each **one variable**, measured twice.
+
+**What arm I is and is not.** It is IGGT's mixture minus ASE, with RE10K capped at 1500 of 5127
+scenes for memory (`--cpus-per-task=22`; uncapped it is ~550 GB of feature cache). Two differences
+run in *our* favour and must be stated: we drop the 50 `nvs_sem_val` ScanNet++ scenes from training
+so our ScanNet++ column is honest, which IGGT does not do (§1.1 consequence 3); and our backbone
+stays **frozen** where IGGT finetunes VGGT. One runs against us: IGGT trains on 8 × A800 for 2 days
+(~16 GPU-days) against our ~0.8. ASE remains permanently out of reach (§5.1, §5.2).
+
+**Validation data.** The val ruler is the official ScanNet v2 312 for every arm, including the two
+that never see ScanNet in training — there it is a **zero-shot** read-out. That required one driver
+change (`slurm/train_maskdino_multi.sh` stages the val tar independently of `SOURCES`; 4 new checks
+in `tests/test_train_maskdino_multi_sh.sh`). Note that `checkpoint_best_bundle.pth` is *selected* on
+that ruler, so for a strictly selection-leak-free row score the final `checkpoint.pth` alongside it.
+
+### 6.3 Views per scene — the last unmatched evaluation axis
+
+| benchmark | their views | ours | state |
+|---|---|---|---|
+| ScanNet++ | FAST3DIS 50 | **50** | **already matched** — our frames tar is 50/scene by construction |
+| Replica | FAST3DIS 50 | **50** | **already matched** |
+| ScanNetv2 / ScanNet200 | FAST3DIS 50; SegVGGT every 20th frame (~75–120) | **17.42** | the gap — `scannet_frames_25k` is every 100th frame |
+| queries kept | SegVGGT 600 | 100 | **measured neutral** (0.138 → 0.140, `docs/MASKDINO.md` §9.8.1); struck as an explanation |
+
+So the mismatch is confined to the two ScanNet columns, and it runs *against* us — we lead the
+published cluster on a third of their views. `docs/DATASET.md` §2.3 builds the dense export that
+closes it (job 11839821 → 11840376); scored at `--num_frames 50` it is FAST3DIS's budget exactly,
+and at full stride it is SegVGGT's sampling. **Run the 17-frame cell on the dense tar too**: its
+jpegs are the original `.sens` payloads while the 25k export re-compressed them (~102 KB vs
+~260 KB for the same frame), so only a dense-vs-dense comparison isolates view count.
+
+### 6.4 What remains permanently unmatched
+
+Beyond §5's list: **training compute**. SegVGGT and IGGT each spend ~16 GPU-days (8 GPUs × 2 days);
+our arms spend ~0.8, head-only on cached frozen features. That is a property of the design, not an
+oversight, and the step-budget axis is measured *inside* our own block (A-long ⇄ A-long′ ⇄ C-long′,
+`docs/MULTIDATASET.md` §10.5). Do not present our numbers as compute-matched.
+
+### 6.5 Status — every axis, every job (2026-08-26)
+
+| axis | competitor's setting | ours | state |
+|---|---|---|---|
+| evaluator | official ScanNet 3D instance benchmark | vendored, same options | **matched** since 2026-08-01 |
+| bridge, unposed | FAST3DIS / IGGT: predicted geometry + Sim(3)+ICP | same | **matched** |
+| bridge, posed ("geometric GT") | SegVGGT: GT poses + sensor depth | `--transfer_mode gt_projection`, oracle 0.9999 | **matched** |
+| label setting | FAST3DIS / IGGT class-agnostic; SegVGGT class-aware | both computed per run | **matched** |
+| benchmarks | ScanNetv2 / ScanNet200 / ScanNet++ / Replica | all four | **matched** (todo 6d) |
+| kept queries | SegVGGT 600 | 100 | **measured neutral** |
+| views, ScanNet++ / Replica | 50 | 50 | **matched** |
+| views, ScanNetv2 / ScanNet200 | 50 (FAST3DIS) / ~75–120 (SegVGGT) | 17.42 → **50 on demand** | **MATCHED 2026-08-27** — dense export built, 7 cells scored; at 50 views the lead *widens* and the lever saturates (`docs/RESULTS.md` §5.4) |
+| train split, SegVGGT | official ScanNetv2 1201 | identical | **matched** since 2026-08-02 |
+| train data, IGGT | InsScene-15K (ASE + Infinigen + RE10K + ScanNet++) | **arm I** = the same minus ASE, RE10K@1500 | **IN FLIGHT** — 11839134 → 11839151 |
+| train data, FAST3DIS | ASE only → ScanNet zero-shot | **arms I / I-gt** never train on ScanNet | **IN FLIGHT** — 11839134 / 11839135 |
+| train data, ASE itself | 9.2 TB, unpublished scene list | — | **permanently out of reach** (§5.1–5.2) |
+| ScanNet200 supervision | SegVGGT trains a 200-class checkpoint | our 2D GT is 19-class | **open, costed** — todo 6m |
+| training compute | ~16 GPU-days | ~0.8 GPU-days, frozen backbone | **not matchable; state it** (§6.4) |

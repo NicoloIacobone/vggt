@@ -178,6 +178,30 @@ not ground truth. Label every row it produces and never fold it into the A/A-lon
 
 ---
 
+### Zero-shot arms — no ScanNet in training (todo 6l, docs/MULTIDATASET.md §12)
+
+The competitor-matched training setting: FAST3DIS and IGGT never train on ScanNet. Drop it from
+`SOURCES` and the val-312 ruler is staged and scored anyway — there it is a zero-shot read-out.
+
+```bash
+# arm I -- IGGT's mixture MINUS ASE (the ASE portion is not published; docs/…COMPARABILITY §5.3)
+SOURCES='scannetpp infinigen re10k' CAP_RE10K=1500 EPOCHS=22 \
+    EXTRA_ARGS='--anchor_3d --learning_rate 5e-5' EXP_TAG=_armI_zeroshot \
+    sbatch --export=ALL --cpus-per-task=22 slurm/train_maskdino_multi.sh
+
+# arm I-gt -- the same without the SAM2-supervised source (docs/MULTIDATASET.md §1.3)
+SOURCES='scannetpp infinigen' EPOCHS=36 \
+    EXTRA_ARGS='--anchor_3d --learning_rate 5e-5' EXP_TAG=_armIgt_zeroshot \
+    sbatch --export=ALL --cpus-per-task=16 slurm/train_maskdino_multi.sh
+
+sbatch --dependency=afterok:<job> --export=ALL,TRAIN_JOB=<job> slurm/chain_eval3d_matrix.sh
+```
+
+`EXTRA_ARGS`/`SOURCES` go through the **environment**, not through `--export`'s comma list —
+sbatch splits that list on whitespace and would read the second word as the script name.
+`--learning_rate 5e-5` is load-bearing for any mixture at or past A-long's size (§10.5, §11.3),
+and the control must run at the same LR or the comparison moves two variables.
+
 ## 3. Full-resolution ruler (MASKDINO.md §6.5)
 
 Adds `full_*` metrics scored at the 518×518 GT resolution next to the unchanged grid metrics.
@@ -305,6 +329,28 @@ myenv/bin/python tests/test_collect_eval3d_matrix.py   # its CPU checks
 **The three non-default datasets are CLASS-AGNOSTIC only** — their taxonomies are not our 19
 ScanNet classes, so labels are collapsed on both sides and the class-aware fields are written as
 `null` rather than fabricated. Never put such a row next to a class-aware ScanNetv2 one.
+
+### 4.1.1 Matching the competitors' VIEW COUNT (todo 6k, docs/DATASET.md §2.5)
+
+ScanNet++ and Replica already run at exactly **50 frames/scene** = FAST3DIS's budget. ScanNetv2
+and ScanNet200 run at **17.42**, because `scannet_frames_25k` is every 100th frame. The dense
+export fixes only those two:
+
+```bash
+D=/cluster/work/igp_psr/niacobone/distillation/dataset/scannet/scannet_frames_dense_val312.tar.zst
+# FAST3DIS's 50 uniformly sampled views
+sbatch --export=ALL,CHECKPOINT=<ckpt>,FRAMES_TAR=$D,EXTRA_ARGS='--num_frames 50' \
+    slurm/eval_3d_maskdino.sh
+# the 17-frame CONTROL -- on the SAME tar, or the jpeg re-compression of the 25k export
+# is a second variable (docs/DATASET.md §2.5)
+sbatch --export=ALL,CHECKPOINT=<ckpt>,FRAMES_TAR=$D,EXTRA_ARGS='--num_frames 17' \
+    slurm/eval_3d_maskdino.sh
+# SegVGGT's sampling: every 20th frame, i.e. the tar as built
+sbatch --export=ALL,CHECKPOINT=<ckpt>,FRAMES_TAR=$D slurm/eval_3d_maskdino.sh
+```
+
+`--tmp` and the GPU may both need raising: the head runs ONE forward pass over every sampled
+frame, so 50–120 frames is 3–7× the memory of the 17 the default `rtx_4090:1` was sized for.
 
 ### 4.2 The licence gate — run it before believing ANY number from a dataset
 
@@ -463,6 +509,18 @@ geometry check, which is the intended behaviour: a missing scene is recoverable,
 misaligned one is not.
 
 ---
+
+### Dense ScanNet val-312 frames (todo 6k; docs/DATASET.md §2.5)
+
+```bash
+sbatch legacy/dataset_build/slurm/build_frames_dense_val312.sh          # 16-task array, ~20 s/scene
+sbatch --dependency=afterok:<array> legacy/dataset_build/slurm/pack_frames_dense_val312.sh
+```
+
+Streams the whole `.sens` per scene (no early abort — a whole-scan sample needs the last frame),
+writes only the kept frames, resumable per scene via a `.complete` marker. This is the one build
+that writes to **scratch** rather than `$TMPDIR`: ~94 k files, and an array cannot share a
+node-local tree. Delete the tree once the tar is on work.
 
 ## 9. The retired baseline head (`legacy/`, frozen)
 

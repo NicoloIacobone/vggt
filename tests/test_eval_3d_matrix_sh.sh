@@ -15,6 +15,7 @@ check(){ if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got '$2', want '$3')"; 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/runA" "$TMP/runB"
 : > "$TMP/runA/checkpoint_best_bundle.pth"
+: > "$TMP/runA/checkpoint.pth"                # the FINAL epoch — what CKPT_NAME selects
 : > "$TMP/runB/checkpoint_best_bundle.pth"
 
 run() { DRY_RUN=1 OUT="$TMP" bash slurm/eval_3d_matrix.sh 2>&1; }
@@ -67,6 +68,19 @@ grep -q "\[chain\] job 999001 -> $TMP/runA" <<< "$OUTPUT" \
     || bad "the chain reads the run dir out of the training log ($OUTPUT)"
 grep -q "CHECKPOINT=$TMP/runA/checkpoint_best_bundle.pth" <<< "$OUTPUT" \
     && ok "…and hands it to the matrix" || bad "…and hands it to the matrix"
+
+# CKPT_NAME picks a different checkpoint in the same run dir — the ZERO-SHOT arms must be
+# scored on the FINAL epoch, because the val ruler their best-bundle checkpoint is selected on
+# is itself zero-shot and cannot separate epochs (docs/MULTIDATASET.md §12.1).
+OUTPUT=$(TRAIN_JOB=999001 LOG_DIR="$LOGS" OUT="$TMP" DRY_RUN=1 DATASETS=replica \
+         MODES=unproject CKPT_NAME=checkpoint.pth bash slurm/chain_eval3d_matrix.sh 2>&1)
+grep -q "CHECKPOINT=$TMP/runA/checkpoint.pth" <<< "$OUTPUT" \
+    && ok "CKPT_NAME selects the final checkpoint" || bad "CKPT_NAME selects the final checkpoint ($OUTPUT)"
+grep -q "checkpoint_best_bundle" <<< "$OUTPUT" \
+    && bad "…and does NOT also submit the default one" || ok "…and does NOT also submit the default one"
+grep -q "eval3d_runA" <<< "$OUTPUT" \
+    && ok "…and the job name still identifies the run, not the checkpoint file" \
+    || bad "…and the job name still identifies the run ($OUTPUT)"
 
 OUTPUT=$(TRAIN_JOB=999002 LOG_DIR="$LOGS" DRY_RUN=1 bash slurm/chain_eval3d_matrix.sh 2>&1); RC=$?
 check "a missing training log aborts" "$RC" 1

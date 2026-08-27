@@ -9,6 +9,9 @@
 #   sbatch --export=ALL,SOURCES='scannet scannetpp infinigen re10k',CAP_RE10K=1500,EPOCHS=17,\
 #       EXTRA_ARGS='--anchor_3d --learning_rate 5e-5' --cpus-per-task=26 \
 #       slurm/train_maskdino_multi.sh          # the SAM2-supervised arm -- 5e-5 IS load-bearing
+#   sbatch --export=ALL,SOURCES='scannetpp infinigen re10k',CAP_RE10K=1500,EPOCHS=22,\
+#       EXTRA_ARGS='--anchor_3d --learning_rate 5e-5' --cpus-per-task=22 \
+#       slurm/train_maskdino_multi.sh          # ZERO-SHOT arm: no ScanNet in training at all
 #   DRY_RUN=1 bash slurm/train_maskdino_multi.sh                      # print the lists and exit
 #
 # Knobs (via --export=ALL,VAR=...):
@@ -31,7 +34,12 @@
 # "more data helped" and "the ruler got easier" become indistinguishable. Val is the official
 # ScanNet v2 312-scene list, scored class-agnostic — so the honest baseline for this run is a
 # ScanNet-ONLY run with --class_agnostic, not any published class-aware number
-# (docs/RESULTS.md §1).
+# (docs/RESULTS.md §1). It is INDEPENDENT of SOURCES: drop `scannet` from SOURCES and the val
+# tar is still staged and still scored, which is how the ZERO-SHOT arms (the competitor-matched
+# training sets of docs/TRAINING_COMPARABILITY.md §6 — FAST3DIS and IGGT never train on ScanNet)
+# are put on exactly the same ruler as the arms that do train on it. In those arms the val
+# number is a zero-shot read-out, and `checkpoint_best_bundle.pth` is selected on it — so score
+# the final `checkpoint.pth` alongside it if the selection itself has to be leak-free.
 #
 # MEMORY -- the binding constraint, and it is NOT the GPU. The trainer caches frozen VGGT
 # features plus GT for every scene up front. MEASURED, not projected: 135 GB peak RSS for 1513
@@ -87,11 +95,16 @@ if [ -z "${DRY_RUN:-}" ]; then
     export PYTHONUNBUFFERED=1
 
     # --- ScanNet: the usual staging path (train 1201 + val 312) ---------------------------
+    # The val ruler is the official ScanNet 312 for EVERY mixture (see the header), so the
+    # val tar is staged even when ScanNet is NOT a training source — that is what makes the
+    # ZERO-SHOT arms of docs/MULTIDATASET.md §12 scorable on the same ruler as the others.
     if [[ " $SOURCES " == *" scannet "* ]]; then
         export DATA_TAR="$DATASET_ROOT/scannet/scannet_official_gt_1201.tar.zst \
 $DATASET_ROOT/scannet/scannet_official_gt_val312.tar.zst"
-        source slurm/stage_dataset.sh          # sets SCANNET_ROOT
+    else
+        export DATA_TAR="$DATASET_ROOT/scannet/scannet_official_gt_val312.tar.zst"
     fi
+    source slurm/stage_dataset.sh              # sets SCANNET_ROOT
 
     # --- the instance-map datasets: one tar each, unpacked node-local --------------------
     for SRC in $SOURCES; do
@@ -139,16 +152,14 @@ done
 TRAIN=$(printf '%s\n' "${TRAIN_PARTS[@]}" | { grep . || true; } | paste -sd, -)
 N_TRAIN=$(tr ',' '\n' <<< "$TRAIN" | grep -c .)
 
-# Val: the official ScanNet v2 312, unchanged across every mixture (see the header).
-if [[ " $SOURCES " == *" scannet "* ]]; then
-    VAL_IDS=$(grep -vE '^\s*$' data/splits/scannetv2_val.txt | sort -u)
-    [ -d "${SCANNET_ROOT:-/nonexistent}" ] && \
-        VAL_IDS=$(comm -12 <(echo "$VAL_IDS") <(ls "$SCANNET_ROOT" | sort))
-    [ "${CAP_VAL:-0}" -gt 0 ] && VAL_IDS=$(head -n "${CAP_VAL}" <<< "$VAL_IDS")
-    VAL=$(sed "s|^|${SCANNET_ROOT:-}/|; s|$|/raw_data|" <<< "$VAL_IDS" | paste -sd, -)
-else
-    VAL=""
-fi
+# Val: the official ScanNet v2 312, unchanged across every mixture (see the header) — and
+# INDEPENDENT of SOURCES, so a mixture that does not train on ScanNet is still scored on the
+# same ruler (there it is a ZERO-SHOT ruler; the val tar is staged above either way).
+VAL_IDS=$(grep -vE '^\s*$' data/splits/scannetv2_val.txt | sort -u)
+[ -d "${SCANNET_ROOT:-/nonexistent}" ] && \
+    VAL_IDS=$(comm -12 <(echo "$VAL_IDS") <(ls "$SCANNET_ROOT" | sort))
+[ "${CAP_VAL:-0}" -gt 0 ] && VAL_IDS=$(head -n "${CAP_VAL}" <<< "$VAL_IDS")
+VAL=$(sed "s|^|${SCANNET_ROOT:-}/|; s|$|/raw_data|" <<< "$VAL_IDS" | paste -sd, -)
 N_VAL=$(tr ',' '\n' <<< "$VAL" | grep -c . || true)
 echo "[cfg] $N_TRAIN train scenes, $N_VAL val scenes (ScanNet official val, class-agnostic)"
 

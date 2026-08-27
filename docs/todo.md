@@ -265,7 +265,18 @@ binds, not resolution — nothing left to do here on ScanNet.** The only survivi
 **C-long (11632049) LANDED 2026-08-25 AND FAILED** — an unstable optimisation, not a slow one; the
 cause is the learning rate, the same failure §11.3 isolated on arm D (docs/MULTIDATASET.md §10.5).
 **Re-run submitted 2026-08-26: C-long′ (11831105) at lr 5e-5, whose control is A-long′ (11830142),
-already queued for arm D. A-long′ ⇄ C-long′ is step-matched, same-LR and one-variable.** Everything else in the data-scaling set has landed —
+already queued for arm D. A-long′ ⇄ C-long′ is step-matched, same-LR and one-variable.**
+
+**Also in flight since 2026-08-26 — the competitor-matched programme (6k + 6l):**
+
+| job | what | lands as |
+|---|---|---|
+| 11839134 → 11839151 | **arm I** — ScanNet++ + Infinigen + RE10K@1500, **no ScanNet** (IGGT's mixture minus ASE) | MULTIDATASET §12 |
+| 11839135 → 11839152 | **arm I-gt** — ScanNet++ + Infinigen, no ScanNet, no SAM2 supervision | 〃 |
+| 11839821 (array) → 11840376 | the **dense** ScanNet val-312 frame export (stride 20) | DATASET §2.5 |
+
+Read I ⇄ D-long and I-gt ⇄ A-long′ as the {±ScanNet} edges of one 2 × 2; do not read either
+against a published number until its matrix lands. Everything else in the data-scaling set has landed —
 docs/MULTIDATASET.md §10.3/§10.4, docs/RESULTS.md §6.4/§7.5/§8.2. Everything else once listed here
 has landed too:
 
@@ -318,8 +329,10 @@ clearest evidence behind it, not 5b.
 
 On the 3D ruler the decoder is no longer what limits us: AP25 ≈ 4× AP50, median camera-centre
 RMS after Sim(3) is 0.14 m, and only ~16 % of mesh vertices get a vote. 5a bounded what knobs can
-do *on the §9.6 checkpoint* (0.067 → 0.091 AP50, under FAST3DIS's 0.096), so **the remaining gap
-is coverage and registration, in that order**.
+do *on the §9.6 checkpoint* (0.067 → 0.091 AP50, under FAST3DIS's 0.096), so the remaining gap was
+read as **coverage and registration, in that order**. **AMENDED 2026-08-27 — coverage is out**:
+5b closed as a negative (docs/RESULTS.md §5.4), so **registration (5c) is the only item left in
+this workstream**.
 
 **AMENDED 2026-08-07 (docs/MASKDINO.md §9.8.1).** Re-swept on the `--anchor_3d` checkpoint the
 same two knobs are worth far more — class-agnostic AP50 **0.138 → 0.185**, +0.047 against the
@@ -349,7 +362,12 @@ the parts that are cheap.
       leads FAST3DIS's 0.096 by 1.44×. Radius still saturates at 0.15 m; the confidence filter
       flips to neutral-negative. Also measured: **`--eval_topk` 100 → 600 is neutral** (0.138 →
       0.140), so query count is struck from the list of explanations for the SegVGGT gap.
-- [ ] **5b. Coverage.** ~16 % of vertices voted / ~65 % of annotated vertices assigned caps
+- [x] **5b. Coverage — CLOSED 2026-08-27, NEGATIVE** (docs/RESULTS.md §5.4 reading 3). More
+      frames buy coverage monotonically (voted vertices 0.171 → 0.268 → 0.308 at 17 / 50 / 71
+      views, annotated-assigned 0.667 → 0.754 → 0.787) and AP **stops moving at 50** while
+      coverage keeps rising to 71. So coverage is no longer what binds the unposed column —
+      **5c (registration) is now the only lifting item left**. The original text, for the record:
+      **Coverage.** ~16 % of vertices voted / ~65 % of annotated vertices assigned caps
       recall outright. Options: more frames per scene (the 25k export has ~16–30; SegVGGT's
       *eval* uses ~75–100, every 20th frame of a full `.sens` extraction — 2–24 is their
       training sampling, so we are behind here, not level), overlapping bundles, or per-frame
@@ -636,6 +654,57 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       from both sides. **Not launched** — out of the scope 6g was requested under; ask before
       spending it. Mechanically it is one more yaml against the same driver (revert FREEZE_AT,
       BACKBONE_MULTIPLIER, the mapper, the schedule and the clip; keep MAX_ITER 87948).
+
+- [~] **6k. Dense ScanNet val-312 frames — the competitors' VIEW COUNT** (opened 2026-08-26,
+      `docs/DATASET.md` §2.5, `docs/TRAINING_COMPARABILITY.md` §6.3). The last unmatched axis of
+      the protocol comparison, and it runs *against* us: FAST3DIS evaluates on **50** uniformly
+      sampled views and SegVGGT on **every 20th frame** (~75–120), while `scannet_frames_25k` gives
+      us **17.42**. ScanNet++ and Replica are **already at exactly 50** (measured off the eval
+      JSONs, not assumed), so the gap is confined to the two ScanNet columns.
+      `extract_sens_frames25k.py` streams the whole `.sens` (~1.15 GB/scene at ~68 MB/s measured;
+      no early abort is possible for a whole-scan sample) and writes the same tree `repack_frames25k`
+      does. **Verified against the official export on `scene0011_00`: depth pixel-identical, poses
+      to 5e-6, intrinsics to 5e-3 — but the color jpegs differ because the 25k export re-compressed
+      them**, so the view-count comparison needs its own 17-frame control ON the dense tar.
+      23 CPU checks in `tests/test_sens_frames_extract.py` (synthetic `.sens`, every format guard).
+      **DONE 2026-08-27, and it closes two things** (docs/RESULTS.md §5.4; build 11840822 →
+      pack 11840823 → cells 11841445/49/51/54/57/62/67, 312 scenes, 0 failures).
+      **(i) At the competitors' 50 views the lead WIDENS**: `--anchor_3d` 0.137 → **0.170**
+      class-agnostic AP50 (+24 %) and A-long 0.161 → **0.193** (+20 %), i.e. 1.77× / 2.01×
+      FAST3DIS's 0.096 against 1.44× / 1.73× at 17. The 17-view control on the SAME tar
+      reproduces the published row (0.044 / 0.137 / 0.488 vs 0.042 / 0.138 / 0.504), so the
+      jpeg-recompression difference is noise-level.
+      **(ii) The lever SATURATES at ~50**: 71 views gives 0.166, flat-to-negative against 50's
+      0.170 — which is why 5b below closes as a negative. Posed at 50 views is the best posed row
+      anywhere (A-long **0.200 / 0.419 / 0.725**, SegVGGT distance 1.84× → 1.71×).
+      Cost note for the next run: the 100-view cell needed 7 h 28 and a 40 GB GPU; 50 views fits a
+      4090 in ~2 h 45.
+- [~] **6l. The ZERO-SHOT arms — matching what the competitors TRAIN on** (opened 2026-08-26,
+      `docs/MULTIDATASET.md` §12, `docs/TRAINING_COMPARABILITY.md` §6.2). The largest remaining
+      mismatch is not the protocol: **FAST3DIS and IGGT never train on ScanNet and every arm we
+      have ever run does**, so §8.2's lead is favourable to us on the training axis before a number
+      is read. Two arms, both `--class_agnostic --anchor_3d`, lr 5e-5, step-matched at ~84 k:
+      **I** (ScanNet++ + Infinigen + RE10K@1500, 3819 scenes, job 11839134) = **IGGT's mixture minus
+      ASE**, and **I-gt** (ScanNet++ + Infinigen, 2319, job 11839135) = the same without the
+      SAM2-supervised source. With A-long′ and D-long they complete a **2 × 2 in {±ScanNet} ×
+      {±RE10K}**, so each edge is one variable. Matrices chained (11839151 / 11839152).
+      Driver change: the val-312 tar is now staged independently of `SOURCES`, so an arm that never
+      trains on ScanNet is still scored on the same ruler (there, a zero-shot one) — 4 new checks in
+      `tests/test_train_maskdino_multi_sh.sh`. Both verifications the user asked for came back TRUE:
+      only ASE is missing for IGGT, and the "geometric GT" setting is SegVGGT's posed bridge, which
+      we already implement and report (§6.1 there).
+
+- [ ] **6m. SegVGGT's ScanNet200 checkpoint — the one competitor setting we CANNOT currently match,
+      and what it would cost.** SegVGGT trains a *second* checkpoint on **ScanNet200 train** and
+      reports it **class-aware** (31.9 / 45.7 / 53.7, posed). We evaluate ScanNet200 as a
+      relabelling of the same val meshes (todo 6d) but **class-agnostic only**, because the
+      supervision does not exist on our side: the 2D GT tars store instances under the 19 NYU40
+      classes and drop everything outside that taxonomy to background (`docs/DATASET.md` §1), so a
+      200-way head has nothing to learn from. Closing it means **rebuilding the 1201-scene 2D GT
+      from `_2d-label-filt` at the raw label ids** (~1–2 days of streaming + packing, the §5.1
+      node-local rules) plus a 200-class training arm. Not launched — state the gap instead:
+      *"our ScanNet200 column is class-agnostic; SegVGGT's is class-aware; the two are not
+      comparable"* (`docs/RESULTS.md` §7.4).
 
 ## Recently closed (2026-07-29/30, 2026-08-01) — details in docs/MASKDINO.md §7.4.1, §7.7, §8.2
 

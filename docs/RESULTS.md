@@ -109,7 +109,8 @@ not a project result, and still belongs in no table here.
 Job ids, caveats (the `--bundles_per_scene 2` job got a 2× step budget through an epoch-clamp
 bug, since fixed) and the reasoning: `docs/MASKDINO.md` §7.4.
 
-**+48 % mIoU, +138 % AP50 over the retired baseline head.** The curve is still rising at 490 scenes —
+**+48 % mIoU, +138 % AP50 over the retired baseline head** for the plain N=490 recipe (0.669 / 0.699);
+**+54 % / +148 %** for the bolded `--bundles_per_scene 2` row (0.694 / 0.729). The curve is still rising at 490 scenes —
 all the official-GT tar holds — and overfitting eases with scale (train mIoU 1.000 → 0.994 →
 0.947), so the model is still data-limited.
 
@@ -437,6 +438,55 @@ spread of §5.2) and a loss on the other three. **No headline moves: `--anchor_3
 row §8.2 quotes.** The signature is over-pruning — 2f keeps the fewest queries of any checkpoint
 (82.2) and votes *fewer* vertices than `--anchor_3d` (0.155 vs 0.177), so it prunes harder and
 covers less.
+
+### 5.4 VIEW COUNT — the competitors' 50 views, measured (todo 6k, 2026-08-27)
+
+Jobs 11841445/49/51/54/57/62/67, 312 scenes, 0 failures, all lifting knobs at defaults. The last
+unmatched axis of the comparison: FAST3DIS and IGGT are scored on **50 uniformly sampled views**
+and SegVGGT on **every 20th frame**, while every number above this line was produced at **17.42**
+(`scannet_frames_25k` is every 100th frame). The dense export (`docs/DATASET.md` §2.5) closes it.
+
+**Read the rows against the 17-view row of the SAME tar, not against §5's published rows.** The
+25k export re-compressed its jpegs and the dense one carries the `.sens` bytes, so dense-vs-dense
+is the single-variable form. That control is reassuring: `--anchor_3d` at 17 dense views scores
+0.044 / 0.137 / 0.488 against 0.042 / 0.138 / 0.504 published — AP and AP50 inside noise, AP25
+−0.016.
+
+| checkpoint | views (mean) | unposed, class-agnostic | posed, class-agnostic | voted vtx | annot. assigned |
+|---|---|---|---|---|---|
+| `--anchor_3d` (ScanNet-only) | 16.98 | 0.044 / 0.137 / 0.488 | — | 0.171 | 0.667 |
+| 〃 | **46.65** | **0.053 / 0.170 / 0.542** | **0.121 / 0.336 / 0.704** | 0.268 | 0.754 |
+| 〃 | 71.31 | 0.052 / 0.166 / 0.536 | — | 0.308 | 0.787 |
+| A-long (+ScanNet++ +Infinigen) | 16.98 | 0.056 / 0.161 / 0.503 | — | 0.241 | 0.715 |
+| 〃 | **46.65** | **0.069 / 0.193 / 0.560** | **0.200 / 0.419 / 0.725** | 0.368 | 0.802 |
+| *FAST3DIS (published)* | *50* | *0.038 / 0.096 / 0.316* | — | | |
+| *IGGT (via FAST3DIS)* | *50* | *0.028 / 0.112 / 0.287* | — | | |
+| *SegVGGT (published)* | *~75–100* | — | *0.504 / 0.717 / 0.870* (class-**aware**) | | |
+
+"46.65" and "71.31" are the achieved means of `--num_frames 50` and `100`: 20 % of val scenes are
+shorter than 50 dense frames. FAST3DIS's "50 uniformly sampled views" hits the same wall.
+
+**1. The competitors' view budget is worth ~+24 % AP50, and then it saturates.** 17 → 50 views:
+`--anchor_3d` 0.137 → 0.170 (+24 %), A-long 0.161 → 0.193 (+20 %). 50 → 71 views: 0.170 → 0.166,
+i.e. **flat, slightly negative**. Whatever more views buy is exhausted by ~50, which is exactly
+the budget the two unposed competitors report at.
+
+**2. At MATCHED views the lead widens.** Against FAST3DIS's 0.038 / 0.096 / 0.316, the ScanNet-only
+`--anchor_3d` row at 50 views is **1.39× / 1.77× / 1.72×**, and A-long **1.82× / 2.01× / 1.77×** —
+against 1.10× / 1.44× / 1.59× at 17 views. The "we lead on a third of their views" caveat is
+retired: we lead at their views too, and by more.
+
+**3. This closes todo 5b (coverage) with a measured NEGATIVE.** More frames do buy coverage —
+voted vertices 0.171 → 0.268 → 0.308, annotated-assigned 0.667 → 0.754 → 0.787, monotone — but AP
+stops moving at 50 while coverage keeps rising to 71. So **coverage is no longer the binding
+constraint** on the unposed column; §5's "the lifting step binds" now means registration (5c),
+not frames. The oracle already said this for the posed column (§5.1 reading iii); it now holds
+unposed too.
+
+**4. The posed column moves more than the unposed one.** A-long posed 0.389 → **0.419** AP50 at
+50 views is the best posed row in the project, and the distance to SegVGGT's 0.717 falls to
+**1.71×** (from 1.84×). Their row is class-aware and ours class-agnostic, so this is a
+*direction*, not a like-for-like ratio — §5.1's decomposition is where that gap is priced.
 
 ## 6. Official 1201/312 split — first runs (2026-08-02)
 
@@ -877,6 +927,11 @@ docs/MULTIDATASET.md §10.5).
 
 ## 8. Summary table — the numbers to quote, and against what
 
+> **Building slides or anything outward-facing? Use `docs/FACTSHEET.md` instead** — it is this
+> section plus the protocol labels, the positioning and the open work, in one page an agent can
+> read whole. This section stays the source of truth; FACTSHEET is its read-out. **If the two
+> disagree, this file wins and FACTSHEET is the bug — fix it there.**
+
 A read-out of §2–§7, nothing new. **Each block is its own ruler**; rows may be compared *inside* a
 block and never across blocks (§1). Every "vs" column names what the number is being compared to.
 
@@ -884,7 +939,7 @@ block and never across blocks (§1). Every "vs" column names what the number is 
 
 | # | Ruler (protocol) | Our best | Compared against | Verdict |
 |---|---|---|---|---|
-| A | **2D single-frame**, our val 0080–0089, N=490 (§2) | mIoU **0.694** / AP50 **0.729** | retired baseline head 0.451 / 0.294 | **+48 % mIoU, +138 % AP50**; curve still rising with data |
+| A | **2D single-frame**, our val 0080–0089, N=490 (§2) | mIoU **0.694** / AP50 **0.729** | retired baseline head 0.451 / 0.294 | **+54 % mIoU, +148 % AP50**; curve still rising with data |
 | B | **2D multi-view (per-bundle)**, our val, N=490 (§3) | mIoU **0.539** / AP50 **0.515** | retired baseline head 0.367 / 0.199 | **+47 % mIoU, 2.6× AP50**, no post-hoc fusion |
 | C | **2D, official 1201/312 split** (§6) | per-frame AP50 **0.669** · per-bundle AP50 **0.552** | job 8900194, 0.604 per-frame | scale holds on the honest split; own metric code → not a leaderboard number |
 | D | **3D, official benchmark, UNPOSED** — predicted depth+cameras (§5) | class-agnostic **0.042 / 0.138 / 0.504** (`--anchor_3d`; seed 1: 0.039 / 0.129 / 0.485) | FAST3DIS 0.038 / 0.096 / 0.316 · IGGT 0.028 / 0.112 / 0.287 | **lead on AP50 + AP25** (1.34–1.44× / 1.53–1.59× FAST3DIS), **tie FAST3DIS on AP**, lead IGGT on all three; frozen backbone, untuned, **2 seeds** (§5.2) |
@@ -908,15 +963,25 @@ class-aware number).
 | IGGT (re-evaluated by FAST3DIS) | adapted | 50 | 0.028 | 0.112 | 0.287 |
 | FAST3DIS | LoRA-adapted DA3 | 50 | 0.038 | 0.096 | 0.316 |
 | **Ours, `--anchor_3d`, defaults — ScanNet-only training** | **frozen VGGT-1B** | **~17** | **0.042** | **0.138** | **0.504** |
-| — same, best lifting knobs (sensitivity, not headline) | 〃 | 〃 | 0.055 | 0.185 | 0.571 |
-| *ours, headline checkpoint (no `--anchor_3d`), tuned* | 〃 | 〃 | *0.017* | *0.060* | *0.334* |
-| **Ours + EXTRA TRAINING DATA** (A-long: ScanNet + ScanNet++ + Infinigen, 3520 scenes, §7.5) | 〃 | 〃 | **0.057** | **0.166** | **0.516** |
+| **〃 at THEIR view budget** (§5.4, dense export, single seed) | 〃 | **50** | **0.053** | **0.170** | **0.542** |
+| — same, best lifting knobs (sensitivity, not headline) | 〃 | ~17 | 0.055 | 0.185 | 0.571 |
+| *ours, headline checkpoint (no `--anchor_3d`), tuned* | 〃 | ~17 | *0.017* | *0.060* | *0.334* |
+| **Ours + EXTRA TRAINING DATA** (A-long: ScanNet + ScanNet++ + Infinigen, 3520 scenes, §7.5) | 〃 | ~17 | **0.057** | **0.166** | **0.516** |
+| **〃 at THEIR view budget** (§5.4, single seed) | 〃 | **50** | **0.069** | **0.193** | **0.560** |
 
-**The claim: ahead of both published unposed methods on all three metrics, with a strictly frozen
-backbone, no adaptation, ~1/3 of their views, and all lifting knobs at defaults.** It survives the
-whole knob grid — the worst point of the sweep is still 1.44× FAST3DIS's AP50 (§5). Two caveats
-travel with it: single run against a single control, and the class-collapse sign is
-checkpoint-dependent (the italic row is the same recipe without `--anchor_3d`).
+**The claim, in the wording §5 settled on 2026-08-07 after the seed-1 replicate: ahead of both
+published unposed methods on AP50 and AP25, TIED with FAST3DIS on AP, and ahead of IGGT on all
+three — with a strictly frozen backbone, no adaptation, ~1/3 of their views, and all lifting knobs
+at defaults.** **At their OWN 50-view budget (§5.4, 2026-08-27) the same checkpoint reads
+0.053 / 0.170 / 0.542, i.e. ahead on all three — but that row is a single seed, so the seed-1
+wording above still governs the ~17-view headline and the 50-view row is quoted as
+"and the lead widens at matched views", never as a replacement replicate.** It survives the whole knob grid — the worst point of the sweep is still 1.44×
+FAST3DIS's AP50 (§5). **"Ahead on all three" was a seed-0-only reading of THIS row and must not be
+repeated for it**; it is licensed for the **extra-data** row only (§7.5 reading 5). Two caveats
+travel with it: **one run per cell** — the "single run against a single control" caveat is retired,
+both arms were replicated at seed 1 (§5.2) — and the class-collapse sign is checkpoint-dependent
+(the italic row is the same recipe without `--anchor_3d`, **with its lifting knobs tuned**; at
+defaults that control reads 0.013 / 0.050 / 0.320).
 
 **The extra-data row is separate on purpose, and the ScanNet-only row stays the headline.** The
 field norm both this project and its competitors follow is that extra training data gets its own
@@ -928,6 +993,16 @@ comparison to IGGT, which likewise trains on a curated mixture. Two things it st
 and failed as an unstable run — the LR failure of §11.3 — so the compute/data split at the top end
 remains unmeasured until C-long′ 11831105 ⇄ A-long′ 11830142 lands, docs/MULTIDATASET.md §10.5) and,
 like every row here, it is a single run.
+
+**The one asymmetry this table does NOT yet control for — and it favours us.** Both published
+rows are **zero-shot on ScanNet** (FAST3DIS trains only on Aria/ASE, IGGT only on InsScene-15K);
+every row of ours trains on ScanNet. The comparison is therefore protocol-matched and
+setting-matched but **not training-matched**, and that must be said wherever this table is quoted
+until the two zero-shot arms land (**I** 11839134 = IGGT's mixture minus ASE, **I-gt** 11839135;
+`docs/MULTIDATASET.md` §12, `docs/TRAINING_COMPARABILITY.md` §6.2). Two smaller asymmetries run
+the other way and are already stated: the frozen backbone, and — until 2026-08-27 — ~17 views to
+their 50, an axis now **closed and measured** (§5.4: at matched views we lead by more, and the
+view-count lever saturates at ~50).
 
 *Not in this table on purpose:* **SegVGGT 0.504 / 0.717 / 0.870** — posed transfer, a different
 protocol (§5.1); and the point-cloud/RGB-D family (Mask3D 55.2, SegDINO3D 64.0 AP) — different

@@ -124,6 +124,24 @@ OUT=$(run SOURCES='scannet scannetpp infinigen re10k' CAP_SCANNET=3 CAP_SCANNETP
 LAST=$(sed -n '/last train entries:/,$p' <<< "$OUT" | grep '^/' | head -3)
 check "with re10k last, the final entries come from re10k" "3" "$(grep -c '/re10k/' <<< "$LAST")"
 
+# --- 8. the ZERO-SHOT arms: SOURCES without scannet, val still the official 312 --------------
+# FAST3DIS and IGGT never train on ScanNet (docs/TRAINING_COMPARABILITY.md §1), so the
+# competitor-matched arms drop it from SOURCES — but they must land on the SAME val ruler as
+# every other arm, or nothing in docs/MULTIDATASET.md is comparable to them. Before this the
+# driver set VAL="" whenever scannet was absent, i.e. the run had no val set at all.
+OUT=$(run_strict SOURCES='scannetpp infinigen re10k')
+check "zero-shot arm: no scannet train scenes are listed" "0" \
+      "$(grep -c '^\[cfg\] scannet:' <<< "$OUT")"
+check "zero-shot arm: val is STILL the official 312" \
+      "$((N_PP + N_INF + N_RE)) train scenes, $N_VAL_ALL val scenes" \
+      "$(sed -n 's/^\[cfg\] \(.*\) (ScanNet official val, class-agnostic)/\1/p' <<< "$OUT")"
+check "zero-shot arm: the run dir names only the three sources" "1" \
+      "$(grep -c '^\[dry-run\] RUN=.*maskdino_multi_scannetppinfinigenre10k_n' <<< "$OUT")"
+OUT=$(run SOURCES='scannetpp infinigen' CAP_SCANNETPP=3 CAP_INFINIGEN=3)
+FIRST=$(sed -n '/first train entries:/,/last train entries:/p' <<< "$OUT" | grep '^/' | head -3)
+check "zero-shot arm: not one train path comes from ScanNet" "0" \
+      "$(grep -c '/raw_data$' <<< "$FIRST")"
+
 # --- 6. the lists must reach python as FILES (job 10480614: argv cap, MULTIDATASET.md §7.2) ----
 OUT=$(run)
 check "scene lists are passed as @files, not argv" "1" \

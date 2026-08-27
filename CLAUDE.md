@@ -23,6 +23,13 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
 - `RESTORE.md` — **read first if this repo was restored from the 2026-08-13 backup zip.**
   What the archive holds and what it does not, the venv rebuild, and the hardcoded
   `/cluster/...` paths you must re-root before anything runs.
+- `docs/FACTSHEET.md` — **for anything outward-facing (slides, supervisor updates, abstract
+  drafts): read ONLY this, and read nothing else.** Frozen read-out of the numbers, the seven
+  rulers **in two tiers** (Tier 1 = the 3D rulers that face the published competitors; Tier 2 =
+  the internal 2D rulers and the COCO port check, backup only), the positioning, and what is
+  still open. Every number cleared for
+  quoting is on that page; a number that is not there is not cleared. It never contradicts
+  RESULTS.md — if it does, RESULTS.md wins and FACTSHEET.md is the bug.
 - `docs/MASKDINO.md` — **the primary document.** Architecture, deviations from upstream MaskDINO,
   the protocols, the evaluation rules, the multi-frame mechanisms.
 - `docs/RESULTS.md` — **every number, one home.** Read §1 before quoting anything: per-frame,
@@ -44,7 +51,8 @@ bundle and improving the 3D lifting are the open work. All numbers: `docs/RESULT
   contribution.
 - `docs/TRAINING_COMPARABILITY.md` — what each competitor **trains** on vs evaluates on, what is on
   the cluster, what is missing. Read alongside RELATED_WORK: that file covers the evaluation side,
-  this one the training side.
+  this one the training side. **§6 is the live competitor-matched programme** — every axis, its
+  state, and the job that closes it; §6.5 is the one-screen status table.
 - `docs/SEGVGGT_ANALYSIS.md` — the closest competitor, dissected: no training code, where the
   ×10.7→~4.6× residual AP50 gap goes, and the conceptual difference.
 - `docs/SUPERVISOR_COMPARISON.md`, `docs/RIEPILOGO_PROGETTO_IT.md` — send-outward summaries derived

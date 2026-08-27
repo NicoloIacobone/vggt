@@ -838,3 +838,75 @@ first attempt, which the LR alone explains.
 | arm D at lr 1e-4 (job 11642516) + its matrix (11642519) | **DIVERGED 2026-08-25** — §11.2 |
 | the two divergence diagnostics (11744294 / 11744296) | **done 2026-08-25** — §11.3, the LR is the cause |
 | **D-long** (11830140) + **A-long′** (11830142), + matrices (11830144 / 11830145) | launched 2026-08-26 |
+
+## 12. The ZERO-SHOT arms — matching what the competitors train on (todo 6l, 2026-08-26)
+
+Everything in §9–§11 adds data **on top of ScanNet**. This section removes it. The reason is in
+`docs/TRAINING_COMPARABILITY.md` §6.2: **FAST3DIS and IGGT never train on ScanNet and every arm
+here does**, so every "we lead them" row in `docs/RESULTS.md` §8.2 is favourable to us on the
+training axis before a single number is read. Two arms close that, and they also complete a 2 × 2.
+
+| arm | train sources | scenes | epochs | steps | job | matrix |
+|---|---|---|---|---|---|---|
+| **I** | ScanNet++ + Infinigen + RE10K@1500 | 3819 | 22 | 84 018 | 11839134 | 11839151 |
+| **I-gt** | ScanNet++ + Infinigen | 2319 | 36 | 83 484 | 11839135 | 11839152 |
+
+Both `--class_agnostic --anchor_3d --learning_rate 5e-5`, seed 0, S=8, the §10 recipe otherwise
+unchanged — so they are step- and schedule-matched to A-long′ (11830142) and D-long (11830140):
+
+| | no RE10K | + RE10K@1500 |
+|---|---|---|
+| **+ ScanNet** | A-long′ (3520) | D-long (5020) |
+| **no ScanNet** | **I-gt (2319)** | **I (3819)** |
+
+Each edge is one variable. The row edges price **ScanNet training data**; the column edges price
+**SAM2-supervised RE10K** (§1.3) — each measured twice, in and out of the ScanNet domain.
+
+**Arm I is IGGT's training set minus ASE** (`docs/TRAINING_COMPARABILITY.md` §6.1a), which is the
+closest replication the mirror allows and will stay so: ASE is 9.2 TB and its scene list is
+unpublished (§5.1–5.2 there). RE10K is capped at 1500 of 5127 scenes because the feature cache is
+the binding constraint — uncapped this arm is ~550 GB, which does not schedule. Say **"IGGT's
+mixture minus ASE, RE10K subsampled"**, never "IGGT's training data".
+
+**Two differences run in our favour and one against**, all to be stated wherever these rows appear:
+we drop the 50 `nvs_sem_val` ScanNet++ scenes from training (§1.1) so our ScanNet++ column is
+honest and IGGT's is not; our backbone stays **frozen** where IGGT finetunes VGGT; and IGGT spends
+~16 GPU-days against our ~0.8.
+
+### 12.1 The val ruler on an arm that never saw ScanNet
+
+Val stays the official ScanNet v2 312 for every arm — that is the rule the whole file rests on
+(§5) — so on these two it is a **zero-shot** read-out rather than an in-domain one. One driver
+change was needed: `slurm/train_maskdino_multi.sh` used to set `VAL=""` whenever `scannet` was
+absent from `SOURCES`, i.e. these arms would have trained with no val set at all. It now stages
+the val-312 tar and builds the val list **independently of `SOURCES`**; 4 new checks in
+`tests/test_train_maskdino_multi_sh.sh` pin it, and no existing arm's behaviour changes.
+
+One caveat travels with the numbers: `checkpoint_best_bundle.pth` is *selected* on that zero-shot
+ruler. **Measured 2026-08-27 on arm I-gt, this is worse than a caveat — the selection does not
+work at all.** Its `val_bundle_AP50` peaks at **epoch 5 of 36** (0.077) while `train_AP50` is
+still 0.19 and climbing to 0.24 by epoch 31; the val curve then wanders between 0.02 and 0.07 for
+the rest of the run without ever beating epoch 5. A zero-shot ruler at that level is noise, and
+selecting on noise is worse than not selecting: `checkpoint_best_bundle.pth` for these two arms is
+an early, half-trained checkpoint. **Score the FINAL `checkpoint.pth`** — `CKPT_NAME` in
+`slurm/chain_eval3d_matrix.sh` (added 2026-08-27, default unchanged, 3 new checks in
+`tests/test_eval_3d_matrix_sh.sh`); jobs 11946406 (I-gt) / 11946413 (I) are chained for exactly
+that. Report the final-epoch row as the headline for arms I and I-gt and say why.
+
+**Second thing arm I-gt showed, and it is a warning for the next run.** Its loss curve has the
+§10.5 excursion signature at **half** the LR that caused it there: train loss 157.7 → 121.5 by
+epoch 5, then **rising to 136.9 by epoch 18** (13 of 30 epoch-to-epoch steps up), then recovering
+to 119.3 by epoch 30 with `train_AP50` back to 0.24. It **recovered** — unlike arm D at 1e-4,
+whose `train_AP50` went to 0.006 and stayed — so this is a rough run, not a failed one. But it is
+the most *exposed* run in the block (36 epochs, the longest cosine, on the smallest mixture), which
+is precisely §10.5's "exposure, not dose" trigger. If its matrix lands anomalously below arm I's,
+re-run at 2.5e-5 before concluding anything about the data. Arm I (22 epochs, 3819 scenes) carries
+far less exposure and is the arm the IGGT comparison actually rests on.
+
+### 12.2 What these arms can and cannot settle
+
+They make our ScanNetv2, ScanNet200 and Replica columns **genuinely zero-shot**, which is
+FAST3DIS's setting on all three and IGGT's on ScanNet. They do **not** make ScanNet++ zero-shot —
+arm I trains on 853 ScanNet++ scenes and is scored on 49 held-out ones, exactly as IGGT is (minus
+the leak). And they cannot separate "no ScanNet" from "less data": I-gt is 2319 scenes against
+A-long′'s 3520. That is what the 2 × 2's *other* edge is for — read the square, not one cell.
