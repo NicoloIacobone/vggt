@@ -107,10 +107,15 @@ the *scaling* claim on the extra-data one.
 1. **Two seeds; one run per cell.** Both arms were replicated at `--seed 1` on 2026-08-07, so the
    old "single run against a single control" caveat is **retired**. What remains: one run per cell
    in the cross-dataset matrix, and **one published row per competitor**.
-2. **Not training-matched, and it favours us.** Both published rows are **zero-shot on ScanNet**
-   (FAST3DIS trains only on Aria/ASE; IGGT only on InsScene-15K); every row of ours trains on
-   ScanNet. Protocol-matched and setting-matched, **not** training-matched. Closing: arms **I** /
-   **I-gt** (§6).
+2. **Not training-matched, the asymmetry favours us — and as of 2026-08-28 it is PRICED.** Both
+   published rows are **zero-shot on ScanNet** (FAST3DIS trains only on Aria/ASE; IGGT only on
+   InsScene-15K); every headline row of ours trains on ScanNet. **Arm I removed it** — IGGT's
+   mixture minus ASE, compute-matched — and scored **0.005 / 0.023 / 0.251**, i.e. a factor **6
+   below our own headline AP50** and ~4× below both published rows (`RESULTS.md` §5.6). So the
+   lead does rest on training on ScanNet, and that must be said whenever the lead is.
+   ⚠ This does **not** show the recipe is worse at equal data: arm I is missing **ASE entirely**
+   (their whole / largest source, unpublished scene list, 9.2 TB) — 3819 scenes against ~100 k.
+   *"We cannot match their training setting"* is supportable; *"we lose at equal data"* is not.
 3. **The class-collapse sign is checkpoint-dependent.** The same recipe *without* `--anchor_3d`
    scores 0.017 / 0.060 / 0.334 class-agnostic **with its lifting knobs tuned** (0.013 / 0.050 /
    0.320 at defaults) — ahead on AP25, ~2× behind on AP50/AP. **Carry the "tuned" label**: the
@@ -258,9 +263,9 @@ sensor, and runs in **seconds, not minutes**.
 
 | axis | what it settles | job |
 |---|---|---|
-| **Zero-shot arms I / I-gt** | trains on IGGT's mixture **minus ASE**, never on ScanNet → makes the competitor comparison **training-matched**. Completes a {±ScanNet} × {±RE10K} 2×2 | 11839134 / 11839135 |
-| **C-long′ ⇄ A-long′** | separates **more data** from **more compute** at the top end (the one unresolved caveat of §9.3); re-run at lr 5e-5 after C-long destabilised | 11831105 / 11830142 |
-| **D-long** (RE10K, **SAM2-supervised**) | whether a fourth, model-labelled source helps; needs A-long′ as its same-LR control | 11830140 |
+| ~~Zero-shot arms I / I-gt~~ | **DONE 2026-08-28** — the training-data axis priced (§2.1 caveat 2); and RE10K's sign flips on whether ScanNet is in the mixture | ~~11839134 / 11839135~~ |
+| ~~C-long′ ⇄ A-long′~~ | **DONE 2026-08-28** | ~~11831105 / 11830142~~ |
+| ~~D-long (RE10K, **SAM2-supervised**)~~ | **DONE 2026-08-28** — negative on all 8 matrix cells *with* ScanNet present; positive on every cell *without* it (`MULTIDATASET.md` §12.3) | ~~11830140~~ |
 | ~~Views per scene, 17 → 50 / 100~~ | **DONE 2026-08-27** — `RESULTS.md` §5.4, and it moved the headline (§2) | ~~11840822 → 11841445 ff.~~ |
 | **Ablation-table hole** | puts cross-frame attention and bundle features on the 3D ruler, where the headline lives (§6.5) | 11986399 · 11986440 |
 | **Formal identity metrics** | re-scores the headline checkpoint and its control on HOTA / AssA / DetA / IDF1, so the consistency claim stops resting on project-defined numbers (§5) | 11986564 / 11986565 |
@@ -287,7 +292,7 @@ never blurred into one another:
 | train split (SegVGGT) | official ScanNetv2 1201 | identical | **matched** |
 | kept queries | SegVGGT 600 | 100 | **measured neutral** (0.138 → 0.140) — struck as an explanation |
 | views, all four benchmarks | 50 (FAST3DIS / IGGT) · 75–100 (SegVGGT) | 50 — achieved mean **46.7** on ScanNetv2 (20 % of val scenes are shorter), 50 on ScanNet++ / Replica | **MATCHED 2026-08-27** — the dense `.sens` export closed it; at their views our lead *widens*, and the lever saturates by 50 (`RESULTS.md` §5.4) |
-| training data | FAST3DIS: ASE only → ScanNet zero-shot · IGGT: InsScene-15K | we train on ScanNet | **not matched, and it FAVOURS us** — arms I / I-gt close it, in flight (§6.1) |
+| training data | FAST3DIS: ASE only → ScanNet zero-shot · IGGT: InsScene-15K | we train on ScanNet | **not matched, it FAVOURS us, and it is now PRICED** (2026-08-28): without ScanNet we score 0.023 AP50 against their 0.096 / 0.112 (§2.1 caveat 2, `RESULTS.md` §5.6). Permanently unmatchable in the other direction — ASE's scene list is unpublished |
 | training compute | ~16 GPU-days | ~0.8 GPU-days, frozen backbone | **permanently unmatchable — and a strength, not an excuse** |
 | ASE itself | 9.2 TB, unpublished 40 % scene list | — | **permanently out of reach** (§6.4) |
 

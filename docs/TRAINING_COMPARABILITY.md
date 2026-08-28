@@ -218,7 +218,7 @@ oversight, and the step-budget axis is measured *inside* our own block (A-long �
 | views, ScanNet++ / Replica | 50 | 50 | **matched** |
 | views, ScanNetv2 / ScanNet200 | 50 (FAST3DIS) / ~75–120 (SegVGGT) | 17.42 → **50 on demand** | **MATCHED 2026-08-27** — dense export built, 7 cells scored; at 50 views the lead *widens* and the lever saturates (`docs/RESULTS.md` §5.4) |
 | train split, SegVGGT | official ScanNetv2 1201 | identical | **matched** since 2026-08-02 |
-| train data, IGGT | InsScene-15K (ASE + Infinigen + RE10K + ScanNet++) | **arm I** = the same minus ASE, RE10K@1500 | **IN FLIGHT** — 11839134 → 11839151 |
+| train data, IGGT | InsScene-15K (ASE + Infinigen + RE10K + ScanNet++) | **arm I** = the same minus ASE, RE10K@1500 | **MEASURED 2026-08-28** — without ScanNet we score 0.005 / 0.023 / 0.251 against FAST3DIS 0.038 / 0.096 / 0.316 and IGGT 0.028 / 0.112 / 0.287, i.e. ~4× behind and a factor 6 below our own headline. The asymmetry was real and it carried most of the lead (`docs/RESULTS.md` §5.6). Still not matched in the other direction: ASE is absent, 3819 scenes vs ~100 k |
 | train data, FAST3DIS | ASE only → ScanNet zero-shot | **arms I / I-gt** never train on ScanNet | **IN FLIGHT** — 11839134 / 11839135 |
 | train data, ASE itself | 9.2 TB, unpublished scene list | — | **permanently out of reach** (§5.1–5.2) |
 | ScanNet200 supervision | SegVGGT trains a 200-class checkpoint | our 2D GT is 19-class | **open, costed** — todo 6m |

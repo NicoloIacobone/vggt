@@ -863,16 +863,29 @@ the only difference in the comparison is the 1500 RE10K scenes.
 **1. Every axis moves the wrong way, and the margin is real.** −0.051 per-bundle AP50 is ~5.7× the
 measured 0.009 seed spread. This is not noise.
 
-**2. Read it as DISPLACEMENT, not as "RE10K is bad data".** At a fixed step budget, adding a
-fourth source of a different distribution buys its steps from the others: each ScanNet scene is
-seen 17 times instead of 24. The honest claim is *"at matched compute, RE10K costs in-domain
-accuracy"* — not *"RE10K is worthless"*. Separating the two needs a step-matched-per-source run,
-which nothing here provides.
+**2. Read it as DISPLACEMENT, not as "RE10K is bad data" — and §12.3 now proves that reading.**
+At a fixed step budget, a fourth source buys its steps from the others: each ScanNet scene is seen
+17 times instead of 24. The prediction that follows is that RE10K should *help* wherever ScanNet is
+absent, and **it does** — see §12.3, where the same 1500 scenes are worth 1.8–2.1× on the same
+ruler. So the claim is not "RE10K is worthless"; it is *"RE10K is redundant with ScanNet, and at
+matched compute redundancy costs"*.
 
-**3. It does not settle the question RE10K was added for.** RE10K's case was always
-**out-of-domain** generalisation, and this is the ScanNet in-domain ruler. The 3D cross-dataset
-matrices (11996431 ff., chained off D-long) are what can answer it, and they are still scoring.
-Until they land, quote this as the in-domain price only.
+**3. The out-of-domain matrices came back, and they do not rescue it** (11996431 ff., all 16 cells,
+0 failures). RE10K's case was always out-of-domain generalisation, and on this arm it fails there
+too — every cell moves the wrong way (class-agnostic AP50):
+
+| benchmark | bridge | A-long′ | D-long | Δ |
+|---|---|---|---|---|
+| ScanNetv2 | unposed | 0.155 | 0.090 | −0.064 |
+| ScanNetv2 | posed | 0.360 | 0.264 | −0.096 |
+| ScanNet200 | unposed | 0.115 | 0.087 | −0.028 |
+| ScanNet200 | posed | 0.280 | 0.223 | −0.058 |
+| ScanNet++ | posed | 0.059 | 0.045 | −0.014 (−24 % relative) |
+| Replica | posed | 0.127 | 0.117 | −0.010 (−8 % relative) |
+
+(The two unposed out-of-domain cells are 0.000–0.001 for both arms and carry no signal — zero-shot
+dies under the unposed bridge whatever the training mixture, as every arm in this file shows.)
+**So, in a mixture that already contains ScanNet, RE10K is negative everywhere.**
 
 **4. The learning-rate diagnosis held.** D-long's best epoch is 15 of 17 with the loss falling
 monotonically (83.3 → 82.5 → 82.0), against arm D's best epoch 2 of 17 with training AP50
@@ -950,3 +963,61 @@ FAST3DIS's setting on all three and IGGT's on ScanNet. They do **not** make Scan
 arm I trains on 853 ScanNet++ scenes and is scored on 49 held-out ones, exactly as IGGT is (minus
 the leak). And they cannot separate "no ScanNet" from "less data": I-gt is 2319 scenes against
 A-long′'s 3520. That is what the 2 × 2's *other* edge is for — read the square, not one cell.
+
+### 12.3 THE RESULT — the training-matched comparison, and RE10K's sign flip (2026-08-28)
+
+Both arms and their full matrices landed (0 failed scenes anywhere). **All rows below are the
+FINAL `checkpoint.pth`**, per §12.1 — `checkpoint_best_bundle` is selected on a zero-shot ruler
+that does not work, and must not be used for these two arms.
+
+Both arms are **compute-matched to within 0.6 %**: I-gt 2319 × 36 = 83 484 steps, I 3819 × 22 =
+84 018.
+
+#### The competitor-facing cell — ScanNetv2, unposed, class-agnostic
+
+| row | trains on ScanNet? | AP / AP50 / AP25 |
+|---|---|---|
+| FAST3DIS (published) | no — ASE only | 0.038 / 0.096 / 0.316 |
+| IGGT (via FAST3DIS) | no — InsScene-15K | 0.028 / 0.112 / 0.287 |
+| **ours, arm I** — IGGT's mixture **minus ASE** | **no** | **0.005 / 0.023 / 0.251** |
+| ours, arm I-gt — the same minus RE10K too | no | 0.003 / 0.013 / 0.212 |
+| *ours, headline (17 views)* | *yes* | *0.042 / 0.138 / 0.504* |
+| *ours, headline (50 views)* | *yes* | *0.053 / 0.170 / 0.542* |
+
+**1. The training-data asymmetry was real, and it was carrying most of the lead.** Removing
+ScanNet costs a factor of **6 in AP50** (0.138 → 0.023 at the same 17-view budget). Against the
+published rows we go from leading to **~4× behind**. The deck's long-standing wording — *"not
+training-matched, and the asymmetry FAVOURS us"* — was correct, and this prices it.
+
+**2. What this does NOT establish is that our recipe is worse than theirs.** Arm I is missing
+**ASE entirely** — FAST3DIS's *whole* training set and the largest component of IGGT's — because
+its scene list is unpublished and it is 9.2 TB (§5). We are running **3819 scenes against their
+~100 k**, with a frozen backbone against adapted ones, at ~0.8 GPU-days against ~16. The
+supportable statement is *"we cannot match their training setting, and without ScanNet we are well
+behind"*, **not** *"our method loses at equal data"* — that comparison has never been run and
+cannot be, on this cluster.
+
+**3. AP25 degrades far less than AP50** (0.504 → 0.251, a factor 2, against AP50's factor 6). Even
+without ScanNet the model still finds and coarsely localises objects; what collapses is clearing
+the 0.5-IoU bar. Same signature as everywhere else in this project.
+
+#### RE10K's sign FLIPS on whether ScanNet is in the mixture
+
+Two compute-matched pairs, same ruler, class-agnostic AP50 on ScanNetv2:
+
+| pair | ScanNet in mixture? | unposed | posed |
+|---|---|---|---|
+| A-long′ → **D-long** (§11.7) | **yes** | 0.155 → 0.090 (**−42 %**) | 0.360 → 0.264 (**−27 %**) |
+| I-gt → **I** | **no** | 0.013 → 0.023 (**1.8×**) | 0.029 → 0.063 (**2.1×**) |
+
+And without ScanNet it helps on every other cell too: ScanNet200 1.6× unposed / 1.8× posed,
+Replica 1.4× posed.
+
+**This is the reading, and it is what the 2 × 2 was built to produce.** RE10K supplies real-world
+visual diversity that **ScanNet already supplies, better and in-domain**. Where ScanNet is present
+RE10K is redundant, and at a fixed step budget redundancy is not free — it displaces. Where
+ScanNet is absent, RE10K is the best real-world proxy in the mixture and is worth roughly a
+doubling. **Neither cell alone supports a claim about "what RE10K is worth"; the square does.**
+
+⚠ It remains **SAM2-supervised** — those masks are model output, not ground truth — wherever it
+appears, in either direction.

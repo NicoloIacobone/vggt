@@ -702,6 +702,15 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       *"our ScanNet200 column is class-agnostic; SegVGGT's is class-aware; the two are not
       comparable"* (`docs/RESULTS.md` §7.4).
 
+- [x] **6l. The zero-shot arms — CLOSED 2026-08-28** (`docs/MULTIDATASET.md` §12.3,
+      `docs/RESULTS.md` §5.6). Arms I / I-gt done, all 16 matrix cells, 0 failed scenes. **The
+      training-data asymmetry is priced**: without ScanNet, 0.005 / 0.023 / 0.251 against
+      FAST3DIS's 0.038 / 0.096 / 0.316 — a factor 6 below our own headline AP50. The lead rests on
+      training on ScanNet, and that now has a number. **Not** evidence the recipe loses at equal
+      data: ASE is absent entirely (3819 scenes vs ~100 k). **Second finding: RE10K's sign flips**
+      — −42 % AP50 in a mixture with ScanNet, +1.8× in one without; redundant vs ScanNet, valuable
+      without it. Two failed matrix cells (12046077 / 12046106) were **GPU contention, not code**
+      (`CUDA-capable device(s) is/are busy`) and were re-run as 12077651 / 12077653.
 - [ ] **6n. A partial ASE download — costed 2026-08-27, not started.** ASE **is** publicly
       available (projectaria.com/datasets/ase + a HuggingFace mirror) and its per-scene GT
       **includes 2D instance segmentation**; the downloader takes `--scene-ids` ranges. Budget:

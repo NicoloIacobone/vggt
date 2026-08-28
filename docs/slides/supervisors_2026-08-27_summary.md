@@ -63,7 +63,7 @@ section.dense { font-size: 19px; }
 
 | axis | state |
 |---|---|
-| **training data** (FAST3DIS, IGGT) | **not matched, and it FAVOURS us** — both are **zero-shot on ScanNet**, every row of ours trains on it. The no-ScanNet arms that close this are running now. |
+| **training data** (FAST3DIS, IGGT) | **not matched, it FAVOURS us, and it is now measured.** Both are zero-shot on ScanNet; every headline row of ours trains on it. With ScanNet removed we score **0.023 AP50 against their 0.096 / 0.112** — the lead rests on training data they do not use, and that belongs next to the lead. ⚠ It does *not* show the recipe loses at equal data: that arm is missing ASE entirely, 3819 scenes against ~100 k. |
 | **training compute** | ~0.8 vs ~16 GPU-days — **permanently unmatchable, and a strength, not an excuse** |
 
 **One asymmetry runs the other way:** our backbone is strictly frozen where both of theirs are adapted.
@@ -86,18 +86,19 @@ section.dense { font-size: 19px; }
 
 <!-- _class: mid -->
 
-## 5. In flight right now
+## 5. What landed, and what each result settled
 
-| what | what it settles | state |
-|---|---|---|
-| **The two no-ScanNet arms** | train on IGGT's mixture **minus ASE**, never on ScanNet → makes the comparison **training-matched** | one done, one running |
-| **More data ⇄ more compute** | separates the two at the top end | **both done** |
-| **RE10K arm** (**SAM2-supervised** — masks are model output, not GT) | whether a fourth, model-labelled source helps | **done — costs 0.051 per-bundle AP50 in-domain** at matched compute; out-of-domain still scoring |
-| **The ablation table on the 3D ruler** | cross-frame attention and bundle features, priced on the headline's own ruler | **CLOSED** — removing cross-frame attention costs 57 % of the 3D AP50; per-frame features 24–49 % depending on label setting |
-| **Formal identity metrics** | HOTA / AssA / DetA / IDF1 on the headline checkpoint and its control | re-launched today after the first run exposed a scoring bug |
-| ~~Views per scene, 17 → 50~~ | the last unmatched *evaluation* axis | **DONE — and it moved the headline** |
+**Everything that was in flight has landed.** In order of how much each changed:
 
-**The RE10K result, in one line.** Against its same-learning-rate control, at a gradient-step budget matched to within 1 %, adding 1500 SAM2-supervised RE10K scenes **costs 0.051 per-bundle AP50** in-domain — 5.7× the seed spread. Read it as **displacement at fixed compute**, not as "bad data", and note it does not settle the *out-of-domain* question RE10K was added for. *(An earlier attempt at this arm diverged; the learning rate was the cause, and this is the converged replacement.)*
+| what | what it settled |
+|---|---|
+| **Views per scene, 17 → 50** | The last unmatched *evaluation* axis. **It moved the headline**: at their own budget we lead on all three columns. |
+| **The two no-ScanNet arms** | The last unmatched *training* axis. **It priced the asymmetry**: without ScanNet we are ~4× behind, so the lead rests on data they do not use. |
+| **The ablation table on the 3D ruler** | Both consistency levers now have 3D numbers: cross-frame attention **−57 % AP50**, per-frame features −24 % class-aware / −49 % class-agnostic. |
+| **Formal identity metrics + seed spread** | **Retired a claim**: no published identity metric separates 3D anchors from the control. |
+| **RE10K** (**SAM2-supervised**) | Its **sign flips** — −42 % AP50 added to a mixture with ScanNet, **+1.8×** added to one without. |
+
+**The result worth a sentence of its own.** RE10K supplies real-world diversity that **ScanNet already supplies better**: redundant where ScanNet is present — and at fixed compute redundancy *displaces*, costing 42 % of the unposed AP50 — but the best available proxy where ScanNet is absent, where the same 1500 scenes are worth 1.8–2.1×. Neither half alone supports a claim about what RE10K is worth; the 2×2 does.
 
 ---
 

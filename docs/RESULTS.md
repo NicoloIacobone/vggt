@@ -396,6 +396,47 @@ both runs peak at epoch 12 of 12, so neither had stopped improving. In 2D it rep
 retired figure on the new split: per-bundle AP50 0.5249 → 0.3589, i.e. −0.166 against the −0.147
 recorded on project-val.
 
+### 5.6 TRAINING-MATCHED — what the lead costs when ScanNet is removed (todo 6l, 2026-08-28)
+
+The last unmatched *training* axis, measured. Arm I trains on **IGGT's mixture minus ASE**
+(ScanNet++ 853 + Infinigen 1466 + RE10K 1500 = 3819 scenes) and **never on ScanNet**, which is
+FAST3DIS's and IGGT's setting on this benchmark. Full detail, both arms and all 16 matrix cells:
+`docs/MULTIDATASET.md` §12.3. Final `checkpoint.pth` (§12.1: best-bundle selection does not work
+on a zero-shot ruler). Compute-matched to within 0.6 %.
+
+**ScanNetv2, unposed, class-agnostic — the competitor-facing cell:**
+
+| row | trains on ScanNet? | AP / AP50 / AP25 |
+|---|---|---|
+| FAST3DIS (published) | no — ASE only | 0.038 / 0.096 / 0.316 |
+| IGGT (via FAST3DIS) | no — InsScene-15K | 0.028 / 0.112 / 0.287 |
+| **ours, arm I** — IGGT's mixture minus ASE | **no** | **0.005 / 0.023 / 0.251** |
+| ours, arm I-gt — minus RE10K too | no | 0.003 / 0.013 / 0.212 |
+| *ours, headline, 17 views* | *yes* | *0.042 / 0.138 / 0.504* |
+| *ours, headline, 50 views* | *yes* | *0.053 / 0.170 / 0.542* |
+
+**1. The asymmetry was real and it was carrying most of the lead.** Removing ScanNet costs a factor
+**6 in AP50** at the same view budget (0.138 → 0.023), turning a lead into being ~4× behind. Every
+"we lead FAST3DIS/IGGT" row in this file is therefore a row produced **with ScanNet in training,
+against two methods that never use it** — which §8.2 and the FACTSHEET have always declared, and
+which is now priced instead of merely declared.
+
+**2. It does NOT show our recipe is worse than theirs at equal data.** Arm I is missing **ASE
+entirely** — FAST3DIS's whole training set and IGGT's largest component — because its scene list is
+unpublished and it is 9.2 TB. This is **3819 scenes against their ~100 k**, frozen backbone against
+adapted, ~0.8 GPU-days against ~16. The supportable claim is *"we cannot match their training
+setting, and without ScanNet we are well behind"* — never *"our method loses at equal data"*, a
+comparison that has not been run and cannot be here.
+
+**3. AP25 survives far better than AP50** (factor 2 against factor 6). Without ScanNet the model
+still finds and coarsely localises objects; what collapses is clearing the 0.5-IoU bar — the same
+signature as §5.4 and §5.5.
+
+**4. RE10K's sign flips with ScanNet's presence**, and this is where that shows: adding it to a
+mixture *without* ScanNet is worth **1.8× unposed / 2.1× posed**, while adding it to one *with*
+ScanNet costs 42 % (§5.5's sibling result, `docs/MULTIDATASET.md` §11.7/§12.3). Redundant where
+ScanNet is present, valuable where it is not.
+
 ## 6. Official 1201/312 split — first runs (2026-08-02)
 
 **A new ruler, on purpose.** Train = the full official ScanNet v2 train split (1201 scenes,

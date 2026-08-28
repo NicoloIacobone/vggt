@@ -175,12 +175,13 @@ Two notes on the rows in bold. **Views** was the last unmatched *evaluation* axi
 
 | axis | their setting | ours | state |
 |---|---|---|---|
-| training data — **FAST3DIS, IGGT** | FAST3DIS: ASE only → ScanNet zero-shot · IGGT: InsScene-15K, no ScanNet either | we train on ScanNet | **not matched, and it FAVOURS us** — the no-ScanNet arms close it, running now |
+| training data — **FAST3DIS, IGGT** | FAST3DIS: ASE only → ScanNet zero-shot · IGGT: InsScene-15K, no ScanNet either | we train on ScanNet | **not matched, it FAVOURS us — and now MEASURED** |
 | training compute | ~16 GPU-days | **~0.8 GPU-days**, frozen backbone | **permanently unmatchable — a strength, not an excuse** |
-| ASE itself | 9.2 TB, and an unpublished 40 % scene list | — | **the scene list is permanently out of reach** (slide 16) |
+| ASE itself | 9.2 TB, and an unpublished 40 % scene list | — | **permanently out of reach — and it is the scene list, not the data** |
 
-- **This is the one asymmetry that runs against the comparison rather than against us**, and it is stated rather than waited for: both published rows are **zero-shot on ScanNet** and every row of ours trains on it. Verified from the papers, not assumed.
-- **One asymmetry runs the other way and is not in the table:** our backbone is *strictly frozen* where both of theirs are adapted.
+**What removing ScanNet costs — measured, not estimated.** We trained the same recipe on IGGT's mixture **minus ASE** and never on ScanNet, compute-matched. On the competitor-facing cell it scores **0.005 / 0.023 / 0.251** against FAST3DIS's 0.038 / 0.096 / 0.316 — a factor **6 below our own headline AP50**, and ~4× behind theirs. **So the lead does rest on training on ScanNet, and that belongs next to the lead.**
+
+⚠ **What this does not show is that the recipe loses at equal data.** That arm is missing **ASE entirely** — FAST3DIS's whole training set — so it is 3819 scenes against their ~100 k, with a frozen backbone against adapted ones. *"We cannot match their training setting"* is supportable; *"we lose at equal data"* is not, and that comparison cannot be run here.
 
 ---
 
@@ -258,21 +259,19 @@ The headline lives on the 3D benchmark, but the **two mechanisms that carry mult
 
 <!-- _class: mid -->
 
-## 15. In flight right now
+## 15. What landed — and what each result settled
 
-| what | what it settles | job | state |
-|---|---|---|---|
-| **The two no-ScanNet arms** | train on IGGT's mixture **minus ASE**, never on ScanNet → makes the competitor comparison **training-matched** | 11839134 · 11839135 | one **done**, one running; the done one's 3D evals are scoring now |
-| **More data ⇄ more compute** | separates the two at the top end; re-run at a halved learning rate after the first pair destabilised | 11831105 · 11830142 | **both done** |
-| **RE10K arm** (**SAM2-supervised** — masks are model output, not GT) | whether a fourth, model-labelled source helps | 11830140 | **done — it COSTS in-domain**, see below; 3D matrices scoring |
-| **The ablation table on the 3D ruler** (slide 12) | cross-frame attention and bundle features, priced on the headline's own ruler | 11986399 · 11986440 → 12012326 | **CLOSED** — both levers now have 3D numbers |
-| **Formal identity metrics** (slide 14) | HOTA / AssA / DetA / IDF1 on the headline checkpoint and its control | 11994637 · 11994639 | **DONE — and they revised an identity claim** (slide 14) |
-| **Seed spread for those metrics** | whether the AssA move of 3D anchors is an effect or noise | 11997568 · 11997569 | **DONE — noise**; the identity claim was retired (slide 14) |
-| ~~Views per scene, 17 → 50~~ | the last unmatched *evaluation* axis | 11841445 ff. | **DONE — and it moved the headline (slide 8)** |
+**Everything that was in flight has landed.** Five results, in order of how much they change:
 
-**The RE10K arm and its control both landed today, and the answer is negative in-domain.** Against its same-learning-rate control, at a gradient-step budget matched to within 1 % and the same ScanNet val-312, adding 1500 SAM2-supervised RE10K scenes costs **−0.051 per-bundle AP50** (5.7× the seed spread) and worsens cross-view identity. Read it as **displacement, not as "bad data"**: at fixed compute the fourth source buys its steps from the other three. It also does not settle the question RE10K was added for — that one is *out-of-domain*, and those 3D matrices are still scoring.
+| what | what it settled |
+|---|---|
+| **Views per scene, 17 → 50** | The last unmatched *evaluation* axis. **It moved the headline** (slide 8): at their own budget we lead on all three columns. |
+| **The two no-ScanNet arms** | The last unmatched *training* axis. **It priced the asymmetry** (slide 10): without ScanNet we are ~4× behind, so the lead rests on training data they do not use. |
+| **The ablation table on the 3D ruler** | Both consistency levers now have 3D numbers (slide 12). The 2D ordering held; its **spacing** did not. |
+| **Formal identity metrics + their seed spread** | **Retired a claim** (slide 14): no published identity metric separates 3D anchors from the control. |
+| **RE10K** (**SAM2-supervised** — masks are model output, not GT) | Its **sign flips**: −42 % AP50 added to a mixture that has ScanNet, **+1.8×** added to one that does not. Redundant where ScanNet is, valuable where it is not. |
 
-*(The earlier attempt at this arm diverged — best epoch 2 of 17, training AP50 collapsing to 0.006. The cause was isolated one variable at a time to the learning rate; halving it removed the collapse, and this run is the converged replacement.)*
+**The one that is worth a sentence of its own: RE10K's sign depends on what else is in the mixture.** Two compute-matched pairs on the same ruler. *With* ScanNet present, adding 1500 SAM2-supervised RE10K scenes costs **42 % of the unposed AP50** and is negative on all 8 matrix cells. *Without* ScanNet, the same 1500 scenes are worth **1.8× unposed and 2.1× posed**, and help on every cell. RE10K supplies real-world diversity that **ScanNet already supplies better** — redundant where ScanNet is present, and at fixed compute redundancy displaces; the best available proxy where it is absent. Neither half alone supports a claim about what RE10K is worth; the 2×2 does.
 
 ---
 
