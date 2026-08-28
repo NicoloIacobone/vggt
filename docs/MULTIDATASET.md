@@ -1021,3 +1021,25 @@ doubling. **Neither cell alone supports a claim about "what RE10K is worth"; the
 
 ⚠ It remains **SAM2-supervised** — those masks are model output, not ground truth — wherever it
 appears, in either direction.
+
+#### The full matrix, for the record (class-agnostic, final `checkpoint.pth`)
+
+**8/8 cells on each arm, 0 failed scenes anywhere.** Two cells (`replica_gt`, `scannetpp_gt`) died
+on their first attempt with `CUDA error: CUDA-capable device(s) is/are busy or unavailable` —
+**node GPU contention, not code or data** — and were re-run as 12077651 / 12077653; the recovered
+values match the rest of the matrix.
+
+| benchmark | bridge | I-gt (no RE10K) | I (+RE10K) | ratio |
+|---|---|---|---|---|
+| ScanNetv2 | unposed | 0.003 / 0.013 / 0.212 | 0.005 / 0.023 / 0.251 | **1.8×** |
+| ScanNetv2 | posed | 0.008 / 0.029 / 0.323 | 0.018 / 0.063 / 0.399 | **2.1×** |
+| ScanNet200 | unposed | 0.005 / 0.021 / 0.183 | 0.009 / 0.033 / 0.223 | 1.6× |
+| ScanNet200 | posed | 0.015 / 0.049 / 0.287 | 0.030 / 0.086 / 0.364 | 1.8× |
+| ScanNet++ | unposed | 0.000 / 0.000 / 0.001 | 0.000 / 0.000 / 0.003 | no signal |
+| ScanNet++ | posed | 0.000 / 0.001 / 0.096 | 0.001 / 0.006 / 0.128 | 6× *(on ~0)* |
+| Replica | unposed | 0.000 / 0.000 / 0.005 | 0.000 / 0.001 / 0.006 | no signal |
+| Replica | posed | 0.003 / 0.016 / 0.194 | 0.005 / 0.023 / 0.278 | 1.4× |
+
+RE10K helps on **every cell that carries signal**. The unposed out-of-domain pair is 0.000 on both
+arms, as it is on every arm in this file — that is the bridge, not the data. The ScanNet++ posed
+ratio is arithmetically 6× but sits on 0.001 → 0.006 and should not be quoted as a multiple.
