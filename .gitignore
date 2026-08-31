@@ -159,3 +159,7 @@ slurm/logs/*.err
 # gradio demo dumps uploads next to the repo root (demos/demo_gradio.py::handle_uploads)
 input_images_*/
 .gradio/
+
+# ASE CDN urls — licence-gated signed links, never commit
+ASE_cdn_urls.json
+aria_synthetic_environments_dataset_download_urls.json
