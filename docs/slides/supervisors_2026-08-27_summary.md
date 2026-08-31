@@ -34,20 +34,23 @@ section.dense { font-size: 19px; }
 
 <!-- _footer: "Official ScanNet 3D benchmark · UNPOSED (own predicted geometry) · class-agnostic · 50 views — the competitors' own setting" -->
 
-<!-- _class: mid -->
+<!-- _class: dense -->
 
-## 2. The headline
+## 2. The headline — and the axis it is not matched on
 
-| Method | Backbone | Views/scene | AP | AP50 | AP25 |
-|---|---|---|---|---|---|
-| IGGT *(as re-evaluated by FAST3DIS)* | adapted | 50 | 0.028 | 0.112 | 0.287 |
-| FAST3DIS | LoRA-adapted DA3 | 50 | 0.038 | 0.096 | 0.316 |
-| **Ours — 3D anchors, defaults, trained on ScanNet only** | **frozen VGGT-1B** | **50** | **0.053** | **0.170** | **0.542** |
-| **Ours + EXTRA TRAINING DATA** (ScanNet + ScanNet++ + Infinigen) | 〃 | **50** | **0.069** | **0.193** | **0.560** |
+| Method | trains on ScanNet? | Backbone | Views | AP | AP50 | AP25 |
+|---|---|---|---|---|---|---|
+| IGGT *(as re-evaluated by FAST3DIS)* | **no** | adapted | 50 | 0.028 | 0.112 | 0.287 |
+| FAST3DIS | **no** | LoRA-adapted DA3 | 50 | 0.038 | 0.096 | 0.316 |
+| **Ours — 3D anchors, defaults, trained on ScanNet only** | **yes** | **frozen VGGT-1B** | **50** | **0.053** | **0.170** | **0.542** |
+| **Ours + EXTRA TRAINING DATA** (ScanNet + ScanNet++ + Infinigen) | yes | 〃 | **50** | **0.069** | **0.193** | **0.560** |
+| **Ours with ScanNet REMOVED** — IGGT's mixture minus ASE | **no** | 〃 | 17 | **0.005** | **0.023** | **0.251** |
 
 **At the competitors' own 50-view budget we lead on all three columns** — 1.39× / 1.77× / 1.72× on FAST3DIS, more on IGGT — from a **strictly frozen** backbone, with every lifting parameter at its default.
 
-**Two things this needs said out loud.** The view budget is now **matched, not conceded**: at the 17-view budget everything before today was produced at, the AP column was a *tie* with FAST3DIS. And more views are not an open lever — 50 → 71 is flat-to-negative, so it saturates exactly where they report.
+**The last row is not a footnote, it is how the first four are read.** Evaluator, bridge, label setting and view budget are matched; **training data is not**, and it runs in our favour. Removing ScanNet costs a factor **6 in AP50** and turns the lead into ~4× behind. ⚠ It does *not* show the recipe loses at equal data — that arm has **no ASE at all**, 3819 scenes against ~100 k, ~0.8 GPU-days against ~16.
+
+**And on the ONE comparison where the training data IS matched — SegVGGT, our exact 1201 split — we are behind by ×2.8** once the ×2.3 evaluation bridge is taken out (slide 6).
 
 ---
 
@@ -64,7 +67,10 @@ section.dense { font-size: 19px; }
 | axis | state |
 |---|---|
 | **training data** (FAST3DIS, IGGT) | **not matched, it FAVOURS us, and it is now measured.** Both are zero-shot on ScanNet; every headline row of ours trains on it. With ScanNet removed we score **0.023 AP50 against their 0.096 / 0.112** — the lead rests on training data they do not use, and that belongs next to the lead. ⚠ It does *not* show the recipe loses at equal data: that arm is missing ASE entirely, 3819 scenes against ~100 k. |
+| **training data** (SegVGGT) | **MATCHED** — the official ScanNetv2 1201 split, identical since 2026-08-02. It is the one training-matched comparison in the deck, and we are **×2.8 behind** on it after the bridge is removed. |
 | **training compute** | ~0.8 vs ~16 GPU-days — **permanently unmatchable, and a strength, not an excuse** |
+
+**Read the two training rows together, because they are the same sentence twice: where the data is matched or approximated we are behind; the lead lives in the configuration where we train on the evaluation domain and they do not.**
 
 **One asymmetry runs the other way:** our backbone is strictly frozen where both of theirs are adapted.
 
@@ -93,7 +99,7 @@ section.dense { font-size: 19px; }
 | what | what it settled |
 |---|---|
 | **Views per scene, 17 → 50** | The last unmatched *evaluation* axis. **It moved the headline**: at their own budget we lead on all three columns. |
-| **The two no-ScanNet arms** | The last unmatched *training* axis. **It priced the asymmetry**: without ScanNet we are ~4× behind, so the lead rests on data they do not use. |
+| **The two no-ScanNet arms** | The last unmatched *training* axis. **It priced the asymmetry, and it now sits ON the headline slide**: without ScanNet we are ~4× behind, so the lead rests on data they do not use. |
 | **The ablation table on the 3D ruler** | Both consistency levers now have 3D numbers: cross-frame attention **−57 % AP50**, per-frame features −24 % class-aware / −49 % class-agnostic. |
 | **Formal identity metrics + seed spread** | **Retired a claim**: no published identity metric separates 3D anchors from the control. |
 | **RE10K** (**SAM2-supervised**) | Its **sign flips** — −42 % AP50 added to a mixture with ScanNet, **+1.8×** added to one without. |
@@ -106,7 +112,7 @@ section.dense { font-size: 19px; }
 
 ## 6. What is still open
 
-**Open and costed — the highest-value data item left.** **ASE is *not* unobtainable**: the public Aria Synthetic Environments release ships **2D instance segmentation ground truth** — exactly the supervision we train on — and downloads **by scene range**. At ~230 MB/scene a **1000-scene pilot is ~230 GB**, which fits our quota. It would turn our IGGT replication from "their mixture minus ASE" into the complete one, and it is the only route to training on FAST3DIS's own source.
+**Open, costed, and now SCRIPTED — the highest-value data item left.** **ASE is *not* unobtainable**: the public Aria Synthetic Environments release ships **2D instance segmentation ground truth** — exactly the supervision we train on — and downloads **by scene range**. At ~230 MB/scene a **1000-scene pilot is ~230 GB**, which fits our quota. As of 2026-08-31 the fetch job, the 2D builder source and their CPU tests are in the repo; **the only remaining step is accepting the Project Aria licence**, which is a signature, not an engineering task. It would turn our IGGT replication from "their mixture minus ASE" into the complete one — i.e. it is what would let the no-ScanNet row be read as a *method* comparison instead of a data one.
 
 **Permanently out of reach — stated, not promised:**
 

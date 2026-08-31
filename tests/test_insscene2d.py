@@ -14,7 +14,10 @@ What is actually at risk here, and therefore what is tested:
     and the stems are 8 OR 9 digits long — a lexicographic sort silently misaligns masks and
     images in the 107 scenes that mix the two widths;
   * RE10K's room shell must be dropped by AREA (it has no names), scene-wide rather than
-    per frame, so an instance never flickers in and out of the multi-frame GT.
+    per frame, so an instance never flickers in and out of the multi-frame GT;
+  * ASE's frames must be rotated to upright with rgb and ids going through the SAME rotation --
+    a mismatch there silently trains the head on masks that do not cover their objects -- and
+    its shell must go by area on the same scene-wide rule, since ASE ships no id->name table.
 
 The COCO-RLE decoder those last two rest on is tested separately, against `pycocotools` itself:
 `tests/test_coco_rle.py`.
@@ -36,12 +39,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from slurm.build_insscene2d import (  # noqa: E402
     RE10K_MAX_AREA_FRAC,
+    ase_frame_indices,
+    ase_keep_ids,
+    ase_probe,
     even_indices,
     infinigen_keep_ids,
     re10k_frame_stems,
     re10k_keep_ids,
     remap_scene_ids,
     resize_instance_map,
+    rotate_upright,
     write_scene,
 )
 from slurm.coco_rle import encode_counts  # noqa: E402
@@ -246,6 +253,102 @@ def test_re10k_empty_masklet_is_not_an_instance():
     check(keep == set(), "a masklet with zero area never becomes an instance")
 
 
+# --------------------------------------------------------------------------------------------
+# ase (todo 6n)
+# --------------------------------------------------------------------------------------------
+
+def _make_ase_scene(root: Path, scene: str, indices, size=(6, 8), extra_rgb=(), extra_inst=()):
+    """A minimal ASE scene tree: rgb/vignette%07d.jpg + instances/instance%07d.png."""
+    (root / scene / "rgb").mkdir(parents=True, exist_ok=True)
+    (root / scene / "instances").mkdir(parents=True, exist_ok=True)
+    for i in list(indices) + list(extra_rgb):
+        Image.fromarray(np.zeros((*size, 3), dtype=np.uint8)).save(
+            root / scene / "rgb" / f"vignette{i:07d}.jpg")
+    for i in list(indices) + list(extra_inst):
+        Image.fromarray(np.zeros(size, dtype=np.uint16), mode="I;16").save(
+            root / scene / "instances" / f"instance{i:07d}.png")
+
+
+def test_ase_frame_indices_need_both_images(tmp: Path):
+    root = tmp / "ase"
+    _make_ase_scene(root, "7", [0, 1, 2], extra_rgb=[9], extra_inst=[11])
+    got = ase_frame_indices(root / "7")
+    check(got == [0, 1, 2],
+          f"only frames with BOTH an rgb and an instance map are built, got {got}")
+
+
+def test_ase_frame_indices_are_numeric(tmp: Path):
+    root = tmp / "ase_numeric"
+    _make_ase_scene(root, "3", [2, 10, 100])
+    got = ase_frame_indices(root / "3")
+    check(got == [2, 10, 100], f"frame indices come back in numeric order, got {got}")
+
+
+def test_ase_rotation_is_identical_for_rgb_and_ids():
+    """
+    The single failure that would be invisible downstream: masks that no longer cover their
+    object. rgb and ids must land on the same pixel after the upright rotation.
+    """
+    ids = np.zeros((4, 6), dtype=np.int32)
+    ids[0, 5] = 42                       # one corner pixel, unambiguous under a rotation
+    rgb = np.zeros((4, 6, 3), dtype=np.uint8)
+    rgb[0, 5] = (255, 0, 0)
+
+    r_ids, r_rgb = rotate_upright(ids), rotate_upright(rgb)
+    check(r_ids.shape == (6, 4) and r_rgb.shape == (6, 4, 3),
+          f"a -90 rotation transposes the frame, got {r_ids.shape} / {r_rgb.shape}")
+    where_id = tuple(np.argwhere(r_ids == 42)[0])
+    where_rgb = tuple(np.argwhere(r_rgb[..., 0] == 255)[0])
+    check(where_id == where_rgb,
+          f"the id and its pixel land together after rotation: {where_id} vs {where_rgb}")
+    check(np.array_equal(rotate_upright(rotate_upright(rotate_upright(r_ids))), ids),
+          "four rotations are the identity, i.e. it really is a 90 deg turn")
+
+
+def test_ase_shell_is_dropped_by_area_scene_wide():
+    """
+    Same rule as RE10K's: averaged over the scene, not thresholded per frame. Id 1 covers half
+    of frame A and none of frame B -- a per-frame rule at 0.30 would drop it in A and keep it
+    in B, making it flicker in the multi-frame GT.
+    """
+    a = np.zeros((10, 10), dtype=np.int32)
+    a[:5, :] = 1            # 50 % of frame A
+    a[5:7, :2] = 2          # 4 %
+    b = np.zeros((10, 10), dtype=np.int32)
+    b[0:2, 0:2] = 2         # 4 %
+    per_frame = {"a": a, "b": b}
+
+    keep = ase_keep_ids(per_frame, 0.30)
+    check(keep == {1, 2},
+          f"id 1 averages 25 % over the two frames and SURVIVES a 0.30 cap, got {keep}")
+    check(ase_keep_ids(per_frame, 0.20) == {2},
+          "at a 0.20 cap the same id is shell — the cap is what moves, not the rule")
+    check(ase_keep_ids({"a": a}, 0.30) == {2},
+          "on frame A alone id 1 is 50 % and is dropped — the average is over the SCENE")
+
+
+def test_ase_probe_measures_and_applies_nothing():
+    ids = np.zeros((10, 10), dtype=np.int32)
+    ids[:6, :] = 1          # 60 %
+    ids[6:8, :5] = 2        # 10 %
+    ids[8, 0] = 3           # 1 %
+    stats = ase_probe({"a": ids})
+    check(stats["instances"] == 3, f"every non-zero id is counted, got {stats['instances']}")
+    check(abs(stats["area_frac_max"] - 0.60) < 1e-6,
+          f"the largest instance is reported at its true area, got {stats['area_frac_max']}")
+    check(stats["dropped_at"]["0.3"] == 1 and stats["dropped_at"]["0.5"] == 1,
+          f"a 0.30 cap would remove exactly the 60 % instance, got {stats['dropped_at']}")
+    check(stats["dropped_at"]["0.1"] == 1,
+          "a 0.10 cap removes the 60 % one and keeps the 10 % one (<= is inclusive)")
+
+
+def test_ase_empty_map_yields_no_instances():
+    check(ase_keep_ids({"a": np.zeros((4, 4), dtype=np.int32)}, 0.30) == set(),
+          "a frame with only background produces no ASE instance")
+    check(ase_probe({"a": np.zeros((4, 4), dtype=np.int32)})["instances"] == 0,
+          "and the probe reports zero rather than dividing by it")
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="insscene2d_test_"))
     try:
@@ -260,6 +363,12 @@ def main() -> int:
         test_re10k_stems_are_ordered_numerically()
         test_re10k_shell_is_dropped_by_area_scene_wide()
         test_re10k_empty_masklet_is_not_an_instance()
+        test_ase_frame_indices_need_both_images(tmp)
+        test_ase_frame_indices_are_numeric(tmp)
+        test_ase_rotation_is_identical_for_rgb_and_ids()
+        test_ase_shell_is_dropped_by_area_scene_wide()
+        test_ase_probe_measures_and_applies_nothing()
+        test_ase_empty_map_yields_no_instances()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     for message in PASSED:

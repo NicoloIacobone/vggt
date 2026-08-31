@@ -15,6 +15,15 @@ the same kind of label, and that difference must travel with every number:
                            USED, but the masks are **SAM2 output, not ground truth**: every row
                            trained on this must say "SAM2-supervised" (docs/MULTIDATASET.md §1.3).
 
+A FOURTH source lives outside the InsScene mirror and is built by the same code path (todo 6n):
+
+  ase                      Aria Synthetic Environments, downloaded per scene range by
+                           `slurm/fetch_ase.sh` — `<scene>/{rgb/vignette%07d.jpg,
+                           instances/instance%07d.png}`, per-pixel instance ids that are
+                           **rendered ground truth** and globally consistent inside a scene.
+                           It is the missing component of both FAST3DIS's and IGGT's training
+                           set (docs/TRAINING_COMPARABILITY.md §5.1-5.2).
+
 Output, one directory per scene, already at the trainer's input resolution:
 
     <out>/<source>/<scene>/color/<stem>.jpg        518x518 squash, matching data/scannet_overfit
@@ -45,6 +54,8 @@ Usage (see slurm/build_insscene2d.sh for the cluster driver):
         --exclude_scenes data/splits/scannetpp_nvs_sem_val.txt
     python slurm/build_insscene2d.py --source infinigen --out $TMPDIR/build --frames 32
     python slurm/build_insscene2d.py --source re10k --out $TMPDIR/build --frames 32
+    python slurm/build_insscene2d.py --source ase --ase_root $TMPDIR/ase --out $TMPDIR/build \
+        --frames 32 --probe          # --probe MEASURES the shell cap instead of applying one
 """
 
 from __future__ import annotations
@@ -79,6 +90,14 @@ INFINIGEN_FRAME_RE = re.compile(r"_(\d+)_\d+_\d+_\d+\.(npy|png|jpg|json|npz)$")
 # averaged over the kept frames of a scene — measured, not assumed: docs/MULTIDATASET.md §1.4.
 RE10K_MAX_AREA_FRAC = 0.30
 RE10K_MASK_DIR = "sam2_results"  # a SIBLING of the scene dirs, which is why it was missed once
+
+# ASE ships no id->name table (the tutorial reads `instances/instance*.png` and nothing else),
+# so its room shell can only go by AREA, exactly as RE10K's does. The cap starts at RE10K's
+# measured 0.30 and MUST be re-measured on the pilot before any training run — that is what
+# `--probe` is for. Do not treat this default as a settled number (docs/todo.md 6n).
+ASE_MAX_AREA_FRAC = RE10K_MAX_AREA_FRAC
+ASE_RGB_RE = re.compile(r"vignette(\d+)\.jpg$")
+ASE_INSTANCE_RE = re.compile(r"instance(\d+)\.png$")
 
 
 # --------------------------------------------------------------------------------------------
@@ -424,12 +443,163 @@ def build_re10k(mirror: Path, out: Path, frames: int, exclude: set, limit: Optio
 
 
 # --------------------------------------------------------------------------------------------
+# ase — Aria Synthetic Environments, one ordinary directory per scene (todo 6n)
+# --------------------------------------------------------------------------------------------
+
+def ase_frame_indices(scene_dir: Path) -> List[int]:
+    """
+    Frame indices that have BOTH an rgb and an instance image, in numeric order.
+
+    The stems are zero-padded to 7 digits so lexicographic and numeric order happen to agree
+    here — unlike RE10K, whose 8-or-9-digit stems cost us a silent misalignment. Sorting on the
+    parsed int anyway keeps the two builders reading the same way and survives a re-export that
+    changes the padding.
+    """
+    rgb = {int(m.group(1)) for f in (scene_dir / "rgb").glob("*.jpg")
+           if (m := ASE_RGB_RE.search(f.name))}
+    inst = {int(m.group(1)) for f in (scene_dir / "instances").glob("*.png")
+            if (m := ASE_INSTANCE_RE.search(f.name))}
+    return sorted(rgb & inst)
+
+
+def rotate_upright(array: np.ndarray) -> np.ndarray:
+    """
+    ASE stores frames in the Aria sensor's own orientation, 90 deg off upright — the tutorial
+    rotates by -90 to look at them and warns that the CALIBRATION is for the stored orientation.
+
+    We never read ASE's calibration (this builder needs pixels and ids, nothing else), and every
+    other source in the mixture ships upright frames, so the frames are rotated here instead of
+    handing the frozen backbone sideways rooms. RGB and ids go through the SAME numpy rotation
+    rather than one through PIL and one through numpy, so the two cannot drift apart.
+    """
+    return np.rot90(array, k=-1)
+
+
+def ase_keep_ids(per_frame: Dict[str, np.ndarray], max_area_frac: float) -> set:
+    """
+    Instance ids that are not room shell, by AREA averaged over the scene's kept frames.
+
+    Same rule and the same reason as `re10k_keep_ids`: ASE exposes no names, and a per-frame
+    threshold would make an id flicker in and out of the multi-frame GT, which re-links
+    instances across views by id.
+    """
+    areas: Dict[int, int] = {}
+    total_px = 0
+    for ids in per_frame.values():
+        total_px += ids.size
+        values, counts = np.unique(ids, return_counts=True)
+        for value, count in zip(values.tolist(), counts.tolist()):
+            if value == 0:
+                continue
+            areas[value] = areas.get(value, 0) + int(count)
+    limit = max_area_frac * total_px
+    return {value for value, area in areas.items() if 0 < area <= limit}
+
+
+def ase_probe(per_frame: Dict[str, np.ndarray]) -> dict:
+    """
+    The area distribution of one scene's instances, as a FRACTION of the frame.
+
+    `--probe` exists because the 0.30 shell cap is RE10K's measured number, not ASE's, and the
+    project's rule is that a filter constant is measured on its own data before it is applied
+    (docs/MULTIDATASET.md §1.4). This reports what a cap would cost; it applies nothing.
+    """
+    areas: Dict[int, int] = {}
+    total_px = 0
+    for ids in per_frame.values():
+        total_px += ids.size
+        values, counts = np.unique(ids, return_counts=True)
+        for value, count in zip(values.tolist(), counts.tolist()):
+            if value != 0:
+                areas[value] = areas.get(value, 0) + int(count)
+    if not areas or total_px == 0:
+        return dict(instances=0, area_frac={}, dropped_at={})
+    fracs = np.array(sorted(a / total_px for a in areas.values()))
+    return dict(
+        instances=len(fracs),
+        area_frac={f"p{q}": round(float(np.percentile(fracs, q)), 6) for q in (50, 90, 99)},
+        area_frac_max=round(float(fracs.max()), 6),
+        # what each candidate cap would remove, so the choice is read off a table, not guessed
+        dropped_at={str(cap): int((fracs > cap).sum()) for cap in (0.10, 0.20, 0.30, 0.50)},
+    )
+
+
+def build_ase(root: Path, out: Path, frames: int, exclude: set, limit: Optional[int],
+              min_area_px: int, max_area_frac: float, upright: bool, probe: bool) -> dict:
+    scenes = sorted((p for p in root.iterdir() if p.is_dir() and p.name not in exclude),
+                    key=lambda p: int(p.name) if p.name.isdigit() else p.name)
+    print(f"[ase] {len(scenes)} scene directories under {root}", flush=True)
+    if limit:
+        scenes = scenes[:limit]
+
+    report = {"source": "ase", "supervision": "rendered ground truth",
+              "max_area_frac": None if probe else max_area_frac, "upright": upright,
+              "probe": probe, "scenes": {}, "failed": {}}
+    for i, scene_dir in enumerate(scenes, 1):
+        scene = scene_dir.name
+        started = time.time()
+        try:
+            indices = ase_frame_indices(scene_dir)
+            picked = [indices[j] for j in even_indices(len(indices), frames)]
+            if not picked:
+                raise ValueError("no frame has both an rgb and an instance image")
+
+            per_frame, images, stems = {}, {}, []
+            for index in picked:
+                stem = f"frame_{index:06d}"
+                ids = np.array(Image.open(
+                    scene_dir / "instances" / f"instance{index:07d}.png"))
+                rgb = np.array(Image.open(
+                    scene_dir / "rgb" / f"vignette{index:07d}.jpg").convert("RGB"))
+                if ids.ndim != 2:
+                    raise ValueError(f"instance{index:07d}.png is not a single-channel id map "
+                                     f"(shape {ids.shape})")
+                if ids.shape != rgb.shape[:2]:
+                    raise ValueError(f"frame {index}: ids {ids.shape} vs rgb {rgb.shape[:2]}")
+                if upright:
+                    ids, rgb = rotate_upright(ids), rotate_upright(rgb)
+                per_frame[stem] = resize_instance_map(ids)
+                images[stem] = Image.fromarray(np.ascontiguousarray(rgb)).resize(
+                    (IMG_SIZE, IMG_SIZE), Image.BILINEAR)
+                stems.append(stem)
+
+            if probe:
+                report["scenes"][scene] = ase_probe(per_frame)
+                if i % 50 == 0 or i == 1:
+                    print(f"[ase probe {i}/{len(scenes)}] {scene}: "
+                          f"{report['scenes'][scene]}", flush=True)
+                continue
+
+            keep = ase_keep_ids(per_frame, max_area_frac)
+            maps, table = remap_scene_ids(per_frame, keep=keep or None,
+                                          min_area_px=min_area_px)
+            counters = write_scene(
+                out / "ase" / scene, stems, images, maps,
+                dict(source="ase", scene=scene, source_frames=len(indices),
+                     rotated_upright=upright, shell_dropped_by_area=max_area_frac,
+                     id_table={str(k): v for k, v in table.items()}))
+            report["scenes"][scene] = counters
+            if i % 50 == 0 or i == 1:
+                print(f"[ase {i}/{len(scenes)}] {scene}: {counters['frames']} frames, "
+                      f"{counters['instances']} instances, {time.time() - started:.1f}s",
+                      flush=True)
+        except Exception as exc:                          # one bad scene must not stop 1000
+            report["failed"][scene] = f"{type(exc).__name__}: {exc}"
+            print(f"[ase {i}/{len(scenes)}] {scene} FAILED: {exc}", flush=True)
+    return report
+
+
+# --------------------------------------------------------------------------------------------
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--source", choices=["scannetpp", "infinigen", "re10k"], required=True)
+    parser.add_argument("--source", choices=["scannetpp", "infinigen", "re10k", "ase"],
+                        required=True)
     parser.add_argument("--mirror", type=Path, default=DEFAULT_MIRROR)
+    parser.add_argument("--ase_root", type=Path, default=None,
+                        help="ase only: the unzipped scene tree (<root>/<scene_id>/rgb,...); "
+                             "ASE is NOT in the InsScene mirror, see slurm/fetch_ase.sh")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--frames", type=int, default=32,
                         help="frames kept per scene, evenly spaced (default 32)")
@@ -439,9 +609,19 @@ def main() -> int:
     parser.add_argument("--min_area_px", type=int, default=64,
                         help="drop instances smaller than this, summed over the kept frames")
     parser.add_argument("--max_area_frac", type=float, default=RE10K_MAX_AREA_FRAC,
-                        help="re10k only: drop instances covering more than this fraction of the "
+                        help="re10k/ase: drop instances covering more than this fraction of the "
                              "frame on average — the room-shell filter (default %(default)s)")
+    parser.add_argument("--upright", action=argparse.BooleanOptionalAction, default=True,
+                        help="ase only: rotate frames -90 deg to upright (ASE stores them in the "
+                             "sensor orientation, every other source is upright)")
+    parser.add_argument("--probe", action="store_true",
+                        help="ase only: MEASURE the instance-area distribution and write "
+                             "REPORT_ase.json without building anything — how the shell cap "
+                             "gets chosen from data instead of inherited from RE10K")
     args = parser.parse_args()
+
+    if args.source == "ase" and args.ase_root is None:
+        parser.error("--source ase needs --ase_root (ASE is not in the InsScene mirror)")
 
     exclude = set()
     if args.exclude_scenes:
@@ -456,6 +636,9 @@ def main() -> int:
     elif args.source == "re10k":
         report = build_re10k(args.mirror, args.out, args.frames, exclude, args.limit,
                              args.min_area_px, args.max_area_frac)
+    elif args.source == "ase":
+        report = build_ase(args.ase_root, args.out, args.frames, exclude, args.limit,
+                           args.min_area_px, args.max_area_frac, args.upright, args.probe)
     else:
         report = build_infinigen(args.mirror, args.out, args.frames, args.limit, args.min_area_px)
 
@@ -463,14 +646,32 @@ def main() -> int:
     report["frames_per_scene"] = args.frames
     report["min_area_px"] = args.min_area_px
     scenes = report["scenes"]
-    report["totals"] = {
-        "scenes": len(scenes),
-        "failed": len(report["failed"]),
-        "frames": sum(s["frames"] for s in scenes.values()),
-        "instances": sum(s["instances"] for s in scenes.values()),
-        "median_instances_per_scene":
-            float(np.median([s["instances"] for s in scenes.values()])) if scenes else 0.0,
-    }
+    if report.get("probe"):
+        # A probe writes area statistics, not scenes: summarise what a cap would cost across
+        # the whole sample so the number can be read off one line (docs/todo.md 6n).
+        caps = sorted({c for s in scenes.values() for c in s.get("dropped_at", {})})
+        total = sum(s["instances"] for s in scenes.values())
+        report["totals"] = {
+            "scenes": len(scenes), "failed": len(report["failed"]), "instances": total,
+            "median_area_frac": float(np.median(
+                [s.get("area_frac", {}).get("p50", 0.0)
+                 for s in scenes.values()])) if scenes else 0.0,
+            "dropped_at": {c: sum(s.get("dropped_at", {}).get(c, 0) for s in scenes.values())
+                           for c in caps},
+            "dropped_frac_at": {
+                c: round(sum(s.get("dropped_at", {}).get(c, 0)
+                             for s in scenes.values()) / total, 4) if total else 0.0
+                for c in caps},
+        }
+    else:
+        report["totals"] = {
+            "scenes": len(scenes),
+            "failed": len(report["failed"]),
+            "frames": sum(s["frames"] for s in scenes.values()),
+            "instances": sum(s["instances"] for s in scenes.values()),
+            "median_instances_per_scene":
+                float(np.median([s["instances"] for s in scenes.values()])) if scenes else 0.0,
+        }
     (args.out / f"REPORT_{args.source}.json").write_text(json.dumps(report, indent=1))
     print(json.dumps(report["totals"], indent=1), flush=True)
     return 1 if report["failed"] and not scenes else 0

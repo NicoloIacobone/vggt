@@ -132,6 +132,12 @@ the *scaling* claim on the extra-data one.
 
 ### 3.1 Rulers D / E — the two bridges on the same masks (18-class, class-aware)
 
+> **This is the ONLY training-matched competitor comparison in the project.** SegVGGT trains on
+> the official ScanNetv2 1201 split and so do we — identical since 2026-08-02 (§6.2). Every other
+> competitor row in this file compares against a method that never trains on ScanNet while we do.
+> Carry the pair: **ahead where the competitor never trains on the domain (§2), behind where the
+> competitor trains on the same data we do (here, ×2.8 after the bridge).**
+
 | Checkpoint | UNPOSED (own geometry) | POSED (GT bridge) | bridge cost |
 |---|---|---|---|
 | multi-frame, official split — the §5 control, **not** §2's headline row | 0.023 / 0.067 / 0.268 | 0.060 / 0.156 / 0.408 | **2.3× AP50** |
@@ -289,15 +295,23 @@ never blurred into one another:
 | bridge, posed ("geometric GT") | SegVGGT: GT poses + intrinsics + sensor depth | `--transfer_mode gt_projection`; its oracle returns **99.99 %** of assigned annotated vertices to their own instance | **matched — certified, not assumed** |
 | label setting | FAST3DIS / IGGT class-agnostic; SegVGGT class-aware | both columns computed for every run | **matched** |
 | benchmarks | ScanNetv2 / ScanNet200 / ScanNet++ / Replica | all four | **matched** |
-| train split (SegVGGT) | official ScanNetv2 1201 | identical | **matched** |
+| **training data — SegVGGT** | official ScanNetv2 1201 train split | **identical** since 2026-08-02 | **MATCHED — and it is the only training-matched comparison this project holds.** On it we are **×2.8 behind** after the ×2.3 bridge is removed (§3.1). Quote it as such: it is the row where nothing is conceded on data |
 | kept queries | SegVGGT 600 | 100 | **measured neutral** (0.138 → 0.140) — struck as an explanation |
 | views, all four benchmarks | 50 (FAST3DIS / IGGT) · 75–100 (SegVGGT) | 50 — achieved mean **46.7** on ScanNetv2 (20 % of val scenes are shorter), 50 on ScanNet++ / Replica | **MATCHED 2026-08-27** — the dense `.sens` export closed it; at their views our lead *widens*, and the lever saturates by 50 (`RESULTS.md` §5.4) |
-| training data | FAST3DIS: ASE only → ScanNet zero-shot · IGGT: InsScene-15K | we train on ScanNet | **not matched, it FAVOURS us, and it is now PRICED** (2026-08-28): without ScanNet we score 0.023 AP50 against their 0.096 / 0.112 (§2.1 caveat 2, `RESULTS.md` §5.6). Permanently unmatchable in the other direction — ASE's scene list is unpublished |
+| **training data — FAST3DIS / IGGT** | FAST3DIS: ASE only → ScanNet zero-shot · IGGT: InsScene-15K | we train on ScanNet | **not matched, it FAVOURS us, and it is PRICED** (2026-08-28): without ScanNet we score 0.023 AP50 against their 0.096 / 0.112, i.e. ~4× behind (§2.1 caveat 2, `RESULTS.md` §5.6). The closest arm, I, still has **no ASE** |
 | training compute | ~16 GPU-days | ~0.8 GPU-days, frozen backbone | **permanently unmatchable — and a strength, not an excuse** |
 | ASE itself | 9.2 TB, unpublished 40 % scene list | — | **permanently out of reach** (§6.4) |
 
-Read it top-down: everything above the "training data" row is matched; the rows below it are the
-honest gaps — one in flight, two permanent.
+Read it top-down: everything above the two training-data rows is matched. **Then read the two
+training rows together, because they say the same thing twice: wherever the training data is
+matched or approximated we are behind — ×2.8 against SegVGGT on the split we share, ~4× against
+FAST3DIS/IGGT once ScanNet is removed. The §2 headline lives in the one configuration where we
+train on the evaluation domain and the competitor does not.** That sentence belongs *before* the
+headline on any slide that carries both; the deck was reordered to do exactly that on 2026-08-31
+(`docs/slides/supervisors_2026-08-27.md`, slides 8 → 9 → 10).
+
+⚠ It does **not** follow that the recipe loses at equal data — see §2.1 caveat 2. Say
+*"we cannot match their training setting"*, never *"we lose at equal data"*.
 
 ### 6.3 Open and costed, not started
 
@@ -316,8 +330,15 @@ first-class operation rather than an all-or-nothing 23 TB fetch.
   replication, and it is the only way any of our training touches FAST3DIS's own source.
 - **What it does NOT buy**: FAST3DIS-matched training. Their 40 % scene list is unpublished, so
   that comparison stays cross-training-set at any download size (§6.4).
-- **Cost beyond the download**: one licence acceptance, one fetch job, and a `train/` adapter
-  mirroring `slurm/build_insscene2d.py`.
+- **Cost beyond the download — as of 2026-08-31 this is ONE licence acceptance and nothing else.**
+  The fetch job (`slurm/fetch_ase.sh`), the resumable sha1-verified downloader
+  (`slurm/download_ase.py`) and the `ase` source of `slurm/build_insscene2d.py` are written and
+  CPU-tested (`tests/test_ase_fetch.py`, 26 checks; `tests/test_insscene2d.py`, 53). The job
+  fetches in blocks so it never holds 230 GB at once, measures the **inode** cost as its gate,
+  and **probes ASE's own instance-area distribution** before applying a room-shell cap rather
+  than inheriting RE10K's 0.30. What is left is the Project Aria licence: the CDN urls arrive only
+  after it is accepted, which is the account holder's act. Drop the json at
+  `<work>/dataset/ase/ASE_cdn_urls.json` and `sbatch slurm/fetch_ase.sh`.
 
 **ScanNet200 supervision** — SegVGGT trains a 200-class checkpoint; our 2D GT is 19-class. This is
 a *supervision* limit, not a scoring one, and the two are routinely confused: **class-agnostic is
@@ -329,8 +350,8 @@ the class-**aware** column on ScanNet200 only; the class-agnostic headline (§2)
 - **FAST3DIS's training set is unreproducible at any scale**: 9.2 TB *and* an unpublished 40 %
   scene list. Every FAST3DIS comparison is a cross-training-set comparison. Permanent.
 - **ASE has no annotations on this cluster** — but it is **not unobtainable**: the public release
-  carries 2D instance GT and downloads by scene range. That is a *costed, not-started* item
-  (§6.3), not a permanent limit. What IS permanent is FAST3DIS's **scene list**, not the data.
+  carries 2D instance GT and downloads by scene range. That is a *costed, scripted, licence-gated*
+  item (§6.3), not a permanent limit. What IS permanent is FAST3DIS's **scene list**, not the data.
 - **InsScene-15K is incomplete** — only Infinigen / RE10K / ScanNet++ are published; the Aria
   portion is absent. Any replication is **partial** and must say so.
 - **Training compute cannot be matched** (~0.8 vs ~16 GPU-days) — and it is a *strength*, not an

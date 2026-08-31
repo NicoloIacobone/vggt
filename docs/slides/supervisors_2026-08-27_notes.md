@@ -256,13 +256,53 @@ etichettata.
 
 ---
 
-## Slide 8 — The headline
+## Slide 8 — L'asse dei dati di addestramento (era la slide 10)
 
-**Punto della slide:** è **la** slide del progetto. Un solo claim.
+**Punto della slide:** apre il blocco dei numeri, e apre **prima** della headline. È una scelta
+deliberata: chi legge il deck deve incontrare l'asimmetria di training **prima** del lead, non
+dopo. La versione precedente la teneva due slide più in là, e il risultato era che i vecchi claim
+di vantaggio si leggevano da soli.
 
-**Sintesi in una frase:** *"This is the row the whole project is for. Same benchmark, same
-evaluator, same bridge, same label setting — and, since today, the same number of views as the two
-published feed-forward competitors."*
+**Sintesi in una frase:** *"Only one of the three competitors trains on what we train on. Here is
+what our numbers look like against each of them, on their own training setting."*
+
+**Cosa dire:**
+
+- **Prima tabella, tre competitor, tre stati.** SegVGGT addestra sullo split ufficiale 1201 —
+  **lo stesso nostro**, verificato sul paper (*"1,201 training scenes… 8 A100, ~2 days per
+  dataset"*): asse **appaiato**. FAST3DIS addestra **solo su Aria/ASE** e su ScanNet è zero-shot.
+  IGGT addestra su InsScene-15K, che ScanNet non lo contiene. Verso quei due l'asse è
+  **approssimato**, non appaiato: gli arm I / I-gt non vedono mai ScanNet, ma **non hanno ASE**.
+- **Seconda tabella: cosa segnano gli arm appaiati e approssimati.** Contro SegVGGT, sui suoi
+  stessi dati, siamo **×2.8 dietro** una volta tolto il ×2.3 del ponte. Tolto ScanNet, contro
+  FAST3DIS e IGGT siamo **~4× dietro** (0.023 di AP50 contro 0.096 / 0.112).
+- **La frase da dire ad alta voce, perché è quella che un revisore formulerebbe da solo:**
+  *dove i dati di addestramento sono appaiati o approssimati, siamo dietro; il vantaggio della
+  slide 9 vive nell'unica configurazione in cui noi ci addestriamo sul dominio di valutazione e
+  loro no.* Detta da noi è un'analisi; detta da loro è un'obiezione.
+- **E subito dopo, senza pausa, il contro-punto — che è vero quanto il primo.** Non dimostra che
+  il metodo perde a parità di dati: l'arm I **non ha ASE**, cioè l'intero training set di FAST3DIS
+  e il pezzo più grande di quello di IGGT. Sono **3819 scene contro ~100 k**, backbone congelato
+  contro adattato, **~0.8 GPU-day contro ~16**.
+
+**Cosa NON dire:** *"il nostro metodo perde a parità di dati"*. Non è quello che è stato misurato,
+e quel confronto su questo cluster non è eseguibile. La formula sostenibile è *"non possiamo
+appaiare il loro setting di addestramento, e senza ScanNet siamo nettamente dietro"*.
+
+**Se chiedono "e allora perché mostrate il lead?":** perché su tutto ciò che non sono i dati —
+evaluator, ponte, label setting, budget di viste — il confronto **è** appaiato, e un backbone
+congelato a 0.8 GPU-day che sta davanti a due metodi adattati resta un risultato. Il punto è che
+va detto con l'asse dei dati attaccato, non al posto suo.
+
+---
+
+## Slide 9 — The headline (era la slide 8)
+
+**Punto della slide:** è **la** slide dei numeri. Un solo claim, e ora con la colonna
+*"trains on ScanNet?"* dentro la tabella, così il lead non è leggibile senza l'asimmetria.
+
+**Sintesi in una frase:** *"Same benchmark, same evaluator, same bridge, same label setting, same
+number of views — everything except the training data, which is the previous slide."*
 
 **Cosa dire:**
 
@@ -270,19 +310,21 @@ published feed-forward competitors."*
   esattamente il setting in cui i due competitor pubblicano.
 - Il claim, parola per parola: **a viste appaiate guidiamo su tutte e tre le colonne**, 1.39× /
   1.77× / 1.72× su FAST3DIS, con backbone congelato e tutti i parametri di lifting ai default.
-- **La differenza rispetto a prima è l'asse viste, non il modello.** È lo stesso checkpoint: a 17
-  viste su AP eravamo in **pareggio** con FAST3DIS, a 50 siamo avanti. Il confronto non è
-  migliorato perché abbiamo cambiato modello, ma perché abbiamo smesso di confrontarci su un terzo
-  delle loro viste.
+- **La colonna nuova e l'ultima riga fanno il lavoro della slide 8 dentro la tabella.** Le prime
+  due righe non vedono mai una scena di ScanNet, la terza sì, e l'ultima è la nostra stessa
+  ricetta senza ScanNet. Se qualcuno legge solo questa slide, legge comunque l'asimmetria.
+- **La differenza rispetto al deck precedente è l'asse viste, non il modello.** È lo stesso
+  checkpoint: a 17 viste su AP eravamo in **pareggio** con FAST3DIS, a 50 siamo avanti. Il
+  confronto non è migliorato perché abbiamo cambiato modello, ma perché abbiamo smesso di
+  confrontarci su un terzo delle loro viste.
 - **E le viste non sono una leva aperta**: 50 → 71 è piatto o leggermente negativo. Satura
   esattamente dove loro riportano, quindi è un confronto appaiato e non una gara di budget.
 - La riga extra-data resta **recintata**: il claim sul *meccanismo* poggia sulla riga ScanNet-only,
   quello sullo *scaling* su quella extra-data.
 
-**Cosa NON dire:** *"avanti su tutte e tre"* **senza dire a quante viste**. Il lead su AP esiste a
-50 viste; a 17 quella colonna è un pareggio. È la stessa specie di errore che il progetto ha già
-commesso una volta, solo con un'etichetta diversa. E le righe a 50 viste sono **un seme solo**: la
-replica a due semi è quella a 17 viste.
+**Cosa NON dire:** *"avanti su tutte e tre"* **senza dire a quante viste**, e **senza dire su quali
+dati**. Il lead su AP esiste a 50 viste; a 17 quella colonna è un pareggio. E le righe a 50 viste
+sono **un seme solo**: la replica a due semi è quella a 17 viste.
 
 **Attribuzione obbligatoria:** IGGT va sempre citato come *"as re-evaluated by FAST3DIS"*. IGGT non
 pubblica **nessun** AP su ScanNet: quella tripla è la ri-valutazione fatta da FAST3DIS.
@@ -297,55 +339,33 @@ scelto i parametri di lifting a posteriori?"*, la risposta pronta è: sul checkp
 
 ---
 
-## Slide 9 — The matched axes
+## Slide 10 — The matched axes (era la slide 9)
 
 **Punto della slide:** dimostrare che il confronto è stato costruito **con il setting del
-competitor**, asse per asse, e non con il nostro.
+competitor**, asse per asse, e non con il nostro — e che le uniche due eccezioni sono già state
+dichiarate nella slide 8.
 
-**Sintesi in una frase:** *"Every competitor-facing row is produced under the competitor's own
-setting. Here is the audit, axis by axis."*
+**Sintesi in una frase:** *"Everything is matched axis by axis except the two rows in bold, and
+those two are the whole story."*
 
 **Cosa dire:** non leggere tutte le righe. Tre bastano:
 
 - l'evaluator ufficiale vendored → *matched*;
 - il ponte posed è il "geometric GT" di SegVGGT, **certificato al 99.99 %** → *matched, e
   verificato, non assunto*;
-- **le viste** — la riga nuova, ed è quella che vale la pena leggere: era l'ultimo asse di
-  valutazione non appaiato, ed è stata chiusa il 2026-08-27 con l'export denso dei frame.
+- **le viste** — era l'ultimo asse di *valutazione* non appaiato, chiuso il 2026-08-27 con
+  l'export denso dei frame;
 - e la riga che fa risparmiare una discussione: **kept queries**. SegVGGT ne tiene 600, noi 100 — e
   l'abbiamo **misurato**: 0.138 → 0.140. È dentro il rumore, quindi **quella spiegazione del gap è
   cancellata**. Averlo misurato e averla cancellata è più forte che averla lasciata come scusa.
 
-**La riga train split, e perché non contraddice la slide dopo.** Qui `train split` dice *matched*,
-la slide 10 dice *not matched*: non è un'incoerenza, sono **competitor diversi**, ed è per questo
-che ora la riga porta il nome. **SegVGGT addestra sullo stesso split ufficiale 1201 su cui
-addestriamo noi** (verificato sul paper: *"1,201 training scenes… 8 A100, ~2 days per dataset"*),
-quindi verso SegVGGT quell'asse è appaiato. FAST3DIS e IGGT su ScanNet **non si addestrano
-affatto** — ed è la prima riga della slide 10.
+**Le due righe in grassetto in fondo** sono *training data* e *training compute*, e rimandano alla
+slide 8. Non rileggerle: sono già state dette. Servono qui perché la tabella degli assi sia
+completa — un audit che elenca solo gli assi appaiati non è un audit.
 
----
-
-## Slide 10 — Gli assi non appaiati
-
-**Punto della slide:** gli assi **non** matched, ciascuno con la direzione dichiarata. È la slide
-dell'onestà, e va tenuta con tono neutro.
-
-**Sintesi in una frase:** *"Two axes are not matched, and they do not run in the same direction."*
-
-**Cosa dire:**
-
-- **Dati di addestramento: corre A FAVORE nostro** — FAST3DIS e IGGT sono **zero-shot su
-  ScanNet**, noi no. Va detto ad alta voce, ed è il tipo di asimmetria che un revisore trova da
-  solo se non gliela dici tu. Le due run "no-ScanNet" (slide 15) lo chiudono.
-- **Compute: ~0.8 contro ~16 GPU-days, e non è colmabile.** Va presentato come **forza, non come
-  scusa**: è la conseguenza diretta del backbone congelato con feature in cache.
-- **ASE**: 9.2 TB e il 40 % della lista di scene non pubblicato. Attenzione a *cosa* è fuori
-  portata: **non il dataset — la lista di scene** (vedi slide 16, ASE è scaricabile).
-- **L'asimmetria che corre nell'altro senso e non è in tabella:** il nostro backbone è congelato,
-  i loro sono entrambi adattati.
-
-**Cosa è sparito rispetto alla versione precedente di questo deck:** la riga *viste*, che era il
-terzo asse non appaiato. Ora è appaiata e sta nella slide 9.
+**Su ASE, attenzione a *cosa* è fuori portata:** **non il dataset — la lista di scene**. ASE è
+scaricabile per range e il job è scritto (slide 16); il 40 % campionato da FAST3DIS non lo è, e
+non lo sarà mai.
 
 **La frase che chiude la slide:** ogni riga verso un competitor è **matched**,
 **closest-available-and-declared**, oppure **permanentemente impossibile**. Tre stati, mai
@@ -508,7 +528,7 @@ failed once, and one of them changed the headline this morning."*
 - **La run RE10K** — dire sempre **SAM2-supervised**, maschere generate da un modello.
 - **Le due righe nuove di oggi**: la tabella delle ablation sul righello 3D (slide 12) e il
   ri-scoring sulle metriche di identità formali (slide 14).
-- **Viste per scena 17 → 50**: **chiusa**, ed è la riga che ha spostato la headline della slide 8.
+- **Viste per scena 17 → 50**: **chiusa**, ed è la riga che ha spostato la headline della slide 9.
   Vale la pena dirlo esplicitamente: era l'ultimo asse di *valutazione* non appaiato.
 - **La run fallita.** Raccontala per intero, è un punto di forza: la prima run su RE10K è
   **divergita** — miglior epoca la 2 su 17, loss di training in salita, AP50 di training crollato a
@@ -535,6 +555,13 @@ I want them on the record rather than in a promise."*
   che compra: la nostra replica di IGGT smette di essere "la loro mistura meno ASE" e diventa
   completa. *"ASE non ha annotazioni"* era vero **su questo cluster**, non in assoluto: non ripetere
   la versione corta.
+- **Dal 2026-08-31 il job è scritto, non solo quantificato.** `slurm/fetch_ase.sh` scarica per
+  blocchi, verifica lo sha1 di ogni chunk, misura il costo in **inode** (è quello il cancello, non
+  i gigabyte), sonda la distribuzione delle aree per scegliere il taglio del guscio **sui dati di
+  ASE** invece di ereditare quello di RE10K, costruisce il set 2D e impacchetta un tar. Il builder
+  ha una sorgente `ase` con i suoi test CPU. **Resta un solo passo, ed è una firma**: le url del CDN
+  arrivano dopo l'accettazione della licenza Project Aria, che è un atto del titolare dell'account.
+  Se il supervisore chiede *"quanto manca?"*, la risposta è: la licenza e una notte di download.
 - **Quello che resta impossibile non è il dato, è la lista di scene.** Il 40 % delle scene usate da
   FAST3DIS non è pubblicato: **ogni confronto con FAST3DIS resta un confronto cross-training-set**,
   a qualunque dimensione di download. Lo diciamo noi.
@@ -564,19 +591,31 @@ delle release altrui — e noi le stiamo dichiarando al posto loro.
 
 **Cosa dire:**
 
-- Riga 1 (unposed, class-agnostic, **50 viste**): **è il paper.** A viste appaiate guidiamo su tutte
-  e tre le colonne contro entrambi i competitor unposed.
-- Riga 2 (posed, class-aware): dietro a SegVGGT — **2.3× è il ponte, ×2.8 è il residuo reale sulla
-  riga con ancore 3D**.
-- Riga 3 (altri tre benchmark): lo zero-shot fallisce unposed e sopravvive posed → **geometria, non
+- **La tabella ha ora una colonna `training data`, e va letta per prima.** È l'unico modo di far
+  leggere le tre righe nell'ordine giusto invece che dall'alto in basso.
+- Riga 1 (unposed, class-agnostic, **50 viste**, dati **non** appaiati): a viste appaiate guidiamo
+  su tutte e tre le colonne contro entrambi i competitor unposed.
+- Riga 2 (la stessa ricetta **senza ScanNet**, dati approssimati): **~4× dietro**. È il prezzo della
+  riga 1, misurato.
+- Riga 3 (posed, class-aware, dati **appaiati** — lo stesso split 1201 di SegVGGT): dietro —
+  **2.3× è il ponte, ×2.8 è il residuo training-matched**.
+- Riga 4 (altri tre benchmark): lo zero-shot fallisce unposed e sopravvive posed → **geometria, non
   maschere**.
 - La nota † va letta, non saltata: la riga posed è **class-aware perché è ciò che SegVGGT pubblica**;
   le run di scaling sono class-agnostic e **non hanno affatto una colonna class-aware**, quindi non
   possono comparire su quella riga — **non** perché vadano peggio.
 
-**La riga di chiusura** è deliberatamente una sola frase: su un setting appaiato asse per asse,
-viste comprese, un backbone **congelato** con un decoder addestrato guida i due competitor unposed —
-e la distanza che resta verso lo stato dell'arte posed è ormai in gran parte prezzata.
+**La riga di chiusura è cambiata, ed è la modifica più importante di questa revisione.** Prima
+diceva solo il lead. Ora dice, in quest'ordine: dove i dati di addestramento sono appaiati o
+approssimati siamo **dietro** (×2.8 contro SegVGGT sul nostro stesso split, ~4× contro
+FAST3DIS/IGGT tolto ScanNet); il **lead** della riga 1 è reale e appaiato su evaluator, ponte,
+label setting e viste, e poggia su dati che quei due non usano; e ciò che è davvero nostro non è la
+posizione in classifica ma un **backbone strettamente congelato a ~0.8 GPU-day** e un'ablation
+controllata che nessun altro ha eseguito.
+
+**Perché vale la pena chiudere così.** Un revisore quella frase la formula comunque. Formulata da
+noi è metodo; formulata da lui è un'obiezione a cui non abbiamo risposto — e la risposta ce
+l'abbiamo, ed è la slide 8.
 
 ---
 

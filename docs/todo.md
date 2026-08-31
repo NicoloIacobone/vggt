@@ -711,17 +711,35 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       — −42 % AP50 in a mixture with ScanNet, +1.8× in one without; redundant vs ScanNet, valuable
       without it. Two failed matrix cells (12046077 / 12046106) were **GPU contention, not code**
       (`CUDA-capable device(s) is/are busy`) and were re-run as 12077651 / 12077653.
-- [ ] **6n. A partial ASE download — costed 2026-08-27, not started.** ASE **is** publicly
-      available (projectaria.com/datasets/ase + a HuggingFace mirror) and its per-scene GT
-      **includes 2D instance segmentation**; the downloader takes `--scene-ids` ranges. Budget:
+- [~] **6n. A partial ASE download — costed 2026-08-27, SCRIPTED 2026-08-31, waiting on ONE
+      signature.** ASE **is** publicly available (projectaria.com/datasets/ase) and its per-scene
+      GT **includes 2D instance segmentation**; the downloader takes scene ranges. Budget:
       ~23 TB / 100 k scenes ≈ **230 MB/scene**, so a **1 000-scene pilot ≈ 230 GB** against
-      ~2.34 TB free scratch. **Gate the decision to scale on the pilot's measured inode count**
-      (`find <chunk> -type f | wc -l`), not on its size — scratch is quota'd on files, and the
-      InsScene mirror shipped 1 468 small zips where ~120 were expected. What it buys: arm I
-      becomes the **complete** IGGT replication instead of "minus ASE", and it is the only route
-      to training on FAST3DIS's own source. What it does not buy: a FAST3DIS-matched training
-      set — their 40 % scene list is unpublished, permanently (§5). Work: licence acceptance,
-      one fetch job, a `train/` adapter mirroring `slurm/build_insscene2d.py`.
+      ~2.34 TB free scratch. What it buys: arm I becomes the **complete** IGGT replication instead
+      of "minus ASE", which is what would let `docs/TRAINING_COMPARABILITY.md` §6.6's second and
+      third rows be read as a *method* comparison instead of a data one. What it does not buy: a
+      FAST3DIS-matched training set — their 40 % scene list is unpublished, permanently (§5).
+  - [x] **The pipeline — DONE 2026-08-31** (`docs/TRAINING_COMPARABILITY.md` §6.7).
+        `slurm/download_ase.py` (the official chunk protocol + resume markers on work + a time
+        budget + the inode report), `slurm/fetch_ase.sh` (fetch → gate → probe → build → pack, in
+        **blocks of 100 scenes** so it never holds 230 GB at once: `--tmp` is 60 GB, not 400), and
+        `--source ase` in `slurm/build_insscene2d.py`. 26 + 53 CPU checks in
+        `tests/test_ase_fetch.py` / `tests/test_insscene2d.py`.
+  - [x] **The two non-obvious decisions inside it**, both tested: frames are **rotated upright**
+        (ASE stores them 90° off, every other source is upright; rgb and ids go through the same
+        numpy call so masks cannot drift off their objects), and the **room-shell cap is NOT
+        inherited from RE10K** — `--probe` measures ASE's own area distribution and what each
+        candidate cap would remove, `PROBE_ONLY=1` stops there.
+  - [x] **The gate is the inode count**, wired into the driver: it prints files-per-scene per
+        block and the projection for a 5× range. Scratch is quota'd on files and the InsScene
+        mirror shipped 1 468 small zips where ~120 were expected.
+  - [ ] **BLOCKED on the licence, and only on that.** The per-chunk CDN urls arrive after
+        accepting the Project Aria dataset agreement — the account holder's act, not an agent's.
+        Accept it, drop the json at `<work>/dataset/ase/ASE_cdn_urls.json`, then
+        `sbatch slurm/fetch_ase.sh`. The job prints those instructions and exits 2 if it is absent.
+  - [ ] **After the pilot lands:** read `PROBE_ase_*.json`, pick `MAX_AREA_FRAC` off its
+        `dropped_frac_at` table, rebuild, then retrain arm I with ASE as a fourth source and
+        re-run its 8-cell matrix — that is the row that closes the IGGT training axis.
 - [x] **6o. Land the ablation-table hole on the 3D ruler — CLOSED 2026-08-28.**
   - [x] **`--no-cross_frame_attn` — job 11986399, DONE** (`docs/RESULTS.md` §5.5). 312 scenes, 0
         failures, defaults. Removing it costs **57 % of the 3D AP50** (0.067 → 0.029 class-aware,

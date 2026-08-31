@@ -438,6 +438,32 @@ myenv/bin/python slurm/build_insscene2d.py --source re10k --out $TMPDIR/b --limi
 that asymmetry is the point: ScanNet++ is the one source that is both trained on and evaluated on.
 Infinigen and RE10K are not among the four benchmarks, so there is nothing they can leak.
 
+### ASE — the fourth source, licence-gated (todo 6n, docs/TRAINING_COMPARABILITY.md §6.7)
+
+ASE is **not** in the InsScene mirror; it is downloaded per scene range from Project Aria. The
+one manual step is the licence: accept it at projectaria.com/datasets/ase and put the CDN json at
+`<work>/dataset/ase/ASE_cdn_urls.json`. Without it the job prints the instructions and exits 2.
+
+```bash
+sbatch --export=ALL,PROBE_ONLY=1 slurm/fetch_ase.sh    # FIRST: download block 1, measure, stop
+sbatch slurm/fetch_ase.sh                              # scenes 0-999 (~230 GB raw, one ~3 GB tar)
+sbatch --export=ALL,SCENE_IDS=0-4999,MAX_AREA_FRAC=<from the probe> slurm/fetch_ase.sh
+# local, against an already-unzipped tree:
+myenv/bin/python slurm/build_insscene2d.py --source ase --ase_root <tree> --out $TMPDIR/b \
+    --frames 32 --limit 5 --probe
+```
+
+**Run `PROBE_ONLY=1` before the first real build.** ASE ships no id→name table, so the room shell
+can only go by area — and the 0.30 default is *RE10K's* measured number, not ASE's. The probe
+writes `PROBE_ase_<range>.json` with the area distribution and what each candidate cap would
+remove; pick `MAX_AREA_FRAC` off its `dropped_frac_at` table. This is the same discipline
+docs/MULTIDATASET.md §1.4 applied to RE10K.
+
+It downloads in **blocks of 100 scenes** (`BLOCK=`) and deletes each block's raw tree once built,
+so peak node-local use is one block rather than the whole range — `--tmp` is 60 GB, not 400. The
+`.complete` markers live on work, so a resubmitted job skips chunks it already fetched. The gate
+it prints is the **inode count per scene**, not the byte size: scratch is quota'd on files.
+
 ### 1201-scene official-train extension (todo 1c; separate tar, does not touch the 500-scene one)
 
 **Builds node-local.** `/cluster/scratch` is quota'd on **file count** (1.0M soft / 1.5M hard) and

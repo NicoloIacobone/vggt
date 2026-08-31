@@ -23,6 +23,7 @@ themselves, not from the paper:
 | `processed_scannetpp_v2` | 903 scenes; `images/*.jpg`, `depth/*.png`, `refined_ins_ids/<stem>.jpg.npy` (int16 per-pixel ids at the image's own 920×690) | **yes** |
 | `processed_infinigen` | 1466 sub-scene zips (156 scenes); `Image/`, `Depth/`, `ObjectSegmentation/*.npy` (int64 ids), `Objects/*.json` (names + `object_index`), `camview/*.npz` (K, T) | **yes** |
 | `processed_re10k` | 5138 scenes; `<scene>/{rgb,cam}/` **and** a sibling `sam2_results/<scene>/auto_masks.{json,avi}` — COCO-RLE masklets, per frame, ids persistent across the clip (5127 of 5138 scenes) | **yes, but SAM2-generated** — §1.3, built §1.4. Every row trained on it says **SAM2-supervised** |
+| *(not in the mirror)* **ASE** | ~100 k scenes on Project Aria's CDN; `<scene>/{rgb/vignette%07d.jpg, depth/, instances/instance%07d.png}` + `trajectory.csv` — per-pixel instance ids, **rendered ground truth** | **yes, and it is the missing fourth subset.** Downloaded per scene range by `slurm/fetch_ase.sh`, built by `--source ase`; **licence-gated**, see `docs/TRAINING_COMPARABILITY.md` §6.7 and todo 6n |
 
 Two properties were verified before any of it was used, because both are load-bearing:
 
@@ -916,8 +917,10 @@ Each edge is one variable. The row edges price **ScanNet training data**; the co
 **SAM2-supervised RE10K** (§1.3) — each measured twice, in and out of the ScanNet domain.
 
 **Arm I is IGGT's training set minus ASE** (`docs/TRAINING_COMPARABILITY.md` §6.1a), which is the
-closest replication the mirror allows and will stay so: ASE is 9.2 TB and its scene list is
-unpublished (§5.1–5.2 there). RE10K is capped at 1500 of 5127 scenes because the feature cache is
+closest replication *the mirror* allows — but no longer the closest replication possible: ASE
+downloads by scene range and the pilot job is written and tested (§6.7 there, todo 6n), waiting
+only on the Project Aria licence. FAST3DIS's own sampled 40 % scene list stays unpublished, so
+*their* training set is permanently unreproducible whatever we download (§5.1 there). RE10K is capped at 1500 of 5127 scenes because the feature cache is
 the binding constraint — uncapped this arm is ~550 GB, which does not schedule. Say **"IGGT's
 mixture minus ASE, RE10K subsampled"**, never "IGGT's training data".
 
