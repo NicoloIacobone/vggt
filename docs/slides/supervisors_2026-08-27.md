@@ -136,16 +136,16 @@ Five labels travel with every number in this deck. A number without them is not 
 
 Only one of the three competitors trains on what we train on. Every number in this deck is read against that.
 
-| competitor | they train on | our matched arm | ours vs theirs |
+| competitor | they train on | the run of ours that matches it | ours vs theirs |
 |---|---|---|---|
 | **SegVGGT** | ScanNetv2 1201 | **the identical split** → **TRAINING-MATCHED** | posed 0.104 / 0.257 / 0.504 vs **0.504 / 0.717 / 0.870** — **×2.8 behind** once the ×2.3 bridge is out |
-| **FAST3DIS** | Aria/ASE only — zero real data | **arm I** — never sees ScanNet, but has **no ASE** | 0.005 / 0.023 / 0.251 vs 0.038 / 0.096 / 0.316 — **~4× behind** |
-| **IGGT** | InsScene-15K = ASE + Infinigen + RE10K + ScanNet++ | **arm I** = that mixture **minus ASE** | 〃 vs 0.028 / 0.112 / 0.287 — **~4× behind** |
+| **FAST3DIS** | Aria/ASE only — zero real data | **our no-ScanNet run** — never sees ScanNet, but has **no ASE** either | 0.005 / 0.023 / 0.251 vs 0.038 / 0.096 / 0.316 — **~4× behind** |
+| **IGGT** | InsScene-15K = ASE + Infinigen + RE10K + ScanNet++ | **the same run** = their mixture **minus ASE** | 〃 vs 0.028 / 0.112 / 0.287 — **~4× behind** |
 | *for reference* | — | *the same recipe **with** ScanNet* | *0.053 / 0.170 / 0.542 — ahead of both (slide 9)* |
 
 **Wherever the training data is matched or approximated, we are behind.** The lead on slide 9 exists in the one configuration where we train on the evaluation domain and they do not: removing ScanNet costs a factor **6 in AP50**.
 
-⚠ **It does not follow that the recipe loses at equal data.** Arm I has **no ASE at all** — 3819 scenes against ~100 k, frozen against adapted, ~0.8 GPU-days against ~16. *"We cannot match their training setting"* is supportable; *"we lose at equal data"* has never been measured and cannot be here.
+⚠ **It does not follow that the recipe loses at equal data.** That run has **no ASE at all** — 3819 scenes against ~100 k, frozen against adapted, ~0.8 GPU-days against ~16. *"We cannot match their training setting"* is supportable; *"we lose at equal data"* has never been measured and cannot be here.
 
 ---
 
@@ -162,7 +162,7 @@ Only one of the three competitors trains on what we train on. Every number in th
 | **Ours — 3D anchors, defaults, ScanNet only** *(**frozen** VGGT-1B)* | **yes** | **50** | **0.053** | **0.170** | **0.542** |
 | — the same checkpoint at 17 views *(two seeds)* | yes | 17 | 0.042 | 0.138 | 0.504 |
 | **Ours + EXTRA DATA** (+ScanNet++ +Infinigen, 3520 scenes) | yes | **50** | **0.069** | **0.193** | **0.560** |
-| **Ours with ScanNet REMOVED** — arm I *(slide 8)* | **no** | 17 | **0.005** | **0.023** | **0.251** |
+| **Ours with ScanNet REMOVED** — the no-ScanNet run *(slide 8)* | **no** | 17 | **0.005** | **0.023** | **0.251** |
 
 **At the competitors' own 50-view budget we lead on all three columns** — 1.39× / 1.77× / 1.72× on FAST3DIS, more on IGGT — with a **strictly frozen** backbone and every lifting parameter at its default. Extra data leads by 1.8–2.0×.
 
@@ -210,7 +210,7 @@ Only one of the three competitors trains on what we train on. Every number in th
 
 - **The same masks under a different bridge change by 2.3×**, on every row — a constant of the protocol, not of a checkpoint. Both columns always travel together: a posed number alone reads better than it is.
 - **×2.8 is the training-matched verdict.** Total distance on the 3D-anchor row is **×6.4**: **×2.3 bridge**, **×2.8 real** — against a competitor trained on our exact split. It is checkpoint-dependent, so it travels with its checkpoint. That ×2.8 buys three things we chose not to have: **LoRA-adapted backbone** · **75–100 views** · **259×196 masks** vs 37×37. A fourth candidate, 600 kept queries vs 100, is **measured neutral** and struck off.
-- **The extra-data row is class-agnostic, the others class-aware** — those arms have no class-aware column *at all*, which is why it cannot sit on the same footing; not because it scores worse. Its raw distance to SegVGGT is **1.71×**: a *direction*, not a ratio.
+- **The extra-data row is class-agnostic, the others class-aware** — those runs have no class-aware column *at all*, which is why it cannot sit on the same footing; not because it scores worse. Its raw distance to SegVGGT is **1.71×**: a *direction*, not a ratio.
 
 ---
 
@@ -272,7 +272,7 @@ The headline lives on the 3D benchmark, but the **two mechanisms that carry mult
 | what | what it settled |
 |---|---|
 | **Views per scene, 17 → 50** | The last unmatched *evaluation* axis. **It moved the headline** (slide 9): at their own budget we lead on all three columns. |
-| **The two no-ScanNet arms** | The last unmatched *training* axis. **It priced the asymmetry, and it now OPENS the deck** (slide 8): without ScanNet we are ~4× behind, so the lead rests on training data they do not use. |
+| **The two no-ScanNet runs** | The last unmatched *training* axis. **It priced the asymmetry, and it now OPENS the deck** (slide 8): without ScanNet we are ~4× behind, so the lead rests on training data they do not use. |
 | **The ablation table on the 3D ruler** | Both consistency levers now have 3D numbers (slide 12). The 2D ordering held; its **spacing** did not. |
 | **Formal identity metrics + their seed spread** | **Retired a claim** (slide 14): no published identity metric separates 3D anchors from the control. |
 | **RE10K** (**SAM2-supervised** — masks are model output, not GT) | Its **sign flips**: −42 % AP50 added to a mixture that has ScanNet, **+1.8×** added to one that does not. Redundant where ScanNet is, valuable where it is not. |
@@ -307,7 +307,7 @@ The headline lives on the 3D benchmark, but the **two mechanisms that carry mult
 | Ruler | training data | Our best | vs | Verdict |
 |---|---|---|---|---|
 | **3D official, UNPOSED, class-agnostic, 50 views** | **not matched — favours us** | **0.053 / 0.170 / 0.542** | FAST3DIS 0.038 / 0.096 / 0.316 · IGGT\* 0.028 / 0.112 / 0.287 | **lead on all three, at their own view budget** |
-| **〃 with ScanNet removed** — arm I, 17 views | **approximated (no ASE)** | **0.005 / 0.023 / 0.251** | 〃 | **~4× behind** — the lead's price, measured |
+| **〃 with ScanNet removed** — the no-ScanNet run, 17 views | **approximated (no ASE)** | **0.005 / 0.023 / 0.251** | 〃 | **~4× behind** — the lead's price, measured |
 | 3D official, POSED, class-aware † | **MATCHED** — the same 1201 split | 0.088 / 0.260 / 0.572 *(best posed row)* | SegVGGT 0.504 / 0.717 / 0.870 | behind; **2.3× is the bridge**, and on the `--anchor_3d` row the residual is **×2.8 — the training-matched number** |
 | 3D on ScanNet200 / ScanNet++ / Replica | n/a — no like-for-like row held | 0.124 / 0.009 / 0.006 AP (posed) | — | zero-shot fails unposed, survives posed → **geometry, not masks** |
 

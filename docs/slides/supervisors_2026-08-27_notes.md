@@ -279,8 +279,11 @@ what our numbers look like against each of them, on their own training setting."
   **lo stesso nostro**, verificato sul paper (*"1,201 training scenes… 8 A100, ~2 days per
   dataset"*): asse **appaiato**. FAST3DIS addestra **solo su Aria/ASE** e su ScanNet è zero-shot.
   IGGT addestra su InsScene-15K, che ScanNet non lo contiene. Verso quei due l'asse è
-  **approssimato**, non appaiato: gli arm I / I-gt non vedono mai ScanNet, ma **non hanno ASE**.
-- **Seconda tabella: cosa segnano gli arm appaiati e approssimati.** Contro SegVGGT, sui suoi
+  **approssimato**, non appaiato: le due run senza ScanNet non lo vedono mai, ma **non hanno ASE**.
+  *(Sulle slide non compaiono più le sigle interne: "arm I" è la **run senza ScanNet** e "arm I-gt"
+  è la **run senza ScanNet né RE10K**. Le sigle restano in `docs/MULTIDATASET.md` §12, dove sono
+  l'indice verso i job 11839134 / 11839135.)*
+- **Seconda tabella: cosa segnano le run appaiate e approssimate.** Contro SegVGGT, sui suoi
   stessi dati, siamo **×2.8 dietro** una volta tolto il ×2.3 del ponte. Tolto ScanNet, contro
   FAST3DIS e IGGT siamo **~4× dietro** (0.023 di AP50 contro 0.096 / 0.112).
 - **Attenzione a una trappola che questa slide può indurre:** il ×6.4 / ×2.8 è misurato **sul
@@ -292,7 +295,7 @@ what our numbers look like against each of them, on their own training setting."
   slide 9 vive nell'unica configurazione in cui noi ci addestriamo sul dominio di valutazione e
   loro no.* Detta da noi è un'analisi; detta da loro è un'obiezione.
 - **E subito dopo, senza pausa, il contro-punto — che è vero quanto il primo.** Non dimostra che
-  il metodo perde a parità di dati: l'arm I **non ha ASE**, cioè l'intero training set di FAST3DIS
+  il metodo perde a parità di dati: la run senza ScanNet **non ha ASE**, cioè l'intero training set di FAST3DIS
   e il pezzo più grande di quello di IGGT. Sono **3819 scene contro ~100 k**, backbone congelato
   contro adattato, **~0.8 GPU-day contro ~16**.
 

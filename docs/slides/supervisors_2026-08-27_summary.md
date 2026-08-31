@@ -49,7 +49,7 @@ section.tighter { font-size: 17px; }
 
 **At the competitors' own 50-view budget we lead on all three columns** — 1.39× / 1.77× / 1.72× on FAST3DIS, more on IGGT — from a **strictly frozen** backbone, with every lifting parameter at its default.
 
-**The last row is not a footnote, it is how the first four are read.** Evaluator, bridge, label setting and view budget are matched; **training data is not**, and it runs in our favour. Removing ScanNet costs a factor **6 in AP50** and turns the lead into ~4× behind. ⚠ It does *not* show the recipe loses at equal data — that arm has **no ASE at all**, 3819 scenes against ~100 k, ~0.8 GPU-days against ~16.
+**The last row is not a footnote, it is how the first four are read.** Evaluator, bridge, label setting and view budget are matched; **training data is not**, and it runs in our favour. Removing ScanNet costs a factor **6 in AP50** and turns the lead into ~4× behind. ⚠ It does *not* show the recipe loses at equal data — that run has **no ASE at all**, 3819 scenes against ~100 k, ~0.8 GPU-days against ~16.
 
 **And on the ONE comparison where the training data IS matched — SegVGGT, our exact 1201 split — we are behind by ×2.8** once the ×2.3 evaluation bridge is taken out, measured on the `--anchor_3d` checkpoint (the residual is checkpoint-dependent; slide 6).
 
@@ -67,7 +67,7 @@ section.tighter { font-size: 17px; }
 
 | axis | state |
 |---|---|
-| **training data** (FAST3DIS, IGGT) | **not matched, it FAVOURS us, and it is now measured.** Both are zero-shot on ScanNet; every headline row of ours trains on it. With ScanNet removed we score **0.023 AP50 against their 0.096 / 0.112** — the lead rests on training data they do not use, and that belongs next to the lead. ⚠ It does *not* show the recipe loses at equal data: that arm is missing ASE entirely, 3819 scenes against ~100 k. |
+| **training data** (FAST3DIS, IGGT) | **not matched, it FAVOURS us, and it is now measured.** Both are zero-shot on ScanNet; every headline row of ours trains on it. With ScanNet removed we score **0.023 AP50 against their 0.096 / 0.112** — the lead rests on training data they do not use, and that belongs next to the lead. ⚠ It does *not* show the recipe loses at equal data: that run is missing ASE entirely, 3819 scenes against ~100 k. |
 | **training data** (SegVGGT) | **MATCHED** — the official ScanNetv2 1201 split, identical. It is the one training-matched comparison in the deck, and we are **×2.8 behind** on it after the bridge is removed. |
 | **training compute** | ~0.8 vs ~16 GPU-days — **permanently unmatchable, and a strength, not an excuse** |
 
@@ -100,7 +100,7 @@ section.tighter { font-size: 17px; }
 | what | what it settled |
 |---|---|
 | **Views per scene, 17 → 50** | The last unmatched *evaluation* axis. **It moved the headline**: at their own budget we lead on all three columns. |
-| **The two no-ScanNet arms** | The last unmatched *training* axis. **It priced the asymmetry, and it now sits ON the headline slide**: without ScanNet we are ~4× behind, so the lead rests on data they do not use. |
+| **The two no-ScanNet runs** | The last unmatched *training* axis. **It priced the asymmetry, and it now sits ON the headline slide**: without ScanNet we are ~4× behind, so the lead rests on data they do not use. |
 | **The ablation table on the 3D ruler** | Both consistency levers now have 3D numbers: cross-frame attention **−57 % AP50**, per-frame features −24 % class-aware / −49 % class-agnostic. |
 | **Formal identity metrics + seed spread** | **Retired a claim**: no published identity metric separates 3D anchors from the control. |
 | **RE10K** (**SAM2-supervised**) | Its **sign flips** — −42 % AP50 added to a mixture with ScanNet, **+1.8×** added to one without. |
