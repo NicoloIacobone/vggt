@@ -80,6 +80,13 @@ setting. Se salti questa slide, il resto del talk diventa fragile.
 **Sintesi in una frase:** *"Before any number: in this literature the same model can score four different
 things depending on the setting. So every number here carries its labels."*
 
+**La quinta etichetta è nuova — le metriche di identità cross-view.** Va detta qui e non alla 14,
+perché è una regola di lettura: **HOTA / AssA / DetA / IDF1** sono **2D, per bundle**, e non hanno
+e non avranno mai una colonna competitor — *nessuno* dei tre pubblica una metrica di consistenza
+cross-view. Chi le sente per la prima volta alla slide 14 si chiede perché non ci sia il confronto;
+detto qui, la domanda non nasce. Aggiungi che `view_consistency` / `id_switch` sono **nostre**,
+non pubblicate, e ora solo diagnostica interna.
+
 **Cosa dire:**
 
 - **La tripla `AP / AP50 / AP25`** è sempre in quest'ordine. `mAP` ≡ `AP`: se una tabella
@@ -256,7 +263,7 @@ etichettata.
 
 ---
 
-## Slide 8 — L'asse dei dati di addestramento (era la slide 10)
+## Slide 8 — L'asse dei dati di addestramento
 
 **Punto della slide:** apre il blocco dei numeri, e apre **prima** della headline. È una scelta
 deliberata: chi legge il deck deve incontrare l'asimmetria di training **prima** del lead, non
@@ -300,7 +307,7 @@ va detto con l'asse dei dati attaccato, non al posto suo.
 
 ---
 
-## Slide 9 — The headline (era la slide 8)
+## Slide 9 — The headline
 
 **Punto della slide:** è **la** slide dei numeri. Un solo claim, e ora con la colonna
 *"trains on ScanNet?"* dentro la tabella, così il lead non è leggibile senza l'asimmetria.
@@ -343,7 +350,7 @@ scelto i parametri di lifting a posteriori?"*, la risposta pronta è: sul checkp
 
 ---
 
-## Slide 10 — The matched axes (era la slide 9)
+## Slide 10 — The matched axes
 
 **Punto della slide:** dimostrare che il confronto è stato costruito **con il setting del
 competitor**, asse per asse, e non con il nostro — e che le uniche due eccezioni sono già state
@@ -491,8 +498,14 @@ difendibili.
    ingredienti del decoder variati **uno alla volta** — incluse ancore 3D contro box 2D **dentro lo
    stesso decoder**. In un campo dove ogni paper cambia backbone, dati e protocollo insieme, questo
    è il contributo con la vita più lunga.
-2. **Risultati 3D competitivi da un backbone strettamente congelato**, a ~0.8 GPU-days contro ~16.
-   Tutti gli altri adattano il backbone. È il claim con l'impatto pratico più immediato.
+2. **La prima misura di cosa raggiunge un backbone *strettamente congelato* su questo compito.**
+   ⚠ **Questo punto è stato riformulato: non dire più "risultati 3D competitivi".** Prendeva in
+   prestito la posizione in classifica lasciando fuori l'asse dei dati — cioè esattamente
+   l'errore che la slide 8 esiste per impedire. Tutti in questo campo adattano il backbone in
+   LoRA e **nessuno ha pubblicato il caso non adattato**; noi sì, a ~0.8 GPU-day contro ~16 e su
+   1201 scene contro ~100 k. In-domain basta a stare davanti a due metodi adattati; sul **loro**
+   setting di addestramento **no**. **Sono entrambe metà del risultato**, e vanno dette insieme:
+   detta solo la prima, è la stessa scorciatoia della vecchia headline.
 3. **Consistenza intrinseca alla query, non a posteriori — e ora misurata su un righello
    pubblicato.** Il punto è cambiato dal 2026-08-27, e il cambiamento va capito bene: prima
    citavamo `view_consistency` 0.734 e `id_switch` 0.414, che sono **definizioni nostre** senza
@@ -500,9 +513,10 @@ difendibili.
    cross-view. Ora l'eval riporta **HOTA / AssA / DetA / IDF1**, le metriche della letteratura di
    tracking, con le viste del bundle lette come istanti temporali e una query come una traccia.
    **La mappatura è esatta per costruzione, non inventata** — ed è proprio la proprietà che la
-   metrica deve certificare: non c'è nulla da tracciare, appaiare o fondere prima. I numeri
-   arrivano con i job di ri-scoring (slide 15); fino ad allora la vecchia coppia va citata solo
-   con l'etichetta "definita dal progetto".
+   metrica deve certificare: non c'è nulla da tracciare, appaiare o fondere prima. **I numeri sono
+   arrivati**: HOTA 0.42 / AssA 0.58 / DetA 0.31 / IDF1 0.49 sul checkpoint headline, da citare
+   come **livelli**. E hanno ritirato un claim: su due semi nessuna metrica pubblicata separa
+   `--anchor_3d` dal controllo. La vecchia coppia non si cita più fuori.
 
 **Tieni pronto "why not just splat?":** i metodi basati su Gaussian Splatting / NeRF ottengono la
 consistenza multi-vista per costruzione, ma richiedono **ottimizzazione per scena**. Il nostro è

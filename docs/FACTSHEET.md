@@ -233,8 +233,16 @@ anything.
 
 1. **The controlled comparison nobody has run**: one backbone, one dataset, one protocol, decoder
    ingredients varied one at a time — including 3D-vs-2D anchors *inside the same decoder*.
-2. **Competitive 3D results from a strictly frozen backbone** at ~0.8 GPU-days against ~16, with no
-   adaptation of any kind. Everyone else LoRA-adapts.
+2. **The first measurement of what a *strictly frozen* backbone reaches on this task.** Everyone
+   else LoRA-adapts a VGGT-family backbone; nobody has published the unadapted case. At ~0.8
+   GPU-days against ~16, on 1201 scenes against ~100 k, it leads two adapted competitors on the
+   in-domain ScanNet ruler and does **not** on their own training setting (§6.6 of
+   `TRAINING_COMPARABILITY.md`, §2.1 caveat 2). **Both halves are the claim.**
+
+   ⚠ **Do not write "competitive 3D results" unqualified.** It borrows the leaderboard position
+   while dropping the training axis — the exact error §2.1 caveat 2 and the deck's slide 8 exist
+   to prevent. The supportable form names the setting: *"in-domain it leads two adapted methods;
+   without ScanNet it does not"*.
 3. **Consistency intrinsic to the query, not post-hoc** — and now *measured on a published
    ruler*: since 2026-08-27 the eval reports **HOTA / AssA / DetA / IDF1**
    (`docs/MASKDINO.md` §6.6.1), the tracking literature's own metrics, with a bundle's views read

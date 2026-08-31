@@ -19,12 +19,13 @@ th, td { padding: .2em .45em; }
 footer { font-size: 13px; }
 section.mid   { font-size: 21px; }
 section.dense { font-size: 19px; }
+section.tighter { font-size: 17px; }
 </style>
 
 # Frozen VGGT-1B + a MaskDINO decoder
 ## 3D multi-view-consistent instance segmentation — the short version
 
-**Status, 2026-08-27.** Six slides. The full deck is `supervisors_2026-08-27.md`.
+**Status.** Six slides. The full deck is the long-form version of this one.
 
 - **What it is.** VGGT-1B, **strictly frozen** — no finetuning, no LoRA. Its features are cached once per scene before training, so only the decoder is ever trained: **~0.8 GPU-days against the ~16** of the closest competitor.
 - **What it is trained on.** **2D masks only** — no 3D label ever enters training. The headline run sees the official ScanNet v2 2D instance annotations and nothing else.
@@ -34,7 +35,7 @@ section.dense { font-size: 19px; }
 
 <!-- _footer: "Official ScanNet 3D benchmark · UNPOSED (own predicted geometry) · class-agnostic · 50 views — the competitors' own setting" -->
 
-<!-- _class: dense -->
+<!-- _class: tighter -->
 
 ## 2. The headline — and the axis it is not matched on
 
@@ -56,18 +57,18 @@ section.dense { font-size: 19px; }
 
 <!-- _footer: "Every competitor-facing row is produced under the competitor's OWN setting" -->
 
-<!-- _class: mid -->
+<!-- _class: dense -->
 
 ## 3. Under what setting — and the two gaps
 
-**Matched, axis by axis:** the official ScanNet 3D evaluator, **vendored**; the unposed bridge (own predicted depth + cameras, Sim(3)+ICP) that FAST3DIS and IGGT use; SegVGGT's posed "geometric GT" bridge, **certified at 99.99 %** rather than assumed; both label settings computed for every run; all four benchmarks; **50 views**, closed today; and SegVGGT's own official 1201-scene train split.
+**Matched, axis by axis:** the official ScanNet 3D evaluator, **vendored**; the unposed bridge (own predicted depth + cameras, Sim(3)+ICP) that FAST3DIS and IGGT use; SegVGGT's posed "geometric GT" bridge, **certified at 99.99 %** rather than assumed; both label settings computed for every run; all four benchmarks; **50 views**; and SegVGGT's own official 1201-scene train split.
 
 **Not matched — two axes, and they do not run in the same direction:**
 
 | axis | state |
 |---|---|
 | **training data** (FAST3DIS, IGGT) | **not matched, it FAVOURS us, and it is now measured.** Both are zero-shot on ScanNet; every headline row of ours trains on it. With ScanNet removed we score **0.023 AP50 against their 0.096 / 0.112** — the lead rests on training data they do not use, and that belongs next to the lead. ⚠ It does *not* show the recipe loses at equal data: that arm is missing ASE entirely, 3819 scenes against ~100 k. |
-| **training data** (SegVGGT) | **MATCHED** — the official ScanNetv2 1201 split, identical since 2026-08-02. It is the one training-matched comparison in the deck, and we are **×2.8 behind** on it after the bridge is removed. |
+| **training data** (SegVGGT) | **MATCHED** — the official ScanNetv2 1201 split, identical. It is the one training-matched comparison in the deck, and we are **×2.8 behind** on it after the bridge is removed. |
 | **training compute** | ~0.8 vs ~16 GPU-days — **permanently unmatchable, and a strength, not an excuse** |
 
 **Read the two training rows together, because they are the same sentence twice: where the data is matched or approximated we are behind; the lead lives in the configuration where we train on the evaluation domain and they do not.**
@@ -76,14 +77,14 @@ section.dense { font-size: 19px; }
 
 ---
 
-<!-- _class: mid -->
+<!-- _class: dense -->
 
 ## 4. What is ours, and what the field already owns
 
 **"Frozen VGGT + a decoder for a downstream 3D task" is the dominant pattern of the last ~12 months. The architecture alone is not a contribution** — 3D-anchored queries are FAST3DIS's, queries shared across views are SegVGGT's.
 
 1. **The controlled comparison nobody has run.** One backbone, one dataset, one protocol, decoder ingredients varied one at a time — including **3D anchors vs 2D boxes inside the same decoder**, which no published paper has put head-to-head.
-2. **Competitive 3D results from a strictly frozen backbone**, at ~0.8 GPU-days against ~16, with no adaptation of any kind.
+2. **The first measurement of what a *strictly frozen* backbone reaches on this task.** Everyone else LoRA-adapts; nobody reports the unadapted case. At ~0.8 GPU-days against ~16 and 1201 scenes against ~100 k, it leads two adapted competitors in-domain and does **not** on their own training setting (slide 2). Both halves are the finding — *"competitive 3D results"* on its own would drop the data axis.
 3. **Consistency intrinsic to the query, not post-hoc — and now measured on a published ruler.** The evaluation reports **HOTA / AssA / DetA / IDF1**, the tracking literature's own metrics, with a bundle's views read as timesteps and one query as one track. That mapping is exact rather than invented, which is the point. On the headline checkpoint: **HOTA 0.42, AssA 0.58, DetA 0.31, IDF1 0.49**.
 
 ⚠ **Switching to them already cost us a claim, and that is the exercise working.** Across two seeds, the secondary claim that 3D anchors improve cross-view *identity* **does not hold** — every published metric moves by less than its own seed spread, while only our own `id_switch` sees an effect. The mechanism's real result, **+66 % 3D AP50**, is measured on the benchmark and untouched.
@@ -108,11 +109,11 @@ section.dense { font-size: 19px; }
 
 ---
 
-<!-- _class: mid -->
+<!-- _class: dense -->
 
 ## 6. What is still open
 
-**Open, costed, and now SCRIPTED — the highest-value data item left.** **ASE is *not* unobtainable**: the public Aria Synthetic Environments release ships **2D instance segmentation ground truth** — exactly the supervision we train on — and downloads **by scene range**. At ~230 MB/scene a **1000-scene pilot is ~230 GB**, which fits our quota. As of 2026-08-31 the fetch job, the 2D builder source and their CPU tests are in the repo; **the only remaining step is accepting the Project Aria licence**, which is a signature, not an engineering task. It would turn our IGGT replication from "their mixture minus ASE" into the complete one — i.e. it is what would let the no-ScanNet row be read as a *method* comparison instead of a data one.
+**Open, costed, and now SCRIPTED — the highest-value data item left.** **ASE is *not* unobtainable**: the public Aria Synthetic Environments release ships **2D instance segmentation ground truth** — exactly the supervision we train on — and downloads **by scene range**. At ~230 MB/scene a **1000-scene pilot is ~230 GB**, which fits our quota. The fetch job, the 2D builder source and their CPU tests are in the repo; **the only remaining step is accepting the Project Aria licence**, which is a signature, not an engineering task. It would turn our IGGT replication from "their mixture minus ASE" into the complete one — i.e. it is what would let the no-ScanNet row be read as a *method* comparison instead of a data one.
 
 **Permanently out of reach — stated, not promised:**
 
