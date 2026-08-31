@@ -276,6 +276,10 @@ what our numbers look like against each of them, on their own training setting."
 - **Seconda tabella: cosa segnano gli arm appaiati e approssimati.** Contro SegVGGT, sui suoi
   stessi dati, siamo **×2.8 dietro** una volta tolto il ×2.3 del ponte. Tolto ScanNet, contro
   FAST3DIS e IGGT siamo **~4× dietro** (0.023 di AP50 contro 0.096 / 0.112).
+- **Attenzione a una trappola che questa slide può indurre:** il ×6.4 / ×2.8 è misurato **sul
+  checkpoint con ancore 3D**, non su una riga qualsiasi. Il residuo è checkpoint-dipendente (sulla
+  run di controllo è ×10.7 / ×4.6). La riga 1 della seconda tabella porta quel checkpoint apposta;
+  non sostituirla con la riga posed migliore del progetto solo perché segna di più.
 - **La frase da dire ad alta voce, perché è quella che un revisore formulerebbe da solo:**
   *dove i dati di addestramento sono appaiati o approssimati, siamo dietro; il vantaggio della
   slide 9 vive nell'unica configurazione in cui noi ci addestriamo sul dominio di valutazione e

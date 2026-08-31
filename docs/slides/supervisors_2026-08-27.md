@@ -144,12 +144,14 @@ Four labels travel with every 3D number. A number without them is not comparable
 
 | our arm | trains on ScanNet? | result | against |
 |---|---|---|---|
-| headline (ScanNet 1201), **posed, class-aware** | yes | 0.088 / 0.260 / 0.572 | SegVGGT **0.504 / 0.717 / 0.870** → **×6.4 behind, of which ×2.3 is the bridge and ×2.8 is real** |
+| **`--anchor_3d`** (ScanNet 1201), **posed, class-aware** | yes | 0.104 / 0.257 / 0.504 | SegVGGT **0.504 / 0.717 / 0.870** → **×6.4 behind, of which ×2.3 is the bridge and ×2.8 is real** |
 | **arm I** (IGGT's mixture minus ASE), unposed | **no** | **0.005 / 0.023 / 0.251** | FAST3DIS 0.038 / 0.096 / 0.316 · IGGT 0.028 / 0.112 / 0.287 → **~4× behind** |
 | arm I-gt (minus RE10K too), unposed | no | 0.003 / 0.013 / 0.212 | 〃 |
 | *the same recipe **with** ScanNet, unposed* | *yes* | *0.053 / 0.170 / 0.542* | *ahead of both — slide 9* |
 
 **The honest one-line read, and it belongs before the headline, not after it: wherever the training data is matched or approximated, we are behind. The lead on slide 9 exists in the one configuration where we train on the evaluation domain and they do not.** Removing ScanNet costs a factor **6 in AP50** at a fixed view budget.
+
+*Row 1 is the `--anchor_3d` checkpoint because that is the checkpoint the ×6.4 / ×2.8 split was measured on — the residual is checkpoint-dependent and never travels without its row (slide 11). Rows 2–3 are the final `checkpoint.pth`: on an arm that never sees ScanNet the val ruler is itself zero-shot, so best-bundle selection does not work.*
 
 ⚠ **What this does NOT show is that the recipe loses at equal data**, and the deck must not be read that way either. Arm I is missing **ASE entirely** — FAST3DIS's *whole* training set and IGGT's largest component — because its scene list is unpublished and it is 9.2 TB. That is **3819 scenes against their ~100 k**, a frozen backbone against adapted ones, **~0.8 GPU-days against ~16**. *"We cannot match their training setting, and without ScanNet we are well behind"* is supportable. *"Our method loses at equal data"* is not: that comparison has never been run, and on this cluster it cannot be.
 
@@ -320,7 +322,7 @@ The headline lives on the 3D benchmark, but the **two mechanisms that carry mult
 |---|---|---|---|---|
 | **3D official, UNPOSED, class-agnostic, 50 views** | **not matched — favours us** | **0.053 / 0.170 / 0.542** | FAST3DIS 0.038 / 0.096 / 0.316 · IGGT\* 0.028 / 0.112 / 0.287 | **lead on all three, at their own view budget** |
 | **〃 with ScanNet removed** — arm I, 17 views | **approximated (no ASE)** | **0.005 / 0.023 / 0.251** | 〃 | **~4× behind** — the lead's price, measured |
-| 3D official, POSED, class-aware † | **MATCHED** — the same 1201 split | 0.088 / 0.260 / 0.572 | SegVGGT 0.504 / 0.717 / 0.870 | behind; **2.3× is the bridge**, **×2.8 is the training-matched residual** |
+| 3D official, POSED, class-aware † | **MATCHED** — the same 1201 split | 0.088 / 0.260 / 0.572 *(best posed row)* | SegVGGT 0.504 / 0.717 / 0.870 | behind; **2.3× is the bridge**, and on the `--anchor_3d` row the residual is **×2.8 — the training-matched number** |
 | 3D on ScanNet200 / ScanNet++ / Replica | n/a — no like-for-like row held | 0.124 / 0.009 / 0.006 AP (posed) | — | zero-shot fails unposed, survives posed → **geometry, not masks** |
 
 \* as re-evaluated by FAST3DIS: IGGT publishes no ScanNet AP of its own. † class-aware because that is what SegVGGT publishes; the class-agnostic scaling runs have no class-aware column at all, so they cannot appear on that row — not because they score worse.

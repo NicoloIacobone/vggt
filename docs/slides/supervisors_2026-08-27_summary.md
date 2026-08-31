@@ -50,7 +50,7 @@ section.dense { font-size: 19px; }
 
 **The last row is not a footnote, it is how the first four are read.** Evaluator, bridge, label setting and view budget are matched; **training data is not**, and it runs in our favour. Removing ScanNet costs a factor **6 in AP50** and turns the lead into ~4× behind. ⚠ It does *not* show the recipe loses at equal data — that arm has **no ASE at all**, 3819 scenes against ~100 k, ~0.8 GPU-days against ~16.
 
-**And on the ONE comparison where the training data IS matched — SegVGGT, our exact 1201 split — we are behind by ×2.8** once the ×2.3 evaluation bridge is taken out (slide 6).
+**And on the ONE comparison where the training data IS matched — SegVGGT, our exact 1201 split — we are behind by ×2.8** once the ×2.3 evaluation bridge is taken out, measured on the `--anchor_3d` checkpoint (the residual is checkpoint-dependent; slide 6).
 
 ---
 
