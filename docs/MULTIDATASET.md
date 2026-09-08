@@ -902,10 +902,13 @@ training axis before a single number is read. Two arms close that, and they also
 
 | arm | train sources | scenes | epochs | steps | job | matrix |
 |---|---|---|---|---|---|---|
+| **I-ase** | 〃 **+ ASE@1000** — IGGT's mixture COMPLETE (§12.4) | **4819** | 18 | 86 742 | 12510960 | 12511027 |
 | **I** | ScanNet++ + Infinigen + RE10K@1500 | 3819 | 22 | 84 018 | 11839134 | 11839151 |
 | **I-gt** | ScanNet++ + Infinigen | 2319 | 36 | 83 484 | 11839135 | 11839152 |
 
-Both `--class_agnostic --anchor_3d --learning_rate 5e-5`, seed 0, S=8, the §10 recipe otherwise
+**I-ase is the best no-ScanNet row this project holds and the one to quote** (§12.4); I and I-gt
+are now the ablation beneath it, not the front row. All three `--class_agnostic --anchor_3d
+--learning_rate 5e-5`, seed 0, S=8, the §10 recipe otherwise
 unchanged — so they are step- and schedule-matched to A-long′ (11830142) and D-long (11830140):
 
 | | no RE10K | + RE10K@1500 |
@@ -916,13 +919,18 @@ unchanged — so they are step- and schedule-matched to A-long′ (11830142) and
 Each edge is one variable. The row edges price **ScanNet training data**; the column edges price
 **SAM2-supervised RE10K** (§1.3) — each measured twice, in and out of the ScanNet domain.
 
-**Arm I is IGGT's training set minus ASE** (`docs/TRAINING_COMPARABILITY.md` §6.1a), which is the
-closest replication *the mirror* allows — but no longer the closest replication possible: ASE
-downloads by scene range and the pilot job is written and tested (§6.7 there, todo 6n), waiting
-only on the Project Aria licence. FAST3DIS's own sampled 40 % scene list stays unpublished, so
-*their* training set is permanently unreproducible whatever we download (§5.1 there). RE10K is capped at 1500 of 5127 scenes because the feature cache is
-the binding constraint — uncapped this arm is ~550 GB, which does not schedule. Say **"IGGT's
-mixture minus ASE, RE10K subsampled"**, never "IGGT's training data".
+**Arm I is IGGT's training set minus ASE** (`docs/TRAINING_COMPARABILITY.md` §6.1a) — the closest
+replication *the mirror* allows, and since 2026-09-03 **no longer the closest replication we
+hold**: ASE downloads by scene range, the 1 000-scene pilot landed on 2026-08-31 and **arm I-ase
+trains on it** (§12.4, §6.7 there, todo 6n). FAST3DIS's own sampled 40 % scene list stays
+unpublished, so *their* training set is permanently unreproducible whatever we download (§5.1
+there). RE10K is capped at 1500 of 5127 scenes and ASE at 1000 of ~100 k because the feature cache
+is the binding constraint — uncapped, RE10K alone is ~550 GB, which does not schedule.
+
+**How to name each arm, precisely.** Say **"IGGT's mixture minus ASE, RE10K subsampled"** for arm
+I; for **arm I-ase** say **"IGGT's mixture complete, RE10K and ASE subsampled"** — never "IGGT's
+training data" for either, and never "matched" for I-ase: the composition is matched, the **scale**
+is not (1 000 ASE scenes to ~100 k).
 
 **Two differences run in our favour and one against**, all to be stated wherever these rows appear:
 we drop the 50 `nvs_sem_val` ScanNet++ scenes from training (§1.1) so our ScanNet++ column is
@@ -967,7 +975,19 @@ arm I trains on 853 ScanNet++ scenes and is scored on 49 held-out ones, exactly 
 the leak). And they cannot separate "no ScanNet" from "less data": I-gt is 2319 scenes against
 A-long′'s 3520. That is what the 2 × 2's *other* edge is for — read the square, not one cell.
 
+**Arm I-ase (§12.4) adds a fourth arm and closes the mixture, but it does not change this
+paragraph.** It makes the IGGT comparison a *method* comparison rather than a data one; it leaves
+the **scale** axis wide open (1 000 ASE scenes against ~100 k) and does nothing for FAST3DIS, whose
+scene list is unpublished permanently. "Complete mixture" and "matched training set" are not the
+same claim — this file only ever supports the first.
+
 ### 12.3 THE RESULT — the training-matched comparison, and RE10K's sign flip (2026-08-28)
+
+> **Read §12.4 alongside this section.** Its "~4× behind" and every arm-I row below were the best
+> no-ScanNet numbers the project held **until ASE landed on 2026-09-03**. They are still the
+> correct numbers for *arm I* and the RE10K square is unaffected — but the **competitor-facing**
+> reading is now §12.4's (~3× behind, level on AP25). Do not quote a competitor gap off this
+> section.
 
 Both arms and their full matrices landed (0 failed scenes anywhere). **All rows below are the
 FINAL `checkpoint.pth`**, per §12.1 — `checkpoint_best_bundle` is selected on a zero-shot ruler
@@ -1047,16 +1067,16 @@ RE10K helps on **every cell that carries signal**. The unposed out-of-domain pai
 arms, as it is on every arm in this file — that is the bridge, not the data. The ScanNet++ posed
 ratio is arithmetically 6× but sits on 0.001 → 0.006 and should not be quoted as a multiple.
 
-### 12.4 Arm I-ase — the fourth source, and the completion of the IGGT mixture (2026-09-02)
+### 12.4 THE RESULT — arm I-ase: ASE lands, and it pays on every cell with signal (2026-09-03)
 
-**Job 12510960, chain 12511027 — IN FLIGHT, nothing to read yet.** Recorded here at submit time so
-the next reader does not re-derive the recipe.
+**Job 12510960 → chain 12511027 → 8 cells (12643478/79/81/82/83/84/85/86). DONE: 8/8 cells,
+0 failed scenes.** Training finished 2026-09-03; the matrix ran the same morning.
 
 §12.3 measured what removing ScanNet costs and closed todo 6l, but with a caveat that travelled
 with every one of its rows: **arm I is IGGT's mixture *minus ASE*** — its largest component, and
 the whole of FAST3DIS's training set. ASE landed on 2026-08-31
 (`docs/TRAINING_COMPARABILITY.md` §6.7: 1 000 scenes, 31 897 frames, 78 347 instances, zero failed
-blocks), so the caveat is now removable.
+blocks), and this arm removes the caveat.
 
 | | arm I (§12.3) | **arm I-ase** |
 |---|---|---|
@@ -1071,16 +1091,92 @@ blocks), so the caveat is now removable.
 seed, the val ruler (official ScanNet 312, a zero-shot read-out here), the checkpoint scored
 (final `checkpoint.pth`, §12.1) — is arm I's.
 
-**The step budget is +3.2 %, and the direction is deliberate.** It cannot be matched to the decimal
-because `EPOCHS` is an integer and one step is one scene: 17 epochs undershoots by 2.5 %, 18
-overshoots by 3.2 %. 18 was chosen because the documented failure mode in this file is
+**The step budget is +3.2 %, and the direction was deliberate.** It cannot be matched to the
+decimal because `EPOCHS` is an integer and one step is one scene: 17 epochs undershoots by 2.5 %,
+18 overshoots by 3.2 %. 18 was chosen because the documented failure mode in this file is
 **under**-budgeting a larger mixture — read twice as "more data hurts" (§9 reading 1, §10.3
-reading 2) — so if arm I-ase does not beat arm I, that result must not be attributable to too few
-steps. Quote the differential wherever the pair is quoted.
+reading 2). **It did not end up load-bearing**: the effects below are 40–100 %, an order of
+magnitude above the 3.2 % differential, so they cannot be an artefact of it. Quote the differential
+anyway wherever the pair is quoted.
 
-**What it will and will not settle.** It makes arm I the **complete** IGGT training mixture, so
-§12.3's second and third rows can be read as a *method* comparison instead of a data one — that is
-the whole point of the arm. It does **not** make the comparison compute- or scale-matched:
-1 000 ASE scenes against IGGT's share of ~100 k, a frozen backbone against a finetuned one, ~0.8
-GPU-days against ~16. And it does nothing at all for FAST3DIS, whose 40 % scene list is unpublished
-permanently (`docs/TRAINING_COMPARABILITY.md` §5.1).
+#### The competitor-facing cell — ScanNetv2, unposed, class-agnostic
+
+| row | trains on ScanNet? | views | AP / AP50 / AP25 |
+|---|---|---|---|
+| FAST3DIS (published) | no — ASE only | 50 | 0.038 / 0.096 / 0.316 |
+| IGGT (via FAST3DIS) | no — InsScene-15K | 50 | 0.028 / 0.112 / 0.287 |
+| ours, arm I-gt — no RE10K either | no | 17.42 | 0.003 / 0.013 / 0.212 |
+| ours, arm I — IGGT's mixture **minus ASE** | no | 17.42 | 0.005 / 0.023 / 0.251 |
+| **ours, arm I-ase — IGGT's mixture COMPLETE** | **no** | **17.42** | **0.009 / 0.032 / 0.301** |
+| *ours, headline (17 views)* | *yes* | *17.42* | *0.042 / 0.138 / 0.504* |
+| *ours, headline (50 views)* | *yes* | *50* | *0.053 / 0.170 / 0.542* |
+
+**1. ASE pays, and it pays more than any other single source this project has added without
+ScanNet.** AP50 ×1.4, AP ×1.8, AP25 ×1.2 against arm I, on the single variable. For scale, RE10K —
+the previous best addition to a no-ScanNet mixture — was worth ×1.8 on AP50 from a *much* lower
+base (§12.3); ASE compounds on top of that.
+
+**2. The published gap narrows from ~4× to ~3× on AP50** — 0.096 / 0.032 = 3.0× against FAST3DIS,
+0.112 / 0.032 = 3.5× against IGGT. The "~4× behind" wording was measured on arm I, which is no
+longer the best no-ScanNet row we hold; it was updated across the docs on 2026-09-03 and survives
+only inside §12.3, where it is fenced as arm I's own number.
+
+**3. On AP25 the gap is effectively closed, and that is the one genuinely new claim here.** 0.301
+against FAST3DIS's 0.316 (95 % of it) and **above** IGGT's 0.287 — at **17.42 views against their
+50**. It is the first time any no-ScanNet arm of this project has reached a published row on any
+column. ⚠ **AP25 only.** Say *"at their coarse-localisation bar we match them without ScanNet and
+at a third of their view budget; at 0.5 IoU we are still 3× behind"* — never *"we match FAST3DIS"*
+unqualified.
+
+**4. The AP25/AP50 signature is the same one as everywhere else in this project** (§12.3 reading 3,
+`docs/RESULTS.md` §5.4): what the model recovers first is *finding and coarsely localising*
+objects; clearing the 0.5-IoU bar is what stays expensive. ASE moves AP25 the least in relative
+terms (×1.2) precisely because AP25 was already the column with the most signal.
+
+#### The full matrix, for the record (class-agnostic, final `checkpoint.pth`)
+
+**8/8 cells, 0 failed scenes, no re-runs.** Mean 17.42 views on the two ScanNet rulers, 50 on
+ScanNet++ / Replica.
+
+| benchmark | bridge | arm I (§12.3) | **arm I-ase** | AP50 ratio |
+|---|---|---|---|---|
+| ScanNetv2 | unposed | 0.005 / 0.023 / 0.251 | **0.009 / 0.032 / 0.301** | **1.4×** |
+| ScanNetv2 | posed | 0.018 / 0.063 / 0.399 | **0.032 / 0.106 / 0.479** | **1.7×** |
+| ScanNet200 | unposed | 0.009 / 0.033 / 0.223 | **0.017 / 0.053 / 0.273** | 1.6× |
+| ScanNet200 | posed | 0.030 / 0.086 / 0.364 | **0.061 / 0.149 / 0.445** | 1.7× |
+| ScanNet++ | unposed | 0.000 / 0.000 / 0.003 | 0.000 / 0.000 / 0.007 | no signal |
+| ScanNet++ | posed | 0.001 / 0.006 / 0.128 | 0.005 / 0.019 / 0.182 | 3.2× *(on ~0)* |
+| Replica | unposed | 0.000 / 0.001 / 0.006 | 0.000 / 0.001 / 0.018 | no signal |
+| Replica | posed | 0.005 / 0.023 / 0.278 | **0.021 / 0.082 / 0.371** | **3.6×** |
+
+**ASE helps on every cell that carries signal, and it helps MORE out of domain than in.** Replica
+posed 3.6× and ScanNet++ posed 3.2× against ScanNetv2's 1.4–1.7×. That ordering is consistent with
+what ASE is — rendered synthetic interiors with exhaustive instance GT, diverse in layout and
+untethered to any real sensor — and it is the first source in this file whose benefit *grows* with
+distance from the training domain. The two unposed out-of-domain cells stay 0.000 as they do on
+**every** arm in this file: that is the bridge, not the data (§12.3, `docs/RESULTS.md` §7).
+
+⚠ The ScanNet++ posed ratio sits on 0.005 / 0.019 and the Replica unposed AP25 on 0.018; quote the
+directions, not the multiples, on rows that small.
+
+#### The 2D val read-out (zero-shot — this arm never sees ScanNet)
+
+Official ScanNet 312, per §12.1 a ruler this arm is *not* selected on. Same direction, and it is
+the reason the final checkpoint is the right one to score:
+
+| | arm I | **arm I-ase** |
+|---|---|---|
+| per-frame mIoU / AP50 | 0.499 / 0.255 | **0.573 / 0.368** |
+| per-bundle mIoU / AP50 | 0.398 / 0.118 | **0.450 / 0.207** |
+| best epoch (val AP50) | 22 of 22 | 14 of 18 (final epoch 0.368 vs best 0.369) |
+
+**What it settles, and what it does not.** It makes arm I-ase the **complete** IGGT training
+mixture, so the IGGT row can be read as a *method* comparison rather than a data one. It does
+**not** make the comparison scale- or compute-matched: **1 000 ASE scenes against IGGT's share of
+~100 k**, a frozen backbone against a finetuned one, ~0.8 GPU-days against ~16. And it does nothing
+at all for FAST3DIS, who train on ASE *alone* and whose 40 % scene list is unpublished permanently
+(`docs/TRAINING_COMPARABILITY.md` §5.1) — that comparison stays cross-training-set at any size.
+
+**The honest one-line read:** *with IGGT's own mixture, at 1 % of its ASE scale, a third of its
+view budget and a frozen backbone, we reach their coarse-localisation number and remain 3× behind
+at 0.5 IoU.*

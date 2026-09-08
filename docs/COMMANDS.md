@@ -458,7 +458,9 @@ myenv/bin/python slurm/build_insscene2d.py --source ase --ase_root <tree> --out 
     --frames 32 --limit 5 --probe
 ```
 
-Training on it — arm **I-ase**, the complete IGGT mixture (job 12510960, 2026-09-02):
+Training on it — arm **I-ase**, the complete IGGT mixture (job 12510960, DONE 2026-09-03: ASE was
+worth **×1.4 AP50** on the competitor cell, `docs/MULTIDATASET.md` §12.4). The recipe, for a re-run
+or an extension:
 
 ```bash
 sbatch --cpus-per-task=26 --time=30:00:00 \

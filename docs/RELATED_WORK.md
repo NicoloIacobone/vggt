@@ -32,6 +32,21 @@ training signal.
    comparison**: one backbone, one dataset, one protocol, decoder ingredients varied one at a
    time. Frame the contribution as the study, not as any single mechanism.
 
+**Update 2026-09-03 — the training axis, and why it belongs in any positioning sentence.** A third
+thing has since been settled and it constrains every claim on this page: **FAST3DIS and IGGT never
+train on ScanNet and every headline row of ours does.** That asymmetry is now priced. With ScanNet
+removed and **IGGT's training mixture reproduced in full** (ScanNet++ + Infinigen + RE10K + ASE —
+arm I-ase, `docs/MULTIDATASET.md` §12.4), the same recipe scores **0.009 / 0.032 / 0.301** against
+their 0.038 / 0.096 / 0.316 and 0.028 / 0.112 / 0.287: **~3× behind at AP50, level at AP25**, from
+a frozen backbone at a third of their view budget. Two consequences for framing:
+
+- Never write a positioning sentence that quotes our lead without the training axis. The
+  supportable form is *"in-domain it leads two adapted methods; on their own training setting it
+  matches them at AP25 and is ~3× behind at AP50"*.
+- The **mixture** is now matched; the **scale** is not (1 000 ASE scenes to ~100 k), and FAST3DIS's
+  sampled scene list is unpublished permanently. *"We lose at equal data"* has never been measured
+  and cannot be here.
+
 ## Direct competitors (read before writing anything positioning-shaped)
 
 | Paper | arXiv | Verified? | Why it matters |
@@ -227,8 +242,11 @@ competitor adapts its backbone with LoRA.
    docs/MASKDINO.md §6.6):** `train/eval_metrics.py::multiview_consistency_metrics` reports
    `bundle_view_consistency` (per matched instance, the fraction of its visible views explained
    at IoU ≥ 0.5 by its bundle-matched query) and `bundle_id_switch` (the fraction where another
-   query is the better match). No run has been scored on it yet — the numbers to quote come
-   from the next `--multi_frame` run, ideally the §7.4.1 ablation triple.
+   query is the better match). **Scored since 2026-08-27, and on the tracking literature's own
+   metrics rather than only our own**: HOTA / AssA / DetA / IDF1, a bundle's views read as
+   timesteps (`docs/MASKDINO.md` §6.6.1). On the headline checkpoint **HOTA 0.422 / AssA 0.584 /
+   DetA 0.314 / IDF1 0.492**. ⚠ Quote them as *levels*: across two seeds **no** published identity
+   metric separates `--anchor_3d` from its control (§6.6.3) — only our own `id_switch` does.
 3. **Backbone-agnostic decoding — SKIP.** Real gap (one decoder across VGGT/CUT3R/Pi3) but
    large engineering scope, Lite3R already owns the "model-agnostic" framing, and it does
    not serve the thesis timeline.

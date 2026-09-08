@@ -271,14 +271,16 @@ already queued for arm D. A-long′ ⇄ C-long′ is step-matched, same-LR and o
 | 11839135 → 11839152 | **arm I-gt** — ScanNet++ + Infinigen, no ScanNet, no SAM2 supervision | 〃 |
 | 11839821 (array) → 11840376 | the **dense** ScanNet val-312 frame export (stride 20) | DATASET §2.5 |
 
-**In flight since 2026-09-02 — the ASE arm (6n):**
+**LANDED 2026-09-03 — the ASE arm (6n, CLOSED):**
 
-| job | what | lands as |
+| job | what | landed as |
 |---|---|---|
-| 12510960 → 12511027 | **arm I-ase** — ScanNet++ + Infinigen + RE10K@1500 + **ASE@1000**, no ScanNet: IGGT's mixture *with* its fourth source. Read against arm I; the one variable is ASE | MULTIDATASET §12.4 |
+| 12510960 → 12511027 → 12643478/79/81/82/83/84/85/86 | **arm I-ase** — ScanNet++ + Infinigen + RE10K@1500 + **ASE@1000**, no ScanNet: IGGT's mixture *with* its fourth source. One variable against arm I: +ASE. **8/8 cells, 0 failed scenes**; ASE worth **×1.4 AP50** and it closed the AP25 gap to both published rows | MULTIDATASET §12.4 |
 
-Read I ⇄ D-long and I-gt ⇄ A-long′ as the {±ScanNet} edges of one 2 × 2; do not read either
-against a published number until its matrix lands. Everything else in the data-scaling set has landed —
+Read I ⇄ D-long and I-gt ⇄ A-long′ as the {±ScanNet} edges of one 2 × 2, and I ⇄ **I-ase** as the
+{±ASE} edge on top of it. **All matrices have landed**, so all of these may be read against a
+published number — with the caveat that the no-ScanNet arms are scored at 17.42 views against the
+competitors' 50. Everything else in the data-scaling set has landed —
 docs/MULTIDATASET.md §10.3/§10.4, docs/RESULTS.md §6.4/§7.5/§8.2. Everything else once listed here
 has landed too:
 
@@ -681,7 +683,7 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       anywhere (A-long **0.200 / 0.419 / 0.725**, SegVGGT distance 1.84× → 1.71×).
       Cost note for the next run: the 100-view cell needed 7 h 28 and a 40 GB GPU; 50 views fits a
       4090 in ~2 h 45.
-- [~] **6l. The ZERO-SHOT arms — matching what the competitors TRAIN on** (opened 2026-08-26,
+- [x] **6l. The ZERO-SHOT arms — matching what the competitors TRAIN on** (opened 2026-08-26,
       `docs/MULTIDATASET.md` §12, `docs/TRAINING_COMPARABILITY.md` §6.2). The largest remaining
       mismatch is not the protocol: **FAST3DIS and IGGT never train on ScanNet and every arm we
       have ever run does**, so §8.2's lead is favourable to us on the training axis before a number
@@ -695,6 +697,10 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       `tests/test_train_maskdino_multi_sh.sh`. Both verifications the user asked for came back TRUE:
       only ASE is missing for IGGT, and the "geometric GT" setting is SegVGGT's posed bridge, which
       we already implement and report (§6.1 there).
+      **CLOSED 2026-09-03 by 6n.** The "minus ASE" qualifier is gone: **arm I-ase** adds the fourth
+      source and reproduces IGGT's mixture in full (4819 scenes, job 12510960). The axis reads
+      **~3× behind on AP50, level on AP25**, and what remains unmatched is scale (1 000 ASE scenes
+      to ~100 k), not composition. Numbers in `docs/MULTIDATASET.md` §12.4.
 
 - [ ] **6m. SegVGGT's ScanNet200 checkpoint — the one competitor setting we CANNOT currently match,
       and what it would cost.** SegVGGT trains a *second* checkpoint on **ScanNet200 train** and
@@ -717,7 +723,8 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       — −42 % AP50 in a mixture with ScanNet, +1.8× in one without; redundant vs ScanNet, valuable
       without it. Two failed matrix cells (12046077 / 12046106) were **GPU contention, not code**
       (`CUDA-capable device(s) is/are busy`) and were re-run as 12077651 / 12077653.
-- [~] **6n. A partial ASE download — LANDED 2026-08-31, the arm is TRAINING since 2026-09-02.**
+- [x] **6n. A partial ASE download — CLOSED 2026-09-03. It landed, it trained, and it paid:
+      ×1.4 AP50 on the competitor cell, and the AP25 gap to both published rows is gone.**
       ASE **is** publicly available (projectaria.com/datasets/ase) and its per-scene
       GT **includes 2D instance segmentation**; the downloader takes scene ranges. Budget:
       ~23 TB / 100 k scenes ≈ **230 MB/scene**, so a **1 000-scene pilot ≈ 230 GB** against
@@ -753,14 +760,25 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
         0.49 % and 0.1 drops 2.29 %. **ASE's rendered GT has no wall/floor mega-instance** — the
         failure mode RE10K's SAM2 masklets had (`docs/MULTIDATASET.md` §1.4) does not exist here,
         and any cap ≥ 0.2 is equivalent. Nothing to re-pick, nothing to rebuild.
-  - [ ] **Arm I-ase — SUBMITTED 2026-09-02, job 12510960** (chain **12511027**, `checkpoint.pth`).
-        `SOURCES='scannetpp infinigen re10k ase'`, `CAP_RE10K=1500` → **4 819 scenes**, 18 epochs =
-        **86 742 steps** at lr 5e-5 with `--anchor_3d`, 26 CPUs / 416 GB. Single variable against
-        arm I (3 819 scenes, 84 018 steps): **+ASE**. The step budget is **+3.2 %**, not matched to
-        the decimal — deliberately the *generous* direction, because this workstream twice read
-        "more data hurts" off an under-budgeted larger mixture (`docs/MULTIDATASET.md` §9 reading 1,
-        §10.3 reading 2), so a negative result must not be attributable to too few steps.
-        When it lands it is the row that closes the IGGT training axis.
+  - [x] **Arm I-ase — DONE 2026-09-03, job 12510960** (chain **12511027**, final
+        `checkpoint.pth`, 8 cells 12643478–12643486). `SOURCES='scannetpp infinigen re10k ase'`,
+        `CAP_RE10K=1500` → **4 819 scenes**, 18 epochs = **86 742 steps** at lr 5e-5 with
+        `--anchor_3d`, 26 CPUs / 416 GB. Single variable against arm I (3 819 scenes, 84 018
+        steps): **+ASE**, at a **+3.2 %** step budget deliberately chosen generous — which did not
+        end up mattering, the effects are 40–100 %.
+        **The result** (`docs/MULTIDATASET.md` §12.4, `docs/RESULTS.md` §5.6): on the competitor
+        cell **0.005 / 0.023 / 0.251 → 0.009 / 0.032 / 0.301**, AP50 **×1.4**. The published gap
+        goes from ~4× to **~3×** on AP50, and on **AP25 it closes** — 0.301 against FAST3DIS's
+        0.316 and *above* IGGT's 0.287, at 17.42 views to their 50. **8/8 cells, 0 failed
+        scenes.** ASE helps on every cell with signal and **more out of domain than in** (Replica
+        posed ×3.6, ScanNet++ posed ×3.2, against ScanNetv2's ×1.4–1.7).
+  - [ ] **The one thing this did NOT answer, and the cheapest arm left: ASE *with* ScanNet.**
+        Every ASE number above is on a no-ScanNet mixture. RE10K is the precedent that makes this
+        worth running rather than assuming: its sign **flipped** on ScanNet's presence (−42 % with,
+        +1.8× without, §12.3). One training run at the headline recipe + ASE@1000 answers it.
+  - [ ] **Optional, quantitative only: scale ASE past 1 000 scenes.** ~223 GB and 2 h 41 per
+        1 000; the inode gate is measured at 1 764/scene, so 5 000 is affordable. It would say
+        whether the ×1.4 grows — it would not produce a new claim.
 - [x] **6o. Land the ablation-table hole on the 3D ruler — CLOSED 2026-08-28.**
   - [x] **`--no-cross_frame_attn` — job 11986399, DONE** (`docs/RESULTS.md` §5.5). 312 scenes, 0
         failures, defaults. Removing it costs **57 % of the 3D AP50** (0.067 → 0.029 class-aware,

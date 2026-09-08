@@ -13,8 +13,14 @@ The active model is a **MaskDINO decoder** (`models/maskdino/`), trained on the 
 1201/312 split or larger. On the official 3D instance benchmark, unposed and class-agnostic, at the
 competitors' own **50 views**, it scores **0.053 / 0.170 / 0.542** (AP/AP50/AP25) from a strictly
 frozen backbone — ahead of FAST3DIS's 0.038 / 0.096 / 0.316 and IGGT's 0.028 / 0.112 / 0.287 on all
-three. Improving the 2D→3D lifting (registration, not coverage) is the open work. All numbers:
-`docs/RESULTS.md`; anything outward-facing: `docs/FACTSHEET.md`.
+three.
+
+**That lead is not training-matched, and the price is measured — quote the two together.** Both
+competitors are zero-shot on ScanNet and every headline row of ours trains on it. With ScanNet
+removed and **IGGT's mixture reproduced in full** (arm I-ase, +ASE, 2026-09-03) the same recipe
+reads **0.009 / 0.032 / 0.301**: ~3× behind at AP50, **level at AP25**, at a third of their views
+(`docs/MULTIDATASET.md` §12.4). Improving the 2D→3D lifting (registration, not coverage) is the
+open work. All numbers: `docs/RESULTS.md`; anything outward-facing: `docs/FACTSHEET.md`.
 
 `legacy/` is frozen on purpose. It holds the previous hand-rolled head — kept because
 `scripts/eval_perframe.py` and `demos/demo_gradio.py` still import it — the dataset builders, and,
@@ -43,9 +49,11 @@ any of it in new work.
   rebuilds) with the caveats each one needs.
 - `docs/DATASET.md` — GT provenance, the tars, mask conventions, how a job gets the data.
 - `docs/MULTIDATASET.md` — the multi-dataset training arm (ScanNet + ScanNet++ + Infinigen, plus
-  RE10K in its own arm, `--class_agnostic`). Its rows are **class-agnostic** and never comparable
-  to RESULTS' §6. Anything trained on RE10K is additionally **SAM2-supervised** — the masks
-  are model output, not ground truth — and carries a separate labelled row (§1.3, §11).
+  RE10K and **ASE** in their own arms, `--class_agnostic`). Its rows are **class-agnostic** and
+  never comparable to RESULTS' §6. Anything trained on RE10K is additionally **SAM2-supervised** —
+  the masks are model output, not ground truth — and carries a separate labelled row (§1.3, §11).
+  **§12.4 is the no-ScanNet result that prices the headline**; §12.3 is its pre-ASE version and
+  must not be quoted against a competitor.
 - `docs/todo.md` — open work only.
 - `docs/RELATED_WORK.md` — competitor landscape & positioning. Read before framing any result as a
   contribution.

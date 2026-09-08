@@ -396,48 +396,58 @@ both runs peak at epoch 12 of 12, so neither had stopped improving. In 2D it rep
 retired figure on the new split: per-bundle AP50 0.5249 → 0.3589, i.e. −0.166 against the −0.147
 recorded on project-val.
 
-### 5.6 TRAINING-MATCHED — what the lead costs when ScanNet is removed (todo 6l, 2026-08-28)
+### 5.6 TRAINING-MATCHED — what the lead costs when ScanNet is removed (todo 6l, 2026-08-28; ASE added 2026-09-03)
 
-The last unmatched *training* axis, measured. Arm I trains on **IGGT's mixture minus ASE**
-(ScanNet++ 853 + Infinigen 1466 + RE10K 1500 = 3819 scenes) and **never on ScanNet**, which is
-FAST3DIS's and IGGT's setting on this benchmark. Full detail, both arms and all 16 matrix cells:
-`docs/MULTIDATASET.md` §12.3. Final `checkpoint.pth` (§12.1: best-bundle selection does not work
-on a zero-shot ruler). Compute-matched to within 0.6 %.
+The last unmatched *training* axis, measured. These arms **never train on ScanNet**, which is
+FAST3DIS's and IGGT's setting on this benchmark. The best of them, **arm I-ase**, trains on
+**IGGT's mixture COMPLETE** (ScanNet++ 853 + Infinigen 1466 + RE10K 1500 + ASE 1000 = 4819 scenes);
+arm I is the same minus ASE and arm I-gt minus RE10K as well. Full detail, all three arms and all
+24 matrix cells: `docs/MULTIDATASET.md` §12.3–§12.4. Final `checkpoint.pth` (§12.1: best-bundle
+selection does not work on a zero-shot ruler). I ⇄ I-gt compute-matched to within 0.6 %; I ⇄ I-ase
+to within 3.2 %.
 
 **ScanNetv2, unposed, class-agnostic — the competitor-facing cell:**
 
-| row | trains on ScanNet? | AP / AP50 / AP25 |
-|---|---|---|
-| FAST3DIS (published) | no — ASE only | 0.038 / 0.096 / 0.316 |
-| IGGT (via FAST3DIS) | no — InsScene-15K | 0.028 / 0.112 / 0.287 |
-| **ours, arm I** — IGGT's mixture minus ASE | **no** | **0.005 / 0.023 / 0.251** |
-| ours, arm I-gt — minus RE10K too | no | 0.003 / 0.013 / 0.212 |
-| *ours, headline, 17 views* | *yes* | *0.042 / 0.138 / 0.504* |
-| *ours, headline, 50 views* | *yes* | *0.053 / 0.170 / 0.542* |
+| row | trains on ScanNet? | views | AP / AP50 / AP25 |
+|---|---|---|---|
+| FAST3DIS (published) | no — ASE only | 50 | 0.038 / 0.096 / 0.316 |
+| IGGT (via FAST3DIS) | no — InsScene-15K | 50 | 0.028 / 0.112 / 0.287 |
+| **ours, arm I-ase** — IGGT's mixture COMPLETE | **no** | **17.42** | **0.009 / 0.032 / 0.301** |
+| ours, arm I — the same minus ASE | no | 17.42 | 0.005 / 0.023 / 0.251 |
+| ours, arm I-gt — minus RE10K too | no | 17.42 | 0.003 / 0.013 / 0.212 |
+| *ours, headline, 17 views* | *yes* | *17.42* | *0.042 / 0.138 / 0.504* |
+| *ours, headline, 50 views* | *yes* | *50* | *0.053 / 0.170 / 0.542* |
 
 **1. The asymmetry was real and it was carrying most of the lead.** Removing ScanNet costs a factor
-**6 in AP50** at the same view budget (0.138 → 0.023), turning a lead into being ~4× behind. Every
-"we lead FAST3DIS/IGGT" row in this file is therefore a row produced **with ScanNet in training,
-against two methods that never use it** — which §8.2 and the FACTSHEET have always declared, and
-which is now priced instead of merely declared.
+**4.3 in AP50** at the same view budget (0.138 → 0.032 on the best no-ScanNet arm; 6× on arm I,
+which is the number this section carried before ASE), turning a lead into being **~3× behind**.
+Every "we lead FAST3DIS/IGGT" row in this file is therefore a row produced **with ScanNet in
+training, against two methods that never use it** — which §8.2 and the FACTSHEET have always
+declared, and which is now priced instead of merely declared.
 
-**2. It does NOT show our recipe is worse than theirs at equal data.** Arm I is missing **ASE
-entirely** — FAST3DIS's whole training set and IGGT's largest component — because its scene list is
-unpublished and it is 9.2 TB. **A 1 000-scene ASE pilot has since been fetched (2026-08-31) and arm
-I-ase trains on it (job 12510960, `docs/MULTIDATASET.md` §12.4); until that lands this row is what
-the project has, and even after it the scale gap remains.** This is **3819 scenes against their ~100 k**, frozen backbone against
-adapted, ~0.8 GPU-days against ~16. The supportable claim is *"we cannot match their training
+**2. ASE was worth ×1.4 on AP50, and it closed the AP25 gap.** Arm I → arm I-ase is a single
+variable (+1000 ASE scenes, +3.2 % steps): AP ×1.8, AP50 ×1.4, AP25 ×1.2. On **AP25 the published
+gap is effectively gone** — 0.301 against FAST3DIS's 0.316 and **above** IGGT's 0.287, at 17.42
+views against their 50. ⚠ **That is an AP25-only claim.** The supportable sentence is *"without
+ScanNet, at a third of their view budget, we match their coarse-localisation number and stay ~3×
+behind at 0.5 IoU"*; *"we match FAST3DIS"* unqualified is not supportable.
+
+**3. It still does NOT show our recipe is worse than theirs at equal data — and it never will
+here.** Arm I-ase holds **1 000 ASE scenes against their ~100 k**, a frozen backbone against
+adapted ones, ~0.8 GPU-days against ~16; FAST3DIS additionally trains on ASE *alone* and its 40 %
+scene list is unpublished permanently. The supportable claim is *"we cannot match their training
 setting, and without ScanNet we are well behind"* — never *"our method loses at equal data"*, a
 comparison that has not been run and cannot be here.
 
-**3. AP25 survives far better than AP50** (factor 2 against factor 6). Without ScanNet the model
-still finds and coarsely localises objects; what collapses is clearing the 0.5-IoU bar — the same
-signature as §5.4 and §5.5.
+**4. AP25 survives far better than AP50** (factor 1.7 against factor 4.3). Without ScanNet the
+model still finds and coarsely localises objects; what collapses is clearing the 0.5-IoU bar — the
+same signature as §5.4 and §5.5, and the reason ASE lands on AP25 first.
 
-**4. RE10K's sign flips with ScanNet's presence**, and this is where that shows: adding it to a
+**5. RE10K's sign flips with ScanNet's presence**, and this is where that shows: adding it to a
 mixture *without* ScanNet is worth **1.8× unposed / 2.1× posed**, while adding it to one *with*
 ScanNet costs 42 % (§5.5's sibling result, `docs/MULTIDATASET.md` §11.7/§12.3). Redundant where
-ScanNet is present, valuable where it is not.
+ScanNet is present, valuable where it is not. **ASE does not flip** — it has only been measured
+without ScanNet, and no arm mixes it with ScanNet (todo 6n).
 
 ## 6. Official 1201/312 split — first runs (2026-08-02)
 
@@ -897,11 +907,16 @@ block and never across blocks (§1). Every "vs" column names what the number is 
 | E | **3D, official benchmark, POSED** — GT poses/intrinsics/depth (§5.1) | **0.088 / 0.260 / 0.572** (S=16, 20 ep) | SegVGGT 0.504 / 0.717 / 0.870 | still behind; the protocol explains 2.3×, the rest is real |
 | F | **COCO port check** (`docs/old/MASKDINO_COCO.md`, §1.4) | 46.133 mask AP / 51.549 box AP | upstream MaskDINO's own checkpoint, 46.1 / 51.5 | implementation is faithful; **not a project result** |
 | G | **3D, the other three benchmarks** — ScanNet200 / ScanNet++ / Replica (§7) | posed `--anchor_3d` **0.124 / 0.275 / 0.523** (ScanNet200) · 0.009 / 0.038 / 0.178 (ScanNet++) · 0.006 / 0.028 / 0.190 (Replica) | no like-for-like published row is held in this project (§7.3 reading 6) | zero-shot **fails** under the unposed bridge (0.000 everywhere) and survives weakly under the posed one; the split localises it to geometry vs masks |
+| H | **3D, official benchmark, UNPOSED, NO ScanNet in training** — the competitors' own training setting (§5.6) | class-agnostic **0.009 / 0.032 / 0.301** (arm I-ase, IGGT's mixture COMPLETE) | FAST3DIS 0.038 / 0.096 / 0.316 · IGGT 0.028 / 0.112 / 0.287 | **~3× behind on AP50; LEVEL on AP25** (0.301 vs 0.316 / 0.287) at 17.42 views to their 50. **This is the row that prices D's lead** |
 
 AP triples are always `AP / AP50 / AP25`. A/B/C are per-view 2D masks on our own metric code
-(never placeable next to published ScanNet figures). D/E use the official vendored evaluator on
+(never placeable next to published ScanNet figures). D/E/H use the official vendored evaluator on
 the official val-312 point clouds — the only rows in this project that may sit next to a paper's.
 G uses the same evaluator on three further benchmarks, class-agnostic only.
+
+**D and H are one result, not two, and must be quoted together.** D is the lead; H is what that
+lead costs when the training data is levelled. Quoting D alone borrows a leaderboard position
+while dropping the axis it rests on — the single most likely misreading of this file.
 
 ### 8.2 The competitor table — like-for-like, class-agnostic, unposed (§5)
 
@@ -945,12 +960,15 @@ and failed as an unstable run — the LR failure of §11.3 — so the compute/da
 remains unmeasured until C-long′ 11831105 ⇄ A-long′ 11830142 lands, docs/MULTIDATASET.md §10.5) and,
 like every row here, it is a single run.
 
-**The one asymmetry this table does NOT yet control for — and it favours us.** Both published
-rows are **zero-shot on ScanNet** (FAST3DIS trains only on Aria/ASE, IGGT only on InsScene-15K);
-every row of ours trains on ScanNet. The comparison is therefore protocol-matched and
-setting-matched but **not training-matched**, and that must be said wherever this table is quoted
-until the two zero-shot arms land (**I** 11839134 = IGGT's mixture minus ASE, **I-gt** 11839135;
-`docs/MULTIDATASET.md` §12, `docs/TRAINING_COMPARABILITY.md` §6.2). Two smaller asymmetries run
+**The one asymmetry this table does NOT control for — and it favours us. It is now PRICED
+(§5.6).** Both published rows are **zero-shot on ScanNet** (FAST3DIS trains only on Aria/ASE, IGGT
+only on InsScene-15K); every row of ours trains on ScanNet. The comparison is therefore
+protocol-matched and setting-matched but **not training-matched**, and that must be said wherever
+this table is quoted. What it is worth is measured: with ScanNet removed and **IGGT's mixture
+reproduced in full** — arm I-ase, 12510960, ScanNet++ + Infinigen + RE10K + ASE — the same recipe
+scores **0.009 / 0.032 / 0.301**, i.e. **~3× behind** on AP50 and level with them on AP25
+(`docs/MULTIDATASET.md` §12.4). **The lead in this table rests on training data those two never
+use, and that sentence belongs next to the table, not in a footnote.** Two smaller asymmetries run
 the other way and are already stated: the frozen backbone, and — until 2026-08-27 — ~17 views to
 their 50, an axis now **closed and measured** (§5.4: at matched views we lead by more, and the
 view-count lever saturates at ~50).

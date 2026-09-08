@@ -45,11 +45,11 @@ section.tighter { font-size: 17px; }
 | FAST3DIS | **no** | LoRA-adapted DA3 | 50 | 0.038 | 0.096 | 0.316 |
 | **Ours — 3D anchors, defaults, trained on ScanNet only** | **yes** | **frozen VGGT-1B** | **50** | **0.053** | **0.170** | **0.542** |
 | **Ours + EXTRA TRAINING DATA** (ScanNet + ScanNet++ + Infinigen) | yes | 〃 | **50** | **0.069** | **0.193** | **0.560** |
-| **Ours with ScanNet REMOVED** — IGGT's mixture minus ASE | **no** | 〃 | 17 | **0.005** | **0.023** | **0.251** |
+| **Ours with ScanNet REMOVED** — IGGT's mixture COMPLETE | **no** | 〃 | 17 | **0.009** | **0.032** | **0.301** |
 
 **At the competitors' own 50-view budget we lead on all three columns** — 1.39× / 1.77× / 1.72× on FAST3DIS, more on IGGT — from a **strictly frozen** backbone, with every lifting parameter at its default.
 
-**The last row is not a footnote, it is how the first four are read.** Evaluator, bridge, label setting and view budget are matched; **training data is not**, and it runs in our favour. Removing ScanNet costs a factor **6 in AP50** and turns the lead into ~4× behind. ⚠ It does *not* show the recipe loses at equal data — that run has **no ASE at all**, 3819 scenes against ~100 k, ~0.8 GPU-days against ~16.
+**The last row is not a footnote, it is how the first four are read.** Evaluator, bridge, label setting and view budget are matched; **training data is not**, and it runs in our favour. Removing ScanNet costs a factor **4.3 in AP50** and turns the lead into ~3× behind — measured on **IGGT's mixture reproduced in full**, ASE included. On **AP25 the gap closes** (0.301 vs 0.316 / 0.287) at a third of their views. ⚠ It does *not* show the recipe loses at equal data — 1000 ASE scenes against ~100 k, ~0.8 GPU-days against ~16.
 
 **And on the ONE comparison where the training data IS matched — SegVGGT, our exact 1201 split — we are behind by ×2.8** once the ×2.3 evaluation bridge is taken out, measured on the `--anchor_3d` checkpoint (the residual is checkpoint-dependent; slide 6).
 
@@ -67,7 +67,7 @@ section.tighter { font-size: 17px; }
 
 | axis | state |
 |---|---|
-| **training data** (FAST3DIS, IGGT) | **not matched, it FAVOURS us, and it is now measured.** Both are zero-shot on ScanNet; every headline row of ours trains on it. With ScanNet removed we score **0.023 AP50 against their 0.096 / 0.112** — the lead rests on training data they do not use, and that belongs next to the lead. ⚠ It does *not* show the recipe loses at equal data: that run is missing ASE entirely, 3819 scenes against ~100 k. |
+| **training data** (FAST3DIS, IGGT) | **not matched, it FAVOURS us, and it is now measured on their COMPLETE mixture.** Both are zero-shot on ScanNet; every headline row of ours trains on it. With ScanNet removed we score **0.032 AP50 against their 0.096 / 0.112** — ~3× behind — while **matching them on AP25** (0.301 vs 0.316 / 0.287) at a third of their views. The lead rests on training data they do not use, and that belongs next to the lead. ⚠ It does *not* show the recipe loses at equal data: 1000 ASE scenes against ~100 k. |
 | **training data** (SegVGGT) | **MATCHED** — the official ScanNetv2 1201 split, identical. It is the one training-matched comparison in the deck, and we are **×2.8 behind** on it after the bridge is removed. |
 | **training compute** | ~0.8 vs ~16 GPU-days — **permanently unmatchable, and a strength, not an excuse** |
 
@@ -100,7 +100,7 @@ section.tighter { font-size: 17px; }
 | what | what it settled |
 |---|---|
 | **Views per scene, 17 → 50** | The last unmatched *evaluation* axis. **It moved the headline**: at their own budget we lead on all three columns. |
-| **The two no-ScanNet runs** | The last unmatched *training* axis. **It priced the asymmetry, and it now sits ON the headline slide**: without ScanNet we are ~4× behind, so the lead rests on data they do not use. |
+| **The no-ScanNet runs, now with ASE** | The last unmatched *training* axis, **closed on composition**. **It priced the asymmetry and it sits ON the headline slide**: ~3× behind on AP50, **level on AP25**; the lead rests on data they do not use. |
 | **The ablation table on the 3D ruler** | Both consistency levers now have 3D numbers: cross-frame attention **−57 % AP50**, per-frame features −24 % class-aware / −49 % class-agnostic. |
 | **Formal identity metrics + seed spread** | **Retired a claim**: no published identity metric separates 3D anchors from the control. |
 | **RE10K** (**SAM2-supervised**) | Its **sign flips** — −42 % AP50 added to a mixture with ScanNet, **+1.8×** added to one without. |
@@ -113,7 +113,9 @@ section.tighter { font-size: 17px; }
 
 ## 6. What is still open
 
-**Open, costed, and now SCRIPTED — the highest-value data item left.** **ASE is *not* unobtainable**: the public Aria Synthetic Environments release ships **2D instance segmentation ground truth** — exactly the supervision we train on — and downloads **by scene range**. At ~230 MB/scene a **1000-scene pilot is ~230 GB**, which fits our quota. The fetch job, the 2D builder source and their CPU tests are in the repo; **the only remaining step is accepting the Project Aria licence**, which is a signature, not an engineering task. It would turn our IGGT replication from "their mixture minus ASE" into the complete one — i.e. it is what would let the no-ScanNet row be read as a *method* comparison instead of a data one.
+**CLOSED — the highest-value data item, and it paid.** **ASE was never unobtainable**: the public Aria release ships **2D instance segmentation GT** and downloads **by scene range**. Licence accepted, **1000 scenes fetched with zero failed blocks** (31 897 frames, 78 347 instances), and arm **I-ase** trained on it. Worth **×1.4 AP50** on the competitor cell, and it **closed the AP25 gap**. Our IGGT replication is now their mixture **complete**, not "minus ASE" — so that row reads as a *method* comparison. It does **not** close the scale gap: 1000 scenes to ~100 k.
+
+**Still open, in spending order:** **ASE *with* ScanNet** (every ASE number above is from a no-ScanNet mixture, and RE10K's sign flipped on exactly that) — then **the lifting, not the decoder**: the same masks cost ×2.3 under the unposed bridge.
 
 **Permanently out of reach — stated, not promised:**
 

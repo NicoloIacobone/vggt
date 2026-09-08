@@ -97,10 +97,12 @@ This is a depth/MVS training corpus. Treat the whole directory as unusable for i
 1. **FAST3DIS's training set is not reproducible at any scale.** 9.2 TB, *and* the sampled 40 %
    scene list is unpublished — so even a subset would not be "their data". Every FAST3DIS comparison
    remains a cross-training-set comparison. This is permanent, not a budget problem.
-2. **The ASE copy on this cluster has no annotations** (§3.1), so an ASE arm needs a fresh download
-   under Project Aria terms, not a local read. That download is **available, scripted and
-   DONE** as of 2026-08-31 (§6.7): 1 000 annotated scenes are on work and arm I-ase trains on them.
-   Do not repeat "ASE is out of reach" — the permanent item is point 1's scene list, not the data.
+2. **The ASE copy on this cluster has no annotations** (§3.1), so an ASE arm needed a fresh
+   download under Project Aria terms, not a local read. **That is DONE and this point is closed**
+   (§6.7): 1 000 annotated scenes were fetched 2026-08-31, arm I-ase trained on them and scored
+   2026-09-03. Do not repeat "ASE is out of reach" — the permanent item is point 1's scene list,
+   not the data. What remains on this axis is **scale**, which is a budget question, not a
+   reproducibility one: 1 000 scenes against IGGT's share of ~100 k.
 3. **InsScene-15K appears incomplete.** Its HuggingFace tree currently exposes only
    `processed_infinigen`, `processed_re10k`, `processed_scannetpp_v2` — all three of which we now
    train on, with RE10K's rows carrying the **SAM2-supervised** caveat — but the Aria portion is
@@ -156,7 +158,8 @@ step-matched to the arms already in flight, and both scored on the same 4 × 2 m
 
 | arm | train sources | scenes | epochs | steps | job | what it matches |
 |---|---|---|---|---|---|---|
-| **I** | ScanNet++ + Infinigen + RE10K@1500 | 3819 | 22 | 84 018 | 11839134 | **IGGT's training set minus ASE** — and no target-benchmark data at all |
+| **I-ase** | 〃 **+ ASE@1000** | **4819** | 18 | 86 742 | **12510960** | **IGGT's training set, COMPLETE** — added 2026-09-02, the row to quote (§6.7) |
+| **I** | ScanNet++ + Infinigen + RE10K@1500 | 3819 | 22 | 84 018 | 11839134 | IGGT's training set **minus ASE** — and no target-benchmark data at all |
 | **I-gt** | ScanNet++ + Infinigen | 2319 | 36 | 83 484 | 11839135 | the same, minus the SAM2-supervised source: a **GT-only** zero-shot row |
 
 Together with the two arms already running they form a **complete 2 × 2** at ~84 k steps and one
@@ -170,12 +173,14 @@ learning rate — `{± ScanNet} × {± RE10K}`:
 so "how much of our ScanNet lead is ScanNet training data" and "what does SAM2 supervision add"
 are each **one variable**, measured twice.
 
-**What arm I is and is not.** It is IGGT's mixture minus ASE, with RE10K capped at 1500 of 5127
-scenes for memory (`--cpus-per-task=22`; uncapped it is ~550 GB of feature cache). Two differences
-run in *our* favour and must be stated: we drop the 50 `nvs_sem_val` ScanNet++ scenes from training
-so our ScanNet++ column is honest, which IGGT does not do (§1.1 consequence 3); and our backbone
-stays **frozen** where IGGT finetunes VGGT. One runs against us: IGGT trains on 8 × A800 for 2 days
-(~16 GPU-days) against our ~0.8. ASE is **held, not out of reach** — the 1 000-scene pilot landed 2026-08-31 (§6.7); FAST3DIS's scene list is the permanent item (§5.1).
+**What arm I-ase is and is not.** It is **IGGT's mixture in full** — all four sources — with RE10K
+capped at 1500 of 5127 scenes and ASE at 1000 of ~100 k, both for memory (`--cpus-per-task=26`;
+uncapped RE10K alone is ~550 GB of feature cache). Two differences run in *our* favour and must be
+stated: we drop the 50 `nvs_sem_val` ScanNet++ scenes from training so our ScanNet++ column is
+honest, which IGGT does not do (§1.1 consequence 3); and our backbone stays **frozen** where IGGT
+finetunes VGGT. Two run against us: IGGT trains on 8 × A800 for 2 days (~16 GPU-days) against our
+~0.8, and **on ~100 × the ASE**. The mixture is matched; the **scale is not**, and that is now the
+whole of the remaining gap on this axis. FAST3DIS's 40 % scene list is the permanent item (§5.1).
 
 **Validation data.** The val ruler is the official ScanNet v2 312 for every arm, including the two
 that never see ScanNet in training — there it is a **zero-shot** read-out. That required one driver
@@ -207,7 +212,7 @@ our arms spend ~0.8, head-only on cached frozen features. That is a property of 
 oversight, and the step-budget axis is measured *inside* our own block (A-long ⇄ A-long′ ⇄ C-long′,
 `docs/MULTIDATASET.md` §10.5). Do not present our numbers as compute-matched.
 
-### 6.5 Status — every axis, every job (2026-08-26)
+### 6.5 Status — every axis, every job (2026-08-26; training axis CLOSED 2026-09-03)
 
 | axis | competitor's setting | ours | state |
 |---|---|---|---|
@@ -220,10 +225,10 @@ oversight, and the step-budget axis is measured *inside* our own block (A-long �
 | views, ScanNet++ / Replica | 50 | 50 | **matched** |
 | views, ScanNetv2 / ScanNet200 | 50 (FAST3DIS) / ~75–120 (SegVGGT) | 17.42 → **50 on demand** | **MATCHED 2026-08-27** — dense export built, 7 cells scored; at 50 views the lead *widens* and the lever saturates (`docs/RESULTS.md` §5.4) |
 | train split, SegVGGT | official ScanNetv2 1201 | identical | **matched** since 2026-08-02 |
-| train data, IGGT | InsScene-15K (ASE + Infinigen + RE10K + ScanNet++) | **arm I** = the same minus ASE, RE10K@1500 | **MEASURED 2026-08-28** — without ScanNet we score 0.005 / 0.023 / 0.251 against FAST3DIS 0.038 / 0.096 / 0.316 and IGGT 0.028 / 0.112 / 0.287, i.e. ~4× behind and a factor 6 below our own headline. The asymmetry was real and it carried most of the lead (`docs/RESULTS.md` §5.6). **ASE is no longer absent** — arm **I-ase** (12510960, 4 819 scenes) adds it and completes the mixture; still 1 000 ASE scenes against their ~100 k |
-| train data, FAST3DIS | ASE only → ScanNet zero-shot | **arms I / I-gt** never train on ScanNet | **MEASURED 2026-08-28** — same numbers as the row above: the arms are the same, only the competitor they are read against changes. Still not matched: their source is ASE and arm I has none of it |
+| train data, IGGT | InsScene-15K (ASE + Infinigen + RE10K + ScanNet++) | **arm I-ase** = the same four sources, RE10K@1500 + ASE@1000 — **their mixture, COMPLETE** | **MIXTURE MATCHED 2026-09-03, scale NOT** — without ScanNet we score **0.009 / 0.032 / 0.301** against IGGT's 0.028 / 0.112 / 0.287: **~3.5× behind on AP50, AHEAD on AP25**, at 17.42 views to their 50 (`docs/RESULTS.md` §5.6, `docs/MULTIDATASET.md` §12.4). What is left unmatched is **scale** (1 000 ASE scenes vs ~100 k), the frozen backbone and the compute. Adding ASE was worth ×1.4 AP50 over arm I |
+| train data, FAST3DIS | ASE only → ScanNet zero-shot | **arm I-ase** never trains on ScanNet and now holds ASE — but as one of four sources, not alone | **MEASURED 2026-09-03** — same numbers as the row above; only the competitor changes. 0.032 vs their 0.096 AP50 = **~3× behind**; **level on AP25** (0.301 vs 0.316). Still not matched: they train on ASE *alone* and their 40 % scene list is unpublished (§5.1) — permanent |
 | train data, SegVGGT | official ScanNetv2 1201 | identical | **MATCHED since 2026-08-02 — the one training-matched comparison in the project, and we are ×2.8 behind on it** (§6.6) |
-| train data, ASE itself | 9.2 TB, unpublished 40 % scene list | **a 1000-scene pilot is ON DISK** — `insscene2d_ase.tar.zst`, 1 000 scenes / 31 897 frames / 78 347 instances | **DOWNLOADED AND BUILT 2026-08-31** (§6.7), jobs 12262949 + 12264266, zero failures. Arm **I-ase** trains on it since 2026-09-02 (job 12510960). The *data* is public and downloads by scene range; the *scene list* never will be |
+| train data, ASE itself | 9.2 TB / ~100 k scenes, unpublished 40 % scene list | **a 1000-scene pilot is ON DISK and TRAINED ON** — `insscene2d_ase.tar.zst`, 1 000 scenes / 31 897 frames / 78 347 instances | **CLOSED 2026-09-03** (§6.7): fetched and built 2026-08-31 (12262949 + 12264266, zero failures), arm **I-ase** trained on it (12510960) and scored 8/8 cells (12511027). Worth **×1.4 AP50** on the competitor cell. The *data* is public and downloads by scene range; the *scene list* never will be |
 | ScanNet200 supervision | SegVGGT trains a 200-class checkpoint | our 2D GT is 19-class | **open, costed** — todo 6m |
 | training compute | ~16 GPU-days | ~0.8 GPU-days, frozen backbone | **not matchable; state it** (§6.4) |
 
@@ -235,12 +240,19 @@ oversight, and the step-budget axis is measured *inside* our own block (A-long �
 | competitor | training axis | our arm | result |
 |---|---|---|---|
 | **SegVGGT** | **matched** — the same official 1201 split | our own headline runs | **×2.8 behind** (posed, after the ×2.3 bridge; `docs/RESULTS.md` §8.3) |
-| **FAST3DIS** | approximated — we removed ScanNet, but have no ASE | arm I / I-gt | **~4× behind** (0.023 vs 0.096 AP50) |
-| **IGGT** | approximated — its mixture minus ASE | arm I | **~4× behind** (0.023 vs 0.112 AP50) |
+| **FAST3DIS** | approximated — we removed ScanNet and now hold ASE, but they train on ASE *alone* and their scene list is unpublished | **arm I-ase** | **~3× behind** on AP50 (0.032 vs 0.096); **LEVEL on AP25** (0.301 vs 0.316) |
+| **IGGT** | **their mixture, COMPLETE** — ScanNet++ + Infinigen + RE10K + ASE, at 1 % of their ASE scale | **arm I-ase** | **~3.5× behind** on AP50 (0.032 vs 0.112); **AHEAD on AP25** (0.301 vs 0.287) |
 
-> **Wherever the training data is matched or approximated, we are behind. The lead in
+> **Wherever the training data is matched or approximated, we are behind at 0.5 IoU. The lead in
 > `docs/RESULTS.md` §8.2 exists in the one configuration where we train on the evaluation domain
 > and the competitor does not.**
+
+**One thing changed on 2026-09-03 and it is worth stating precisely.** Arm I-ase completes IGGT's
+mixture, and on **AP25** the gap to both published rows is gone — 0.301 against 0.316 / 0.287, at
+**17.42 views to their 50**. That is the first column on which a no-ScanNet arm of this project
+reaches a published number. It does **not** generalise: AP50 is still ~3×, and the arm holds 1 000
+ASE scenes against ~100 k. Quote it as *"level at the coarse-localisation bar, 3× behind at 0.5
+IoU"*, never as *"matched"*.
 
 That sentence is not a retraction of §8.2 — that row is genuinely matched on evaluator, bridge,
 label setting and view budget, and a strictly frozen backbone at ~0.8 GPU-days beating two adapted
@@ -257,7 +269,7 @@ unchanged, and after it lands the scale gap (1 000 ASE scenes vs ~100 k), the fr
 the compute gap all still stand. Supportable: *"we cannot match their training setting, and
 without ScanNet we are well behind"*. Not supportable: *"our method loses at equal data"*.
 
-### 6.7 ASE — costed 2026-08-27, scripted and DOWNLOADED 2026-08-31, training since 2026-09-02
+### 6.7 ASE — costed 2026-08-27, downloaded 2026-08-31, MEASURED 2026-09-03 (todo 6n CLOSED)
 
 §5.2 said the ASE copy on this cluster has no annotations, and §4 called a fresh download
 "missing and out of reach". The first is still true; the second was too strong, and the correction
@@ -307,16 +319,33 @@ largest instance covers at most **31.6 %** of a frame (median of the per-scene m
 rendered ground truth has no wall/floor mega-instance** — RE10K's SAM2 failure mode does not exist
 here — so any cap ≥ 0.2 is equivalent and there is nothing to re-pick or rebuild.
 
-**The arm is training.** Job **12510960** (chain **12511027**, scoring the final `checkpoint.pth`):
+**The arm — job 12510960 (chain 12511027), DONE 2026-09-03.**
 `SOURCES='scannetpp infinigen re10k ase'`, `CAP_RE10K=1500` → **4 819 scenes**, 18 epochs =
 **86 742 steps**, lr 5e-5, `--anchor_3d`, 26 CPUs / 416 GB. Single variable against arm I
 (3 819 scenes, 84 018 steps): **+ASE**. The step budget is **+3.2 %** rather than matched to the
 decimal, deliberately in the generous direction — this workstream twice read "more data hurts" off
-an under-budgeted larger mixture (`docs/MULTIDATASET.md` §9 reading 1, §10.3 reading 2), so a
-negative result here must not be attributable to too few steps.
+an under-budgeted larger mixture (`docs/MULTIDATASET.md` §9 reading 1, §10.3 reading 2). It did not
+end up mattering: the effects are 40–100 %, an order of magnitude above the differential.
 
-**What the pilot buys, and what it does not.** It turns arm I from "IGGT's mixture minus ASE" into
-the **complete** IGGT replication — i.e. it is what would let §6.6's second and third rows be read
-as a *method* comparison instead of a data one. It does **not** reproduce FAST3DIS's training set
-at any download size: their sampled 40 % scene list is unpublished (§5.1). Say "ASE scenes N–M",
-never "FAST3DIS's training data".
+**What ASE was worth** (class-agnostic, final `checkpoint.pth`, 8/8 cells, 0 failed scenes; full
+matrix in `docs/MULTIDATASET.md` §12.4):
+
+| cell | arm I | **arm I-ase** | AP50 |
+|---|---|---|---|
+| ScanNetv2 unposed — **the competitor cell** | 0.005 / 0.023 / 0.251 | **0.009 / 0.032 / 0.301** | **×1.4** |
+| ScanNetv2 posed | 0.018 / 0.063 / 0.399 | 0.032 / 0.106 / 0.479 | ×1.7 |
+| ScanNet200 posed | 0.030 / 0.086 / 0.364 | 0.061 / 0.149 / 0.445 | ×1.7 |
+| Replica posed | 0.005 / 0.023 / 0.278 | 0.021 / 0.082 / 0.371 | **×3.6** |
+
+**ASE helps on every cell with signal, and MORE out of domain than in** — Replica posed ×3.6
+against ScanNetv2's ×1.4–1.7. It is the first source in this project whose benefit grows with
+distance from the training domain, which is what rendered, layout-diverse, sensor-free synthetic
+data should do.
+
+**What the pilot bought, and what it did not.** It turned arm I from "IGGT's mixture minus ASE"
+into the **complete** IGGT replication, so §6.6's IGGT row is now a *method* comparison rather than
+a data one — and on **AP25 the published gap closed** (0.301 vs FAST3DIS 0.316, IGGT 0.287) at
+17.42 views to their 50. It did **not** close AP50 (~3× behind), it did **not** match scale
+(1 000 scenes vs ~100 k), and it does **not** reproduce FAST3DIS's training set at any download
+size: their sampled 40 % scene list is unpublished (§5.1). Say "ASE scenes 0–999", never
+"FAST3DIS's training data".

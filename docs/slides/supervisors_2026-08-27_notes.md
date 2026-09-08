@@ -279,13 +279,21 @@ what our numbers look like against each of them, on their own training setting."
   **lo stesso nostro**, verificato sul paper (*"1,201 training scenes… 8 A100, ~2 days per
   dataset"*): asse **appaiato**. FAST3DIS addestra **solo su Aria/ASE** e su ScanNet è zero-shot.
   IGGT addestra su InsScene-15K, che ScanNet non lo contiene. Verso quei due l'asse è
-  **approssimato**, non appaiato: le due run senza ScanNet non lo vedono mai, ma **non hanno ASE**.
-  *(Sulle slide non compaiono più le sigle interne: "arm I" è la **run senza ScanNet** e "arm I-gt"
-  è la **run senza ScanNet né RE10K**. Le sigle restano in `docs/MULTIDATASET.md` §12, dove sono
-  l'indice verso i job 11839134 / 11839135.)*
+  **approssimato**, non appaiato — e dal 2026-09-03 lo è **meno di prima**: la run senza ScanNet ora
+  contiene anche **ASE**, cioè la mistura di IGGT è riprodotta **per intero**. Quello che resta
+  scoperto non è la composizione, è la **scala**: 1000 scene ASE contro ~100 k.
+  *(Sulle slide non compaiono più le sigle interne: "arm I-ase" è la **run senza ScanNet** che
+  citiamo, "arm I" la stessa **senza ASE**, "arm I-gt" quella **senza ASE né RE10K**. Le sigle
+  restano in `docs/MULTIDATASET.md` §12, dove sono l'indice verso i job 12510960 / 11839134 /
+  11839135.)*
 - **Seconda tabella: cosa segnano le run appaiate e approssimate.** Contro SegVGGT, sui suoi
   stessi dati, siamo **×2.8 dietro** una volta tolto il ×2.3 del ponte. Tolto ScanNet, contro
-  FAST3DIS e IGGT siamo **~4× dietro** (0.023 di AP50 contro 0.096 / 0.112).
+  FAST3DIS e IGGT siamo **~3× dietro su AP50** (0.032 contro 0.096 / 0.112) — ma **su AP25 siamo
+  pari** (0.301 contro 0.316 e 0.287), e a **17 viste contro le loro 50**.
+- **La frase esatta su AP25, perché è facile esagerarla.** Non dire "pareggiamo FAST3DIS": dire
+  *"alla soglia di localizzazione grossolana li raggiungiamo anche senza ScanNet e con un terzo
+  delle viste; a IoU 0.5 siamo ancora 3× dietro"*. È l'unica forma che regge, e dice anche **dove**
+  il backbone congelato tiene (trovare e collocare gli oggetti) e dove no (i bordi precisi).
 - **Attenzione a una trappola che questa slide può indurre:** il ×6.4 / ×2.8 è misurato **sul
   checkpoint con ancore 3D**, non su una riga qualsiasi. Il residuo è checkpoint-dipendente (sulla
   run di controllo è ×10.7 / ×4.6). La riga 1 della seconda tabella porta quel checkpoint apposta;
@@ -295,9 +303,9 @@ what our numbers look like against each of them, on their own training setting."
   slide 9 vive nell'unica configurazione in cui noi ci addestriamo sul dominio di valutazione e
   loro no.* Detta da noi è un'analisi; detta da loro è un'obiezione.
 - **E subito dopo, senza pausa, il contro-punto — che è vero quanto il primo.** Non dimostra che
-  il metodo perde a parità di dati: la run senza ScanNet **non ha ASE**, cioè l'intero training set di FAST3DIS
-  e il pezzo più grande di quello di IGGT. Sono **3819 scene contro ~100 k**, backbone congelato
-  contro adattato, **~0.8 GPU-day contro ~16**.
+  il metodo perde a parità di dati, e non lo dimostrerà mai qui: sono **1000 scene ASE contro
+  ~100 k**, backbone congelato contro adattato, **~0.8 GPU-day contro ~16** — e FAST3DIS si
+  addestra su ASE **da solo**, con una lista di scene mai pubblicata.
 
 **Cosa NON dire:** *"il nostro metodo perde a parità di dati"*. Non è quello che è stato misurato,
 e quel confronto su questo cluster non è eseguibile. La formula sostenibile è *"non possiamo
@@ -583,13 +591,28 @@ I want them on the record rather than in a promise."*
   collaterale che vale la pena dire: **ASE non ha il problema del guscio della stanza** — su 60
   scene sondate l'istanza più grande copre al massimo il 31.6 % del frame, quindi il taglio a 0.3
   toglie 1 istanza su 4940. Era il modo di fallire di RE10K con SAM2, e qui non esiste.
-  Se il supervisore chiede *"quanto manca?"*: niente, l'arm gira dal 2026-09-02 (job 12510960).
-- **L'arm si chiama I-ase e ha una sola variabile.** ScanNet++ + Infinigen + RE10K@1500 + ASE@1000
-  = 4819 scene, 18 epoche = 86 742 step, lr 5e-5, `--anchor_3d`, niente ScanNet. Contro l'arm I
-  (3819 scene, 84 018 step) cambia **solo ASE**. Il budget di step è **+3.2 %**, scelto di
-  proposito nella direzione generosa: in questo workstream abbiamo già letto due volte "più dati
-  fanno male" da una mistura più grande sotto-allenata, quindi un risultato negativo non deve
-  poter essere attribuito a troppi pochi step. Va detto insieme al numero.
+  Se il supervisore chiede *"quanto manca?"*: niente, è chiuso dal 2026-09-03.
+- **L'arm si chiama I-ase, ha una sola variabile, e ha pagato.** ScanNet++ + Infinigen + RE10K@1500
+  + ASE@1000 = 4819 scene, 18 epoche = 86 742 step, lr 5e-5, `--anchor_3d`, niente ScanNet. Contro
+  l'arm I (3819 scene, 84 018 step) cambia **solo ASE**. Il budget di step è **+3.2 %**, scelto di
+  proposito nella direzione generosa perché in questo workstream abbiamo già letto due volte "più
+  dati fanno male" da una mistura sotto-allenata — **non è servito**: gli effetti sono del 40–100 %,
+  un ordine di grandezza sopra. Va detto comunque insieme al numero.
+- **Il risultato, in tre cifre.** Sulla cella che guarda i competitor (ScanNetv2, unposed,
+  class-agnostic): **0.005 / 0.023 / 0.251 → 0.009 / 0.032 / 0.301**, cioè AP50 **×1.4**. Matrice
+  completa 8 celle su 8, **zero scene fallite**. Il divario pubblicato passa da ~4× a **~3×** su
+  AP50, e **su AP25 si chiude**: 0.301 contro 0.316 di FAST3DIS e *sopra* 0.287 di IGGT, a 17 viste
+  contro 50.
+- **La cosa più interessante non è la media, è dove aiuta.** ASE rende **di più fuori dominio che
+  dentro**: Replica posed ×3.6 e ScanNet++ posed ×3.2 contro l'×1.4–1.7 di ScanNetv2. È la prima
+  sorgente del progetto il cui beneficio **cresce** con la distanza dal dominio di addestramento —
+  che è esattamente ciò che dovrebbe fare del sintetico renderizzato, vario nei layout e senza un
+  sensore reale dietro. Se c'è una domanda su "a cosa serve il sintetico", la risposta è questa
+  riga, non la media.
+- **Quello che l'arm NON ha risposto, ed è la prossima run più economica: ASE *insieme* a
+  ScanNet.** Tutti i numeri di ASE vengono da una mistura senza ScanNet. RE10K è il precedente che
+  rende la domanda seria invece che retorica: il suo segno **si è ribaltato** a seconda della
+  presenza di ScanNet (−42 % con, +1.8× senza). Una sola run lo chiude.
 - **Quello che resta impossibile non è il dato, è la lista di scene.** Il 40 % delle scene usate da
   FAST3DIS non è pubblicato: **ogni confronto con FAST3DIS resta un confronto cross-training-set**,
   a qualunque dimensione di download. Lo diciamo noi.
@@ -623,8 +646,8 @@ delle release altrui — e noi le stiamo dichiarando al posto loro.
   leggere le tre righe nell'ordine giusto invece che dall'alto in basso.
 - Riga 1 (unposed, class-agnostic, **50 viste**, dati **non** appaiati): a viste appaiate guidiamo
   su tutte e tre le colonne contro entrambi i competitor unposed.
-- Riga 2 (la stessa ricetta **senza ScanNet**, dati approssimati): **~4× dietro**. È il prezzo della
-  riga 1, misurato.
+- Riga 2 (la stessa ricetta **senza ScanNet**, sulla mistura completa di IGGT): **~3× dietro su
+  AP50 e pari su AP25**. È il prezzo della riga 1, misurato.
 - Riga 3 (posed, class-aware, dati **appaiati** — lo stesso split 1201 di SegVGGT): dietro —
   **2.3× è il ponte, ×2.8 è il residuo training-matched**.
 - Riga 4 (altri tre benchmark): lo zero-shot fallisce unposed e sopravvive posed → **geometria, non
@@ -635,8 +658,8 @@ delle release altrui — e noi le stiamo dichiarando al posto loro.
 
 **La riga di chiusura è cambiata, ed è la modifica più importante di questa revisione.** Prima
 diceva solo il lead. Ora dice, in quest'ordine: dove i dati di addestramento sono appaiati o
-approssimati siamo **dietro** (×2.8 contro SegVGGT sul nostro stesso split, ~4× contro
-FAST3DIS/IGGT tolto ScanNet); il **lead** della riga 1 è reale e appaiato su evaluator, ponte,
+approssimati siamo **dietro a IoU 0.5** (×2.8 contro SegVGGT sul nostro stesso split, ~3× contro
+FAST3DIS/IGGT tolto ScanNet, pari su AP25); il **lead** della riga 1 è reale e appaiato su evaluator, ponte,
 label setting e viste, e poggia su dati che quei due non usano; e ciò che è davvero nostro non è la
 posizione in classifica ma un **backbone strettamente congelato a ~0.8 GPU-day** e un'ablation
 controllata che nessun altro ha eseguito.

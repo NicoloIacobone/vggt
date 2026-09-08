@@ -139,13 +139,15 @@ Only one of the three competitors trains on what we train on. Every number in th
 | competitor | they train on | the run of ours that matches it | ours vs theirs |
 |---|---|---|---|
 | **SegVGGT** | ScanNetv2 1201 | **the identical split** → **TRAINING-MATCHED** | posed 0.104 / 0.257 / 0.504 vs **0.504 / 0.717 / 0.870** — **×2.8 behind** once the ×2.3 bridge is out |
-| **FAST3DIS** | Aria/ASE only — zero real data | **our no-ScanNet run** — never sees ScanNet, but has **no ASE** either | 0.005 / 0.023 / 0.251 vs 0.038 / 0.096 / 0.316 — **~4× behind** |
-| **IGGT** | InsScene-15K = ASE + Infinigen + RE10K + ScanNet++ | **the same run** = their mixture **minus ASE** | 〃 vs 0.028 / 0.112 / 0.287 — **~4× behind** |
+| **FAST3DIS** | Aria/ASE only — zero real data | **our no-ScanNet run** — never sees ScanNet, and now has ASE too | 0.009 / 0.032 / 0.301 vs 0.038 / 0.096 / 0.316 — **~3× behind on AP50, LEVEL on AP25** |
+| **IGGT** | InsScene-15K = ASE + Infinigen + RE10K + ScanNet++ | **the same run** = **their mixture, COMPLETE** | 〃 vs 0.028 / 0.112 / 0.287 — **~3.5× on AP50, AHEAD on AP25** |
 | *for reference* | — | *the same recipe **with** ScanNet* | *0.053 / 0.170 / 0.542 — ahead of both (slide 9)* |
 
 **Wherever the training data is matched or approximated, we are behind.** The lead on slide 9 exists in the one configuration where we train on the evaluation domain and they do not: removing ScanNet costs a factor **6 in AP50**.
 
-⚠ **It does not follow that the recipe loses at equal data.** That run has **no ASE at all** — 3819 scenes against ~100 k, frozen against adapted, ~0.8 GPU-days against ~16. *"We cannot match their training setting"* is supportable; *"we lose at equal data"* has never been measured and cannot be here.
+**Since 2026-09-03 that run trains on IGGT's mixture IN FULL** — ASE included, 4819 scenes. ASE was worth **×1.4 AP50**, and it closed the **AP25** gap to both published rows *at a third of their view budget* (17 vs 50). The honest sentence: **at the coarse-localisation bar we match them without ScanNet; at 0.5 IoU we are still ~3× behind.**
+
+⚠ **It still does not follow that the recipe loses at equal data.** 1000 ASE scenes against their ~100 k, frozen against adapted, ~0.8 GPU-days against ~16 — and FAST3DIS trains on ASE *alone*, with an unpublished scene list. *"We cannot match their training setting"* is supportable; *"we lose at equal data"* has never been measured and cannot be here.
 
 ---
 
@@ -162,7 +164,7 @@ Only one of the three competitors trains on what we train on. Every number in th
 | **Ours — 3D anchors, defaults, ScanNet only** *(**frozen** VGGT-1B)* | **yes** | **50** | **0.053** | **0.170** | **0.542** |
 | — the same checkpoint at 17 views *(two seeds)* | yes | 17 | 0.042 | 0.138 | 0.504 |
 | **Ours + EXTRA DATA** (+ScanNet++ +Infinigen, 3520 scenes) | yes | **50** | **0.069** | **0.193** | **0.560** |
-| **Ours with ScanNet REMOVED** — the no-ScanNet run *(slide 8)* | **no** | 17 | **0.005** | **0.023** | **0.251** |
+| **Ours with ScanNet REMOVED** — the no-ScanNet run, IGGT's full mixture *(slide 8)* | **no** | 17 | **0.009** | **0.032** | **0.301** |
 
 **At the competitors' own 50-view budget we lead on all three columns** — 1.39× / 1.77× / 1.72× on FAST3DIS, more on IGGT — with a **strictly frozen** backbone and every lifting parameter at its default. Extra data leads by 1.8–2.0×.
 
@@ -272,7 +274,7 @@ The headline lives on the 3D benchmark, but the **two mechanisms that carry mult
 | what | what it settled |
 |---|---|
 | **Views per scene, 17 → 50** | The last unmatched *evaluation* axis. **It moved the headline** (slide 9): at their own budget we lead on all three columns. |
-| **The two no-ScanNet runs** | The last unmatched *training* axis. **It priced the asymmetry, and it now OPENS the deck** (slide 8): without ScanNet we are ~4× behind, so the lead rests on training data they do not use. |
+| **The no-ScanNet runs, now with ASE** | The last unmatched *training* axis, **closed on composition** (slide 8): with IGGT's mixture reproduced in full we are ~3× behind on AP50 and **level on AP25**. The lead still rests on training data they do not use — and **it now OPENS the deck**. |
 | **The ablation table on the 3D ruler** | Both consistency levers now have 3D numbers (slide 12). The 2D ordering held; its **spacing** did not. |
 | **Formal identity metrics + their seed spread** | **Retired a claim** (slide 14): no published identity metric separates 3D anchors from the control. |
 | **RE10K** (**SAM2-supervised** — masks are model output, not GT) | Its **sign flips**: −42 % AP50 added to a mixture that has ScanNet, **+1.8×** added to one that does not. Redundant where ScanNet is, valuable where it is not. |
@@ -281,18 +283,24 @@ The headline lives on the 3D benchmark, but the **two mechanisms that carry mult
 
 ---
 
-<!-- _class: dense -->
+<!-- _class: tighter -->
 
 ## 16. Open, and permanently out of reach
 
-**Done since this deck was written — the highest-value data item is no longer open:**
+**Closed since this deck was written — the highest-value data item, and it paid:**
 
-- **ASE is downloaded and the arm is training.** The public Aria Synthetic Environments release ships **2D instance segmentation ground truth** — exactly the supervision we train on — and downloads **by scene range**. The licence was accepted on 2026-08-31 and the pilot ran the same afternoon: **1000 scenes, zero failed blocks, 31 897 frames, 78 347 instances**, one 1.34 GB tar. A finding on the way: **ASE needs no room-shell cap** — no instance covers more than 32 % of a frame, so the RE10K failure mode does not exist there. Since 2026-09-02 arm **I-ase** trains on it (4819 scenes, no ScanNet, one variable against arm I: +ASE). It turns our IGGT replication from "their mixture minus ASE" into the complete one — i.e. it is what lets slide 8's second row be read as a *method* comparison instead of a data one. **It does not close the scale gap**: 1000 ASE scenes against their ~100 k, frozen backbone, ~0.8 GPU-days.
+- **ASE was downloaded, trained on, and measured.** The public Aria release ships **2D instance segmentation GT** — exactly what we train on — and downloads **by scene range**. Licence accepted, pilot the same afternoon: **1000 scenes, zero failed blocks, 31 897 frames, 78 347 instances**. Arm **I-ase** trained on it (4819 scenes, no ScanNet, one variable: +ASE), **8/8 cells, 0 failures**: worth **×1.4 AP50** and it **closed the AP25 gap** (slide 8), helping **more out of domain than in** (Replica ×3.6). **It does not close the scale gap**: 1000 scenes to their ~100 k.
+- A finding on the way: **ASE needs no room-shell cap** — no instance covers >32 % of a frame, so RE10K's SAM2 failure mode does not exist on rendered GT.
+
+**Still open — in the order we would spend on them:**
+
+- **ASE *with* ScanNet — the cheapest arm left.** Every ASE number above is from a mixture without ScanNet, and RE10K's sign **flipped** on ScanNet's presence (−42 % with, +1.8× without). One run answers it.
+- **The lifting, not the decoder.** The largest remaining loss is **registration**: the same masks cost ×2.3 under the unposed bridge, and every out-of-domain unposed cell reads 0.000.
 
 **Permanently out of reach — state it, do not promise it:**
 
 - **FAST3DIS's exact training set.** Not the data — the **scene list**: 40 % of it is unpublished. Every FAST3DIS comparison is therefore a cross-training-set comparison, at any download size.
-- **InsScene-15K is incomplete** — only Infinigen / RE10K / ScanNet++ are published, the Aria portion is absent. Any replication is **partial** and must say so.
+- **InsScene-15K is incomplete** — only Infinigen / RE10K / ScanNet++ are published, the Aria portion is absent. **We closed that ourselves** by fetching ASE from its own release, so our replication of the *mixture* is complete — at 1 % of the scale.
 - **FAST3DIS never states which scenes it evaluates.** We do not claim identical evaluation sets.
 - **Training compute** — ~0.8 vs ~16 GPU-days, and it is a *strength*, not an excuse.
 
@@ -307,10 +315,10 @@ The headline lives on the 3D benchmark, but the **two mechanisms that carry mult
 | Ruler | training data | Our best | vs | Verdict |
 |---|---|---|---|---|
 | **3D official, UNPOSED, class-agnostic, 50 views** | **not matched — favours us** | **0.053 / 0.170 / 0.542** | FAST3DIS 0.038 / 0.096 / 0.316 · IGGT\* 0.028 / 0.112 / 0.287 | **lead on all three, at their own view budget** |
-| **〃 with ScanNet removed** — the no-ScanNet run, 17 views | **approximated (no ASE)** | **0.005 / 0.023 / 0.251** | 〃 | **~4× behind** — the lead's price, measured |
+| **〃 with ScanNet removed** — the no-ScanNet run, 17 views | **IGGT's mixture, COMPLETE** | **0.009 / 0.032 / 0.301** | 〃 | **~3× behind on AP50, LEVEL on AP25** — the lead's price, measured |
 | 3D official, POSED, class-aware † | **MATCHED** — the same 1201 split | 0.088 / 0.260 / 0.572 *(best posed row)* | SegVGGT 0.504 / 0.717 / 0.870 | behind; **2.3× is the bridge**, and on the `--anchor_3d` row the residual is **×2.8 — the training-matched number** |
 | 3D on ScanNet200 / ScanNet++ / Replica | n/a — no like-for-like row held | 0.124 / 0.009 / 0.006 AP (posed) | — | zero-shot fails unposed, survives posed → **geometry, not masks** |
 
 \* as re-evaluated by FAST3DIS: IGGT publishes no ScanNet AP of its own. † class-aware because that is what SegVGGT publishes; the class-agnostic scaling runs have no class-aware column at all, so they cannot appear on that row — not because they score worse.
 
-**The one-line read, in the order the table is meant to be read:** where the training data is matched or approximated we are **behind** — ×2.8 against SegVGGT, ~4× against FAST3DIS/IGGT. The **lead** on row 1 is real and matched on evaluator, bridge, label setting and views, and rests on data those two never use. What is ours is not the leaderboard position: a **strictly frozen backbone at ~0.8 GPU-days**, and a controlled ablation nobody else has run (slides 13–14).
+**The one-line read, in the order the table is meant to be read:** where the training data is matched or approximated we are **behind at 0.5 IoU** — ×2.8 against SegVGGT, ~3× against FAST3DIS/IGGT (and level with them at AP25). The **lead** on row 1 is real and matched on evaluator, bridge, label setting and views, and rests on data those two never use. What is ours is not the leaderboard position: a **strictly frozen backbone at ~0.8 GPU-days**, and a controlled ablation nobody else has run (slides 13–14).
