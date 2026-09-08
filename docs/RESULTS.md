@@ -423,7 +423,9 @@ which is now priced instead of merely declared.
 
 **2. It does NOT show our recipe is worse than theirs at equal data.** Arm I is missing **ASE
 entirely** — FAST3DIS's whole training set and IGGT's largest component — because its scene list is
-unpublished and it is 9.2 TB. This is **3819 scenes against their ~100 k**, frozen backbone against
+unpublished and it is 9.2 TB. **A 1 000-scene ASE pilot has since been fetched (2026-08-31) and arm
+I-ase trains on it (job 12510960, `docs/MULTIDATASET.md` §12.4); until that lands this row is what
+the project has, and even after it the scale gap remains.** This is **3819 scenes against their ~100 k**, frozen backbone against
 adapted, ~0.8 GPU-days against ~16. The supportable claim is *"we cannot match their training
 setting, and without ScanNet we are well behind"* — never *"our method loses at equal data"*, a
 comparison that has not been run and cannot be here.

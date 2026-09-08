@@ -271,6 +271,12 @@ already queued for arm D. A-long′ ⇄ C-long′ is step-matched, same-LR and o
 | 11839135 → 11839152 | **arm I-gt** — ScanNet++ + Infinigen, no ScanNet, no SAM2 supervision | 〃 |
 | 11839821 (array) → 11840376 | the **dense** ScanNet val-312 frame export (stride 20) | DATASET §2.5 |
 
+**In flight since 2026-09-02 — the ASE arm (6n):**
+
+| job | what | lands as |
+|---|---|---|
+| 12510960 → 12511027 | **arm I-ase** — ScanNet++ + Infinigen + RE10K@1500 + **ASE@1000**, no ScanNet: IGGT's mixture *with* its fourth source. Read against arm I; the one variable is ASE | MULTIDATASET §12.4 |
+
 Read I ⇄ D-long and I-gt ⇄ A-long′ as the {±ScanNet} edges of one 2 × 2; do not read either
 against a published number until its matrix lands. Everything else in the data-scaling set has landed —
 docs/MULTIDATASET.md §10.3/§10.4, docs/RESULTS.md §6.4/§7.5/§8.2. Everything else once listed here
@@ -711,8 +717,8 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
       — −42 % AP50 in a mixture with ScanNet, +1.8× in one without; redundant vs ScanNet, valuable
       without it. Two failed matrix cells (12046077 / 12046106) were **GPU contention, not code**
       (`CUDA-capable device(s) is/are busy`) and were re-run as 12077651 / 12077653.
-- [~] **6n. A partial ASE download — costed 2026-08-27, SCRIPTED 2026-08-31, waiting on ONE
-      signature.** ASE **is** publicly available (projectaria.com/datasets/ase) and its per-scene
+- [~] **6n. A partial ASE download — LANDED 2026-08-31, the arm is TRAINING since 2026-09-02.**
+      ASE **is** publicly available (projectaria.com/datasets/ase) and its per-scene
       GT **includes 2D instance segmentation**; the downloader takes scene ranges. Budget:
       ~23 TB / 100 k scenes ≈ **230 MB/scene**, so a **1 000-scene pilot ≈ 230 GB** against
       ~2.34 TB free scratch. What it buys: arm I becomes the **complete** IGGT replication instead
@@ -733,13 +739,28 @@ training arm (6e + 6f) has its own home in **`docs/MULTIDATASET.md`**.
   - [x] **The gate is the inode count**, wired into the driver: it prints files-per-scene per
         block and the projection for a 5× range. Scratch is quota'd on files and the InsScene
         mirror shipped 1 468 small zips where ~120 were expected.
-  - [ ] **BLOCKED on the licence, and only on that.** The per-chunk CDN urls arrive after
-        accepting the Project Aria dataset agreement — the account holder's act, not an agent's.
-        Accept it, drop the json at `<work>/dataset/ase/ASE_cdn_urls.json`, then
-        `sbatch slurm/fetch_ase.sh`. The job prints those instructions and exits 2 if it is absent.
-  - [ ] **After the pilot lands:** read `PROBE_ase_*.json`, pick `MAX_AREA_FRAC` off its
-        `dropped_frac_at` table, rebuild, then retrain arm I with ASE as a fourth source and
-        re-run its 8-cell matrix — that is the row that closes the IGGT training axis.
+  - [x] **The licence — ACCEPTED 2026-08-31, and the pilot ran the same day.**
+        `ASE_cdn_urls.json` landed at `<work>/dataset/ase/`, then jobs **12262949**
+        (`PROBE_ONLY=1`, 16 min) and **12264266** (fetch → gate → probe → build → pack, 2 h 41)
+        both COMPLETED. **1 000 scenes (0–999)**, 10 blocks of 100, every block
+        `ok:10 skip:0 fail:0 missing:0` — zero failures. ~223 GB raw at **0.223 GB** and
+        **1 764 inodes** per scene. The build: **31 897 frames, 78 347 instances**, 32 frames/scene,
+        `upright: true`. One tar left the node: `insscene2d_ase.tar.zst`, **1.34 GB**.
+  - [x] **The room-shell cap is a NO-OP on ASE, and that is a finding — 2026-08-31.** The build
+        used `max_area_frac 0.3`, and `PROBE_ase_0_999.json` says why it does not matter: over the
+        60 probed scenes the largest instance covers at most **31.6 %** of a frame (median of the
+        per-scene maxima **0.163**), so 0.3 drops **1 instance in 4 940 (0.02 %)**, 0.2 drops
+        0.49 % and 0.1 drops 2.29 %. **ASE's rendered GT has no wall/floor mega-instance** — the
+        failure mode RE10K's SAM2 masklets had (`docs/MULTIDATASET.md` §1.4) does not exist here,
+        and any cap ≥ 0.2 is equivalent. Nothing to re-pick, nothing to rebuild.
+  - [ ] **Arm I-ase — SUBMITTED 2026-09-02, job 12510960** (chain **12511027**, `checkpoint.pth`).
+        `SOURCES='scannetpp infinigen re10k ase'`, `CAP_RE10K=1500` → **4 819 scenes**, 18 epochs =
+        **86 742 steps** at lr 5e-5 with `--anchor_3d`, 26 CPUs / 416 GB. Single variable against
+        arm I (3 819 scenes, 84 018 steps): **+ASE**. The step budget is **+3.2 %**, not matched to
+        the decimal — deliberately the *generous* direction, because this workstream twice read
+        "more data hurts" off an under-budgeted larger mixture (`docs/MULTIDATASET.md` §9 reading 1,
+        §10.3 reading 2), so a negative result must not be attributable to too few steps.
+        When it lands it is the row that closes the IGGT training axis.
 - [x] **6o. Land the ablation-table hole on the 3D ruler — CLOSED 2026-08-28.**
   - [x] **`--no-cross_frame_attn` — job 11986399, DONE** (`docs/RESULTS.md` §5.5). 312 scenes, 0
         failures, defaults. Removing it costs **57 % of the 3D AP50** (0.067 → 0.029 class-aware,

@@ -85,7 +85,7 @@ This is a depth/MVS training corpus. Treat the whole directory as unusable for i
 | **ScanNet++ val-50 3D GT + frames** | SegVGGT, FAST3DIS, IGGT | buildable from nedela's tree, no download | ~7 GB (2 tars) | 2 inodes on work; ~10 k node-local |
 | **Replica (8 scenes: room0-2, office0-4)** | FAST3DIS's 3rd benchmark | **DONE 2026-08-08** — `dataset/replica/{replica_3d_gt_8,replica_frames_8}.tar.zst`; CC-BY-NC-4.0 | 372 MB + 417 MB (789 MB total — the 15–25 GB estimate assumed unsampled frames; 50/scene + zstd is far smaller) | 2 inodes on work; 0 loose on scratch |
 | **InsScene-15K** | replicating IGGT's training data | **DONE 2026-08-08** — `dataset/insscene15k/`, mirrored as-is (not unzipped), Apache-2.0. **Still partial**: Aria/ASE not uploaded upstream as of this date (re-checked, unchanged since 2026-08-07) | 522.07 GB | **1565 files** (not ~120 — `processed_infinigen` alone is 1468 small per-scene zips, not one shard per subset) |
-| **Aria Synthetic Environments, annotated** | replicating IGGT's training data (and touching FAST3DIS's source) | **LICENCE-GATED, not out of reach — corrected 2026-08-27, SCRIPTED 2026-08-31 (§6.7).** The public release downloads **by scene range** and its per-scene GT includes 2D instance segmentation; a 1000-scene pilot is ~230 GB and the job is written. FAST3DIS's own 40 % scene list stays unpublished, so their *training set* remains unreproducible at any size | 230 GB (pilot) | measured by the pilot's inode gate, not estimated |
+| **Aria Synthetic Environments, annotated** | replicating IGGT's training data (and touching FAST3DIS's source) | **HELD — 1 000 scenes fetched and built 2026-08-31 (§6.7).** The public release downloads **by scene range** and its per-scene GT includes 2D instance segmentation; the pilot cost ~223 GB and arm I-ase trains on it. FAST3DIS's own 40 % scene list stays unpublished, so their *training set* remains unreproducible at any size | 223 GB (measured, 1 000 scenes) | **1 764 inodes/scene**, measured by the pilot's gate |
 | Infinigen, RE10K (standalone) | only if InsScene-15K's shards prove incomplete | **not needed** — both are inside the mirror and both are annotated. The RE10K row here used to read "missing"; it was **stale from 2026-08-24**, when the masks were found under a *sibling* directory the original survey never looked at (`processed_re10k/sam2_results/<scene>/auto_masks.json`, 5127 of 5138 scenes). See `docs/MULTIDATASET.md` §1.3 | 0 | 0 |
 
 **Storage discipline** (`docs/DATASET.md` §5.1): scratch is quota'd on **file count** (1.0 M soft /
@@ -99,8 +99,8 @@ This is a depth/MVS training corpus. Treat the whole directory as unusable for i
    remains a cross-training-set comparison. This is permanent, not a budget problem.
 2. **The ASE copy on this cluster has no annotations** (§3.1), so an ASE arm needs a fresh download
    under Project Aria terms, not a local read. That download is **available, scripted and
-   licence-gated** as of 2026-08-31 (§6.7) — do not repeat "ASE is out of reach" unqualified; the
-   permanent item is point 1's scene list, not the data.
+   DONE** as of 2026-08-31 (§6.7): 1 000 annotated scenes are on work and arm I-ase trains on them.
+   Do not repeat "ASE is out of reach" — the permanent item is point 1's scene list, not the data.
 3. **InsScene-15K appears incomplete.** Its HuggingFace tree currently exposes only
    `processed_infinigen`, `processed_re10k`, `processed_scannetpp_v2` — all three of which we now
    train on, with RE10K's rows carrying the **SAM2-supervised** caveat — but the Aria portion is
@@ -175,7 +175,7 @@ scenes for memory (`--cpus-per-task=22`; uncapped it is ~550 GB of feature cache
 run in *our* favour and must be stated: we drop the 50 `nvs_sem_val` ScanNet++ scenes from training
 so our ScanNet++ column is honest, which IGGT does not do (§1.1 consequence 3); and our backbone
 stays **frozen** where IGGT finetunes VGGT. One runs against us: IGGT trains on 8 × A800 for 2 days
-(~16 GPU-days) against our ~0.8. ASE is **licence-gated rather than out of reach** and its pilot is scripted (§6.7); FAST3DIS's scene list is the permanent item (§5.1).
+(~16 GPU-days) against our ~0.8. ASE is **held, not out of reach** — the 1 000-scene pilot landed 2026-08-31 (§6.7); FAST3DIS's scene list is the permanent item (§5.1).
 
 **Validation data.** The val ruler is the official ScanNet v2 312 for every arm, including the two
 that never see ScanNet in training — there it is a **zero-shot** read-out. That required one driver
@@ -220,10 +220,10 @@ oversight, and the step-budget axis is measured *inside* our own block (A-long �
 | views, ScanNet++ / Replica | 50 | 50 | **matched** |
 | views, ScanNetv2 / ScanNet200 | 50 (FAST3DIS) / ~75–120 (SegVGGT) | 17.42 → **50 on demand** | **MATCHED 2026-08-27** — dense export built, 7 cells scored; at 50 views the lead *widens* and the lever saturates (`docs/RESULTS.md` §5.4) |
 | train split, SegVGGT | official ScanNetv2 1201 | identical | **matched** since 2026-08-02 |
-| train data, IGGT | InsScene-15K (ASE + Infinigen + RE10K + ScanNet++) | **arm I** = the same minus ASE, RE10K@1500 | **MEASURED 2026-08-28** — without ScanNet we score 0.005 / 0.023 / 0.251 against FAST3DIS 0.038 / 0.096 / 0.316 and IGGT 0.028 / 0.112 / 0.287, i.e. ~4× behind and a factor 6 below our own headline. The asymmetry was real and it carried most of the lead (`docs/RESULTS.md` §5.6). Still not matched in the other direction: ASE is absent, 3819 scenes vs ~100 k |
+| train data, IGGT | InsScene-15K (ASE + Infinigen + RE10K + ScanNet++) | **arm I** = the same minus ASE, RE10K@1500 | **MEASURED 2026-08-28** — without ScanNet we score 0.005 / 0.023 / 0.251 against FAST3DIS 0.038 / 0.096 / 0.316 and IGGT 0.028 / 0.112 / 0.287, i.e. ~4× behind and a factor 6 below our own headline. The asymmetry was real and it carried most of the lead (`docs/RESULTS.md` §5.6). **ASE is no longer absent** — arm **I-ase** (12510960, 4 819 scenes) adds it and completes the mixture; still 1 000 ASE scenes against their ~100 k |
 | train data, FAST3DIS | ASE only → ScanNet zero-shot | **arms I / I-gt** never train on ScanNet | **MEASURED 2026-08-28** — same numbers as the row above: the arms are the same, only the competitor they are read against changes. Still not matched: their source is ASE and arm I has none of it |
 | train data, SegVGGT | official ScanNetv2 1201 | identical | **MATCHED since 2026-08-02 — the one training-matched comparison in the project, and we are ×2.8 behind on it** (§6.6) |
-| train data, ASE itself | 9.2 TB, unpublished 40 % scene list | **a 1000-scene pilot is scripted** — `slurm/fetch_ase.sh` + the `ase` source of `slurm/build_insscene2d.py`, CPU-tested | **LICENCE-GATED, not out of reach** (§6.7). The *data* is public and downloads by scene range; the *scene list* never will be |
+| train data, ASE itself | 9.2 TB, unpublished 40 % scene list | **a 1000-scene pilot is ON DISK** — `insscene2d_ase.tar.zst`, 1 000 scenes / 31 897 frames / 78 347 instances | **DOWNLOADED AND BUILT 2026-08-31** (§6.7), jobs 12262949 + 12264266, zero failures. Arm **I-ase** trains on it since 2026-09-02 (job 12510960). The *data* is public and downloads by scene range; the *scene list* never will be |
 | ScanNet200 supervision | SegVGGT trains a 200-class checkpoint | our 2D GT is 19-class | **open, costed** — todo 6m |
 | training compute | ~16 GPU-days | ~0.8 GPU-days, frozen backbone | **not matchable; state it** (§6.4) |
 
@@ -251,10 +251,13 @@ slide 9, the matched-axes audit slide 10).
 
 ⚠ And the counter-statement travels with it, because it is equally true: **none of this shows the
 recipe loses at equal data.** Arm I has no ASE at all — 3819 scenes against ~100 k, frozen against
-adapted, ~0.8 against ~16 GPU-days. Supportable: *"we cannot match their training setting, and
+adapted, ~0.8 against ~16 GPU-days. **Arm I-ase (job 12510960, since 2026-09-02) closes the
+"no ASE at all" half of that sentence and none of the rest**; until it lands the table above is
+unchanged, and after it lands the scale gap (1 000 ASE scenes vs ~100 k), the frozen backbone and
+the compute gap all still stand. Supportable: *"we cannot match their training setting, and
 without ScanNet we are well behind"*. Not supportable: *"our method loses at equal data"*.
 
-### 6.7 ASE — costed 2026-08-27, SCRIPTED 2026-08-31, licence-gated
+### 6.7 ASE — costed 2026-08-27, scripted and DOWNLOADED 2026-08-31, training since 2026-09-02
 
 §5.2 said the ASE copy on this cluster has no annotations, and §4 called a fresh download
 "missing and out of reach". The first is still true; the second was too strong, and the correction
@@ -281,11 +284,36 @@ matters because ASE is the single missing ingredient of both competitors' traini
    first block and `PROBE_ONLY=1` stops there. Pick the cap off that table before the first
    training run (docs/MULTIDATASET.md §1.4 is the precedent).
 
-**The one manual step is a signature, not an engineering task.** The per-chunk CDN urls arrive
-only after the Project Aria dataset licence is accepted at projectaria.com/datasets/ase — the
-account holder's act. Accept it, put the json at
-`/cluster/work/igp_psr/niacobone/distillation/dataset/ase/ASE_cdn_urls.json`, and
-`sbatch slurm/fetch_ase.sh` needs no further argument.
+**The one manual step was a signature, and it was given on 2026-08-31.** The per-chunk CDN urls
+arrive only after the Project Aria dataset licence is accepted at projectaria.com/datasets/ase —
+the account holder's act. It was accepted, the json landed at
+`/cluster/work/igp_psr/niacobone/distillation/dataset/ase/ASE_cdn_urls.json`, and the pilot ran the
+same afternoon.
+
+**What the pilot actually produced** (jobs **12262949** `PROBE_ONLY=1`, 16 min, and **12264266**
+fetch → gate → probe → build → pack, 2 h 41 — both COMPLETED):
+
+| | |
+|---|---|
+| scenes | **1 000** (ids 0–999), 10 blocks of 100, every block `ok:10 skip:0 fail:0 missing:0` |
+| raw download | ~223 GB, **0.223 GB** and **1 764 inodes** per scene — the inode gate the driver prints |
+| built | **31 897 frames, 78 347 instances**, 32 frames/scene, `upright: true` |
+| tar | `<work>/dataset/insscene2d/insscene2d_ase.tar.zst`, **1.34 GB**, the only thing that left the node |
+
+**The room-shell cap turned out to be a no-op, which is itself the answer to decision 2 above.**
+The build used `max_area_frac 0.3`; `PROBE_ase_0_999.json` shows that over the 60 probed scenes the
+largest instance covers at most **31.6 %** of a frame (median of the per-scene maxima **0.163**), so
+0.3 removes **1 instance in 4 940 (0.02 %)**, 0.2 removes 0.49 %, 0.1 removes 2.29 %. **ASE's
+rendered ground truth has no wall/floor mega-instance** — RE10K's SAM2 failure mode does not exist
+here — so any cap ≥ 0.2 is equivalent and there is nothing to re-pick or rebuild.
+
+**The arm is training.** Job **12510960** (chain **12511027**, scoring the final `checkpoint.pth`):
+`SOURCES='scannetpp infinigen re10k ase'`, `CAP_RE10K=1500` → **4 819 scenes**, 18 epochs =
+**86 742 steps**, lr 5e-5, `--anchor_3d`, 26 CPUs / 416 GB. Single variable against arm I
+(3 819 scenes, 84 018 steps): **+ASE**. The step budget is **+3.2 %** rather than matched to the
+decimal, deliberately in the generous direction — this workstream twice read "more data hurts" off
+an under-budgeted larger mixture (`docs/MULTIDATASET.md` §9 reading 1, §10.3 reading 2), so a
+negative result here must not be attributable to too few steps.
 
 **What the pilot buys, and what it does not.** It turns arm I from "IGGT's mixture minus ASE" into
 the **complete** IGGT replication — i.e. it is what would let §6.6's second and third rows be read

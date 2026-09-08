@@ -23,7 +23,7 @@ themselves, not from the paper:
 | `processed_scannetpp_v2` | 903 scenes; `images/*.jpg`, `depth/*.png`, `refined_ins_ids/<stem>.jpg.npy` (int16 per-pixel ids at the image's own 920×690) | **yes** |
 | `processed_infinigen` | 1466 sub-scene zips (156 scenes); `Image/`, `Depth/`, `ObjectSegmentation/*.npy` (int64 ids), `Objects/*.json` (names + `object_index`), `camview/*.npz` (K, T) | **yes** |
 | `processed_re10k` | 5138 scenes; `<scene>/{rgb,cam}/` **and** a sibling `sam2_results/<scene>/auto_masks.{json,avi}` — COCO-RLE masklets, per frame, ids persistent across the clip (5127 of 5138 scenes) | **yes, but SAM2-generated** — §1.3, built §1.4. Every row trained on it says **SAM2-supervised** |
-| *(not in the mirror)* **ASE** | ~100 k scenes on Project Aria's CDN; `<scene>/{rgb/vignette%07d.jpg, depth/, instances/instance%07d.png}` + `trajectory.csv` — per-pixel instance ids, **rendered ground truth** | **yes, and it is the missing fourth subset.** Downloaded per scene range by `slurm/fetch_ase.sh`, built by `--source ase`; **licence-gated**, see `docs/TRAINING_COMPARABILITY.md` §6.7 and todo 6n |
+| *(not in the mirror — fetched separately)* **ASE** | ~100 k scenes on Project Aria's CDN; `<scene>/{rgb/vignette%07d.jpg, depth/, instances/instance%07d.png}` + `trajectory.csv` — per-pixel instance ids, **rendered ground truth** | **yes, and it is the fourth subset — 1 000 scenes ON DISK since 2026-08-31.** `insscene2d_ase.tar.zst`, 31 897 frames / 78 347 instances, built by `--source ase` after `slurm/fetch_ase.sh` (jobs 12262949 + 12264266, zero failures). Unlike RE10K it needs **no shell cap** — no instance exceeds 32 % of a frame (§12.4). See `docs/TRAINING_COMPARABILITY.md` §6.7 and todo 6n |
 
 Two properties were verified before any of it was used, because both are load-bearing:
 
@@ -1046,3 +1046,41 @@ values match the rest of the matrix.
 RE10K helps on **every cell that carries signal**. The unposed out-of-domain pair is 0.000 on both
 arms, as it is on every arm in this file — that is the bridge, not the data. The ScanNet++ posed
 ratio is arithmetically 6× but sits on 0.001 → 0.006 and should not be quoted as a multiple.
+
+### 12.4 Arm I-ase — the fourth source, and the completion of the IGGT mixture (2026-09-02)
+
+**Job 12510960, chain 12511027 — IN FLIGHT, nothing to read yet.** Recorded here at submit time so
+the next reader does not re-derive the recipe.
+
+§12.3 measured what removing ScanNet costs and closed todo 6l, but with a caveat that travelled
+with every one of its rows: **arm I is IGGT's mixture *minus ASE*** — its largest component, and
+the whole of FAST3DIS's training set. ASE landed on 2026-08-31
+(`docs/TRAINING_COMPARABILITY.md` §6.7: 1 000 scenes, 31 897 frames, 78 347 instances, zero failed
+blocks), so the caveat is now removable.
+
+| | arm I (§12.3) | **arm I-ase** |
+|---|---|---|
+| sources | ScanNet++ 853 + Infinigen 1466 + RE10K@1500 | 〃 **+ ASE 1000** |
+| train scenes | 3 819 | **4 819** |
+| epochs × scenes = steps | 22 × 3 819 = 84 018 | 18 × 4 819 = **86 742** |
+| lr / anchors / label setting | 5e-5 / `--anchor_3d` / class-agnostic | identical |
+| ScanNet in training | no | no |
+| job | 11839134 → 11839151 | **12510960 → 12511027** |
+
+**Single variable: +ASE.** Everything else — the learning rate, the anchors, the RE10K cap, the
+seed, the val ruler (official ScanNet 312, a zero-shot read-out here), the checkpoint scored
+(final `checkpoint.pth`, §12.1) — is arm I's.
+
+**The step budget is +3.2 %, and the direction is deliberate.** It cannot be matched to the decimal
+because `EPOCHS` is an integer and one step is one scene: 17 epochs undershoots by 2.5 %, 18
+overshoots by 3.2 %. 18 was chosen because the documented failure mode in this file is
+**under**-budgeting a larger mixture — read twice as "more data hurts" (§9 reading 1, §10.3
+reading 2) — so if arm I-ase does not beat arm I, that result must not be attributable to too few
+steps. Quote the differential wherever the pair is quoted.
+
+**What it will and will not settle.** It makes arm I the **complete** IGGT training mixture, so
+§12.3's second and third rows can be read as a *method* comparison instead of a data one — that is
+the whole point of the arm. It does **not** make the comparison compute- or scale-matched:
+1 000 ASE scenes against IGGT's share of ~100 k, a frozen backbone against a finetuned one, ~0.8
+GPU-days against ~16. And it does nothing at all for FAST3DIS, whose 40 % scene list is unpublished
+permanently (`docs/TRAINING_COMPARABILITY.md` §5.1).

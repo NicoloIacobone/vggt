@@ -438,11 +438,16 @@ myenv/bin/python slurm/build_insscene2d.py --source re10k --out $TMPDIR/b --limi
 that asymmetry is the point: ScanNet++ is the one source that is both trained on and evaluated on.
 Infinigen and RE10K are not among the four benchmarks, so there is nothing they can leak.
 
-### ASE — the fourth source, licence-gated (todo 6n, docs/TRAINING_COMPARABILITY.md §6.7)
+### ASE — the fourth source (todo 6n, docs/TRAINING_COMPARABILITY.md §6.7)
 
 ASE is **not** in the InsScene mirror; it is downloaded per scene range from Project Aria. The
 one manual step is the licence: accept it at projectaria.com/datasets/ase and put the CDN json at
 `<work>/dataset/ase/ASE_cdn_urls.json`. Without it the job prints the instructions and exits 2.
+
+**Scenes 0–999 are already built** (2026-08-31, jobs 12262949 + 12264266):
+`<work>/dataset/insscene2d/insscene2d_ase.tar.zst`, 31 897 frames / 78 347 instances. Re-run the
+fetch only to **extend** the range. `MAX_AREA_FRAC` needs no probe on ASE — the measured
+distribution makes any value ≥ 0.2 a no-op (§6.7).
 
 ```bash
 sbatch --export=ALL,PROBE_ONLY=1 slurm/fetch_ase.sh    # FIRST: download block 1, measure, stop
@@ -451,6 +456,18 @@ sbatch --export=ALL,SCENE_IDS=0-4999,MAX_AREA_FRAC=<from the probe> slurm/fetch_
 # local, against an already-unzipped tree:
 myenv/bin/python slurm/build_insscene2d.py --source ase --ase_root <tree> --out $TMPDIR/b \
     --frames 32 --limit 5 --probe
+```
+
+Training on it — arm **I-ase**, the complete IGGT mixture (job 12510960, 2026-09-02):
+
+```bash
+sbatch --cpus-per-task=26 --time=30:00:00 \
+    --export=ALL,SOURCES='scannetpp infinigen re10k ase',CAP_RE10K=1500,EPOCHS=18,\
+EXTRA_ARGS='--anchor_3d --learning_rate 5e-5',EXP_TAG='_armIase_zeroshot' \
+    slurm/train_maskdino_multi.sh
+# then, scoring the FINAL checkpoint (the val ruler is zero-shot here — MULTIDATASET §12.1):
+sbatch --dependency=afterok:<job> --export=ALL,TRAIN_JOB=<job>,CKPT_NAME=checkpoint.pth \
+    slurm/chain_eval3d_matrix.sh
 ```
 
 **Run `PROBE_ONLY=1` before the first real build.** ASE ships no id→name table, so the room shell

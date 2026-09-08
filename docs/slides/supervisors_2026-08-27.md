@@ -285,9 +285,9 @@ The headline lives on the 3D benchmark, but the **two mechanisms that carry mult
 
 ## 16. Open, and permanently out of reach
 
-**Open and costed — the highest-value data item left:**
+**Done since this deck was written — the highest-value data item is no longer open:**
 
-- **A partial ASE download is affordable, ASE is *not* unobtainable, and the job is WRITTEN.** The public Aria Synthetic Environments release ships **2D instance segmentation ground truth** — exactly the supervision we train on — and downloads **by scene range**. At ~230 MB/scene a **1000-scene pilot is ~230 GB**, which fits our quota. `slurm/fetch_ase.sh` fetches it in blocks, verifies each chunk's sha1, measures the inode cost, probes the shell-cap distribution and packs one tar; the 2D builder has an `ase` source with CPU tests. **The one remaining step is a signature**: the CDN urls arrive only after the Project Aria licence is accepted, which is the account holder's act, not the pipeline's. It would turn our IGGT replication from "their mixture minus ASE" into the complete one — i.e. it is what would let slide 8's second row be read as a *method* comparison instead of a data one.
+- **ASE is downloaded and the arm is training.** The public Aria Synthetic Environments release ships **2D instance segmentation ground truth** — exactly the supervision we train on — and downloads **by scene range**. The licence was accepted on 2026-08-31 and the pilot ran the same afternoon: **1000 scenes, zero failed blocks, 31 897 frames, 78 347 instances**, one 1.34 GB tar. A finding on the way: **ASE needs no room-shell cap** — no instance covers more than 32 % of a frame, so the RE10K failure mode does not exist there. Since 2026-09-02 arm **I-ase** trains on it (4819 scenes, no ScanNet, one variable against arm I: +ASE). It turns our IGGT replication from "their mixture minus ASE" into the complete one — i.e. it is what lets slide 8's second row be read as a *method* comparison instead of a data one. **It does not close the scale gap**: 1000 ASE scenes against their ~100 k, frozen backbone, ~0.8 GPU-days.
 
 **Permanently out of reach — state it, do not promise it:**
 

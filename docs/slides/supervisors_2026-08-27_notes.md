@@ -576,13 +576,20 @@ I want them on the record rather than in a promise."*
   che compra: la nostra replica di IGGT smette di essere "la loro mistura meno ASE" e diventa
   completa. *"ASE non ha annotazioni"* era vero **su questo cluster**, non in assoluto: non ripetere
   la versione corta.
-- **Dal 2026-08-31 il job è scritto, non solo quantificato.** `slurm/fetch_ase.sh` scarica per
-  blocchi, verifica lo sha1 di ogni chunk, misura il costo in **inode** (è quello il cancello, non
-  i gigabyte), sonda la distribuzione delle aree per scegliere il taglio del guscio **sui dati di
-  ASE** invece di ereditare quello di RE10K, costruisce il set 2D e impacchetta un tar. Il builder
-  ha una sorgente `ase` con i suoi test CPU. **Resta un solo passo, ed è una firma**: le url del CDN
-  arrivano dopo l'accettazione della licenza Project Aria, che è un atto del titolare dell'account.
-  Se il supervisore chiede *"quanto manca?"*, la risposta è: la licenza e una notte di download.
+- **Dal 2026-08-31 non è più un preventivo: è fatto.** La firma della licenza Project Aria è stata
+  data, e il pilota è girato lo stesso pomeriggio (job 12262949 sonda, 12264266 scarica-costruisce-
+  impacchetta): **1000 scene, 10 blocchi da 100, zero fallimenti**, ~223 GB grezzi a 0.223 GB e
+  1764 inode per scena, **31 897 frame e 78 347 istanze** nel tar da 1.34 GB. Un risultato
+  collaterale che vale la pena dire: **ASE non ha il problema del guscio della stanza** — su 60
+  scene sondate l'istanza più grande copre al massimo il 31.6 % del frame, quindi il taglio a 0.3
+  toglie 1 istanza su 4940. Era il modo di fallire di RE10K con SAM2, e qui non esiste.
+  Se il supervisore chiede *"quanto manca?"*: niente, l'arm gira dal 2026-09-02 (job 12510960).
+- **L'arm si chiama I-ase e ha una sola variabile.** ScanNet++ + Infinigen + RE10K@1500 + ASE@1000
+  = 4819 scene, 18 epoche = 86 742 step, lr 5e-5, `--anchor_3d`, niente ScanNet. Contro l'arm I
+  (3819 scene, 84 018 step) cambia **solo ASE**. Il budget di step è **+3.2 %**, scelto di
+  proposito nella direzione generosa: in questo workstream abbiamo già letto due volte "più dati
+  fanno male" da una mistura più grande sotto-allenata, quindi un risultato negativo non deve
+  poter essere attribuito a troppi pochi step. Va detto insieme al numero.
 - **Quello che resta impossibile non è il dato, è la lista di scene.** Il 40 % delle scene usate da
   FAST3DIS non è pubblicato: **ogni confronto con FAST3DIS resta un confronto cross-training-set**,
   a qualunque dimensione di download. Lo diciamo noi.

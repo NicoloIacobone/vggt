@@ -116,6 +116,9 @@ the *scaling* claim on the extra-data one.
    ⚠ This does **not** show the recipe is worse at equal data: arm I is missing **ASE entirely**
    (their whole / largest source, unpublished scene list, 9.2 TB) — 3819 scenes against ~100 k.
    *"We cannot match their training setting"* is supportable; *"we lose at equal data"* is not.
+   **Arm I-ase (12510960, in flight since 2026-09-02) adds a 1 000-scene ASE pilot** and is the
+   arm that turns this into a method comparison — until it lands, the row above is what we have,
+   and even after it lands the scale, backbone and compute gaps stay (§6.3).
 3. **The class-collapse sign is checkpoint-dependent.** The same recipe *without* `--anchor_3d`
    scores 0.017 / 0.060 / 0.334 class-agnostic **with its lifting knobs tuned** (0.013 / 0.050 /
    0.320 at defaults) — ahead on AP25, ~2× behind on AP50/AP. **Carry the "tuned" label**: the
@@ -283,6 +286,7 @@ sensor, and runs in **seconds, not minutes**.
 | ~~Views per scene, 17 → 50 / 100~~ | **DONE 2026-08-27** — `RESULTS.md` §5.4, and it moved the headline (§2) | ~~11840822 → 11841445 ff.~~ |
 | **Ablation-table hole** | puts cross-frame attention and bundle features on the 3D ruler, where the headline lives (§6.5) | 11986399 · 11986440 |
 | **Formal identity metrics** | re-scores the headline checkpoint and its control on HOTA / AssA / DetA / IDF1, so the consistency claim stops resting on project-defined numbers (§5) | 11986564 / 11986565 |
+| **Arm I-ase — ASE, the fourth source** | completes IGGT's training mixture, so §6.2's "we cannot match their training setting" becomes a *method* comparison instead of a data one. Single variable against arm I: **+ASE** | 12510960 / 12511027 |
 
 **One arm already failed, and that is why D-long is a re-run.** The first RE10K arm (D, lr 1e-4)
 **diverged**: best epoch 2 of 17, training loss rising, `train_AP50` collapsing to 0.006, and 3D
@@ -306,9 +310,9 @@ never blurred into one another:
 | **training data — SegVGGT** | official ScanNetv2 1201 train split | **identical** since 2026-08-02 | **MATCHED — and it is the only training-matched comparison this project holds.** On it we are **×2.8 behind** after the ×2.3 bridge is removed (§3.1). Quote it as such: it is the row where nothing is conceded on data |
 | kept queries | SegVGGT 600 | 100 | **measured neutral** (0.138 → 0.140) — struck as an explanation |
 | views, all four benchmarks | 50 (FAST3DIS / IGGT) · 75–100 (SegVGGT) | 50 — achieved mean **46.7** on ScanNetv2 (20 % of val scenes are shorter), 50 on ScanNet++ / Replica | **MATCHED 2026-08-27** — the dense `.sens` export closed it; at their views our lead *widens*, and the lever saturates by 50 (`RESULTS.md` §5.4) |
-| **training data — FAST3DIS / IGGT** | FAST3DIS: ASE only → ScanNet zero-shot · IGGT: InsScene-15K | we train on ScanNet | **not matched, it FAVOURS us, and it is PRICED** (2026-08-28): without ScanNet we score 0.023 AP50 against their 0.096 / 0.112, i.e. ~4× behind (§2.1 caveat 2, `RESULTS.md` §5.6). The closest arm, I, still has **no ASE** |
+| **training data — FAST3DIS / IGGT** | FAST3DIS: ASE only → ScanNet zero-shot · IGGT: InsScene-15K | we train on ScanNet | **not matched, it FAVOURS us, and it is PRICED** (2026-08-28): without ScanNet we score 0.023 AP50 against their 0.096 / 0.112, i.e. ~4× behind (§2.1 caveat 2, `RESULTS.md` §5.6). The closest arm, I, had **no ASE**; arm **I-ase** (12510960, in flight) adds it |
 | training compute | ~16 GPU-days | ~0.8 GPU-days, frozen backbone | **permanently unmatchable — and a strength, not an excuse** |
-| ASE itself | 9.2 TB, unpublished 40 % scene list | — | **permanently out of reach** (§6.4) |
+| ASE itself | 9.2 TB / ~100 k scenes; the sampled 40 % scene list unpublished | **1 000 annotated scenes fetched 2026-08-31** | **the DATA is held, the SCENE LIST never will be.** Arm I-ase trains on the pilot (12510960, §6.3); FAST3DIS's own subset stays permanently unreproducible (§6.4) |
 
 Read it top-down: everything above the two training-data rows is matched. **Then read the two
 training rows together, because they say the same thing twice: wherever the training data is
@@ -321,32 +325,42 @@ headline on any slide that carries both; the deck was reordered to do exactly th
 ⚠ It does **not** follow that the recipe loses at equal data — see §2.1 caveat 2. Say
 *"we cannot match their training setting"*, never *"we lose at equal data"*.
 
-### 6.3 Open and costed, not started
+### 6.3 ASE — DOWNLOADED 2026-08-31, TRAINING since 2026-09-02
 
-**A partial ASE download — the highest-value data item left, and it IS available.** ⚠ Do not repeat
-"ASE is out of reach" as if the dataset were unobtainable: §6.4's line is about *this cluster*.
-Aria Synthetic Environments is a public release (projectaria.com/datasets/ase, and a HuggingFace
-mirror) whose per-scene ground truth **includes 2D instance segmentation** — exactly the
-supervision this project trains on — and its downloader takes **scene ranges**, so a subset is a
-first-class operation rather than an all-or-nothing 23 TB fetch.
+**The highest-value data item left is no longer open: it is on disk and the arm is running.** ⚠ Do
+not repeat "ASE is out of reach": §6.4's line is about *this cluster's copy*. Aria Synthetic
+Environments is a public release (projectaria.com/datasets/ase, and a HuggingFace mirror) whose
+per-scene ground truth **includes 2D instance segmentation** — exactly the supervision this project
+trains on — and its downloader takes **scene ranges**, so a subset is a first-class operation
+rather than an all-or-nothing 23 TB fetch. The Project Aria licence was accepted on 2026-08-31 and
+the pilot ran the same afternoon.
 
 - **Budget**: ~23 TB / 100 000 scenes ≈ **230 MB/scene** → a **1 000-scene pilot ≈ 230 GB**.
   Scratch has ~2.34 TB free of its 2.5 TB soft quota and ~712 k free inodes, so it fits; the
-  **inode** count per scene must be measured on the first chunk before scaling (the InsScene
-  mirror shipped 1 468 small per-scene zips where ~120 were expected).
+  **inode** count per scene was measured on the first chunk rather than projected (the InsScene
+  mirror shipped 1 468 small per-scene zips where ~120 were expected): **1 764 inodes/scene**,
+  which is what a 5× scale-up would be gated on.
 - **What it buys**: it turns arm I (InsScene-15K *minus* ASE) into the **complete** IGGT
   replication, and it is the only way any of our training touches FAST3DIS's own source.
 - **What it does NOT buy**: FAST3DIS-matched training. Their 40 % scene list is unpublished, so
   that comparison stays cross-training-set at any download size (§6.4).
-- **Cost beyond the download — as of 2026-08-31 this is ONE licence acceptance and nothing else.**
-  The fetch job (`slurm/fetch_ase.sh`), the resumable sha1-verified downloader
-  (`slurm/download_ase.py`) and the `ase` source of `slurm/build_insscene2d.py` are written and
-  CPU-tested (`tests/test_ase_fetch.py`, 26 checks; `tests/test_insscene2d.py`, 53). The job
-  fetches in blocks so it never holds 230 GB at once, measures the **inode** cost as its gate,
-  and **probes ASE's own instance-area distribution** before applying a room-shell cap rather
-  than inheriting RE10K's 0.30. What is left is the Project Aria licence: the CDN urls arrive only
-  after it is accepted, which is the account holder's act. Drop the json at
-  `<work>/dataset/ase/ASE_cdn_urls.json` and `sbatch slurm/fetch_ase.sh`.
+- **What the pilot delivered (jobs 12262949 + 12264266, 2026-08-31, both COMPLETED).**
+  **1 000 scenes** (ids 0–999) in 10 blocks of 100, every block `ok:10 skip:0 fail:0 missing:0` —
+  **zero failures**. ~223 GB raw at 0.223 GB and 1 764 inodes per scene; built to
+  **31 897 frames / 78 347 instances** at 32 frames/scene; one 1.34 GB tar
+  (`insscene2d_ase.tar.zst`) left the node. The pipeline behind it —
+  `slurm/fetch_ase.sh`, the resumable sha1-verified `slurm/download_ase.py`, the `ase` source of
+  `slurm/build_insscene2d.py` — is CPU-tested (`tests/test_ase_fetch.py`, 26 checks;
+  `tests/test_insscene2d.py`, 53).
+- **A finding worth quoting: ASE needs no room-shell cap.** The probe measured its own
+  instance-area distribution rather than inheriting RE10K's 0.30, and over 60 scenes the largest
+  instance covers at most **31.6 %** of a frame. A 0.3 cap removes **1 instance in 4 940 (0.02 %)**.
+  ASE's rendered GT has no wall/floor mega-instance — the failure mode RE10K's SAM2 masklets have.
+- **The arm — job 12510960, since 2026-09-02.** ScanNet++ + Infinigen + RE10K@1500 + **ASE@1000** =
+  **4 819 scenes**, 18 epochs = 86 742 steps, lr 5e-5, `--anchor_3d`, no ScanNet. Single variable
+  against arm I: **+ASE**. Its step budget is **+3.2 %** vs arm I's — deliberately the generous
+  direction, so a negative result cannot be blamed on too few steps. Quote that differential
+  wherever the pair is quoted.
 
 **ScanNet200 supervision** — SegVGGT trains a 200-class checkpoint; our 2D GT is 19-class. This is
 a *supervision* limit, not a scoring one, and the two are routinely confused: **class-agnostic is
@@ -357,9 +371,10 @@ the class-**aware** column on ScanNet200 only; the class-agnostic headline (§2)
 
 - **FAST3DIS's training set is unreproducible at any scale**: 9.2 TB *and* an unpublished 40 %
   scene list. Every FAST3DIS comparison is a cross-training-set comparison. Permanent.
-- **ASE has no annotations on this cluster** — but it is **not unobtainable**: the public release
-  carries 2D instance GT and downloads by scene range. That is a *costed, scripted, licence-gated*
-  item (§6.3), not a permanent limit. What IS permanent is FAST3DIS's **scene list**, not the data.
+- **The 534 GB `ASE.hdf5` on this cluster has no annotations** — but ASE itself was never
+  unobtainable, and since 2026-08-31 we hold a **1 000-scene annotated pilot** fetched from the
+  public release (§6.3). That item is **closed, not permanent**. What IS permanent is FAST3DIS's
+  **scene list**, not the data.
 - **InsScene-15K is incomplete** — only Infinigen / RE10K / ScanNet++ are published; the Aria
   portion is absent. Any replication is **partial** and must say so.
 - **Training compute cannot be matched** (~0.8 vs ~16 GPU-days) — and it is a *strength*, not an
