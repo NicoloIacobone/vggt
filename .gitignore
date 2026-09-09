@@ -1,6 +1,10 @@
 .DS_Store
 myenv
 
+# Claude Code per-user settings: machine-specific paths and permission grants,
+# never shared. (settings.json, if one is ever added, IS meant to be committed.)
+.claude/settings.local.json
+
 .hydra/
 output/
 ckpt/
