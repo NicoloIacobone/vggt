@@ -1,5 +1,9 @@
 # Multi-dataset training — ScanNet v2 + ScanNet++ + Infinigen + RE10K (todo 6e + 6f + 6j)
 
+> **Project closed 2026-09-09.** This document is frozen as it stood at closure and is kept as
+> part of the measurement record. For the closing account — what was built, what it scored, why
+> it stopped and what a successor should do — read [`docs/FINAL_REPORT.md`](FINAL_REPORT.md).
+
 Opened 2026-08-10. This is the **data-scaling** workstream: every number in `docs/RESULTS.md` was
 produced by a head trained on ScanNet v2 and nothing else, and the scaling curve (50 → 190 → 490 →
 1201 scenes) was still rising when ScanNet ran out of scenes. This file is the home of what more

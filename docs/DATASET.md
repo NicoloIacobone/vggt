@@ -1,5 +1,9 @@
 # Dataset, ground truth, and storage
 
+> **Project closed 2026-09-09.** This document is frozen as it stood at closure and is kept as
+> part of the measurement record. For the closing account — what was built, what it scored, why
+> it stopped and what a successor should do — read [`docs/FINAL_REPORT.md`](FINAL_REPORT.md).
+
 The supervision, the on-disk conventions, and how a job gets the data. This applies to both the
 active MaskDINO track and the retired retired baseline heads — they read the same trees through the same
 loader (`data/scannet_overfit.py`).

@@ -1,5 +1,9 @@
 # Related work & positioning (literature survey 2026-07-08, competitors re-read 2026-07-28)
 
+> **Project closed 2026-09-09.** This document is frozen as it stood at closure and is kept as
+> part of the measurement record. For the closing account — what was built, what it scored, why
+> it stopped and what a successor should do — read [`docs/FINAL_REPORT.md`](FINAL_REPORT.md).
+
 > **This file covers the EVALUATION side of comparability.** The training side lives in
 > `docs/TRAINING_COMPARABILITY.md` (who trains on what, what is on the cluster, what is missing) and
 > the SegVGGT dissection in `docs/SEGVGGT_ANALYSIS.md`. One fact, one home — do not restate either
@@ -204,7 +208,7 @@ that the two protocols appear in the literature inside one table without the dis
 and SegVGGT and FAST3DIS are contemporaneous preprints (2603.19926 and 2603.25993), so neither
 could have cited the other.
 
-Two further consequences worth stating in the thesis: (a) the unposed protocol needs no poses at
+Two further consequences worth stating in any write-up: (a) the unposed protocol needs no poses at
 inference, which is exactly the input assumption we defend — and it measures something strictly
 harder than the posed one, so *lower is not worse*; (b) our frozen-backbone constraint is a
 **deliberate, differentiating design choice**, not the default of the field: every direct
@@ -224,7 +228,7 @@ competitor adapts its backbone with LoRA.
 
 > **Superseded by the 2026-07-28 update above for gap 1 and gap 3.** Gap 1 stands as a *gap in
 > the literature* (nobody ablates query initialisation), but our answer to it is negative, and
-> the thesis's strongest card is now the frozen-backbone decoder study of docs/MASKDINO.md.
+> the project's strongest card is now the frozen-backbone decoder study of docs/MASKDINO.md.
 > The query-initialisation study it refers to has since been completed and retired; its tables are
 > archived in `docs/old/ARMS_SUMMARY.md` and are not part of the current story.
 
@@ -249,7 +253,7 @@ competitor adapts its backbone with LoRA.
    metric separates `--anchor_3d` from its control (§6.6.3) — only our own `id_switch` does.
 3. **Backbone-agnostic decoding — SKIP.** Real gap (one decoder across VGGT/CUT3R/Pi3) but
    large engineering scope, Lite3R already owns the "model-agnostic" framing, and it does
-   not serve the thesis timeline.
+   not serve the project timeline.
 4. **Mining frozen-backbone internals — cheap side chapter.** We hook only
    `aggregated_tokens_list[-1]`. The feature-caching setup makes a which-layer ablation
    nearly free; VGGT-Det shows the appetite for this analysis.

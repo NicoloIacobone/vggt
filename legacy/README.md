@@ -1,5 +1,11 @@
 # legacy/ — retired code, kept runnable
 
+> **Project closed 2026-09-09.** Two things changed here at close: the COCO backbone-swap arm that
+> used to live in `legacy/coco/` was deleted (nothing imported it; it is in git history), and
+> the `docs/old/` archive that the narrative links below point at was deleted — those documents
+> live only in git history now. What remains in this directory is retired *but still imported by
+> active code*, which is why it stays. See [`docs/FINAL_REPORT.md`](../docs/FINAL_REPORT.md).
+
 Nothing here is on the active path. It is kept in-tree (rather than deleted or parked on a
 branch) because it is still **executable** and still **cited**: the D4RT numbers are the
 baseline every MaskDINO result is measured against, and `scripts/eval_perframe.py` imports

@@ -1,5 +1,9 @@
 # SegVGGT — the magnitude gap and the conceptual difference (2026-08-07)
 
+> **Project closed 2026-09-09.** This document is frozen as it stood at closure and is kept as
+> part of the measurement record. For the closing account — what was built, what it scored, why
+> it stopped and what a successor should do — read [`docs/FINAL_REPORT.md`](FINAL_REPORT.md).
+
 > Task 2 of the comparability programme. This document **assembles and attributes** evidence that
 > already lives in `docs/RELATED_WORK.md` and `docs/MASKDINO.md` §9.9–§9.10 — it does not restate
 > either. One fact, one home; follow the links.

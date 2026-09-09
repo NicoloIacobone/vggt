@@ -1,5 +1,11 @@
 # Restoring this project on a new cluster
 
+> **Project closed 2026-09-09.** Kept because it documents the cluster archive and the exact
+> environment every published number was produced with. It moved from the repository root to
+> `docs/` at project close, and the `docs/old/` archive it references was deleted at the same time
+> (recoverable from git history). For the closing account read
+> [`docs/FINAL_REPORT.md`](FINAL_REPORT.md).
+
 This repo was archived on **2026-08-13** as `cluster_backup_20260813.zip` (95.37 GB, 14350
 entries, sha256 `9d457425debfdba9f013128ec15ce9cc49c861dc66c5e5bb61c465c52981aee4`) before the
 original ETH Euler account expired. If you are an agent reading this after an unzip: this file
@@ -50,10 +56,29 @@ rest of the active code's imports live there, not in `requirements.txt`; and the
 0.18.1+cu121 / numpy 2.5.2**, which is what every published number was produced with. Verified
 2026-08-24 on Euler: 41 491 files, all 20 CPU tests green.
 
-Put it **off** any purging scratch filesystem if you can. On the old cluster a 15-day scratch purge
-destroyed the venv twice, and the two failures looked nothing alike — once the `.py` sources went
-and the `.pyc` stayed, once the reverse plus the binaries (`Unable to find torch_shm_manager`). See
-`CLAUDE.md` for both signatures and the diagnosis. Nothing about that bug is specific to Euler.
+### 2.1 Put it off any purging filesystem — the failure mode, in full
+
+On the old cluster `myenv/` lived on scratch, which purges files 15 days after last *access*. It
+destroyed the venv **twice**, and the two failures looked nothing alike. A running import touches
+almost nothing in a 30 k-file tree, so most of it goes stale and the purge takes whatever it
+reaches first:
+
+| date | what survived | what went | symptom |
+|---|---|---|---|
+| 2026-08-07 | the `.pyc` | the `.py` sources | `ModuleNotFoundError: No module named 'torch._vendor…'`, `module 'torch._dynamo' has no attribute 'disable'` |
+| 2026-08-24 | the `.py` sources (12 207 — they had been `touch -a`'d on 08-21) | the `.pyc` (12 206 → 3 607), the `.so`, and plain **binaries** | `RuntimeError: Unable to find torch_shm_manager at …/torch/bin/torch_shm_manager` |
+
+**Refreshing one file type just moves the failure to the rest** — that is exactly what the second
+occurrence was. **Diagnose on the total, not on one extension:** `find myenv -type f | wc -l`
+(16 364 after the purge, ~30 k healthy, 41 491 after a clean rebuild) alongside the `.py`/`.pyc`
+counts. Rebuilding on scratch restarts the 15-day clock, so if the venv must stay there, refresh
+the **whole** tree (`find myenv -exec touch -a {} +`) well inside 15 days.
+
+To see what a *previous* environment held after a purge has eaten the code,
+`ls -d myenv/lib/python3.12/site-packages/*.dist-info` — those survive when the modules do not.
+
+`requirements.txt` still pins `numpy==1.26.1` while the resolved tree lands on 2.x; the drift is
+old and harmless. Nothing about any of this is specific to Euler.
 
 Point the caches at the restored weights so nothing re-downloads the frozen VGGT-1B backbone:
 
@@ -74,9 +99,10 @@ The code carries absolute paths from the old cluster. Two prefixes cover essenti
 Three levers, in order of preference:
 
 1. **Environment variables**, where the code already offers them — no edits needed:
-   - `SCANNET_ROOT` overrides `DEFAULT_SCANS_ROOT` in [train/common.py](train/common.py#L21)
+   - `SCANNET_ROOT` overrides `DEFAULT_SCANS_ROOT` in [train/common.py](../train/common.py)
      (default `…/dataset/scannet/scans`). This is the one that matters for training/eval.
-   - `MASKDINO_ROOT` and `COCO_ROOT` in [scripts/coco_transplant_eval.py](scripts/coco_transplant_eval.py#L73).
+   - `MASKDINO_ROOT` and `COCO_ROOT` in the retired COCO arm's `coco_transplant_eval.py` — that
+     arm was deleted at project close and is recoverable from git history only.
 2. **CLI flags** — `--scans_root`, `--save_checkpoint`, `--output_dir`, and `DATA_TAR` /
    `GT_TAR` / `FRAMES_TAR` on the SLURM drivers. See `docs/COMMANDS.md`.
 3. **A sweep of the SLURM drivers**, which hardcode paths in `#SBATCH` lines that no variable

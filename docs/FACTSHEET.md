@@ -1,5 +1,9 @@
 # FACTSHEET — the only page you need to quote from
 
+> **Project closed 2026-09-09.** This document is frozen as it stood at closure and is kept as
+> part of the measurement record. For the closing account — what was built, what it scored, why
+> it stopped and what a successor should do — read [`docs/FINAL_REPORT.md`](FINAL_REPORT.md).
+
 > **Purpose.** This is the *single* source for outward-facing material: slides, supervisor
 > updates, abstract drafts. It is a read-out of `docs/RESULTS.md` §8, `docs/RELATED_WORK.md`
 > and `docs/TRAINING_COMPARABILITY.md` §6 — **nothing here is new**, and nothing here may
@@ -284,7 +288,11 @@ sensor, and runs in **seconds, not minutes**.
 
 ---
 
-## 6. WHAT IS STILL OPEN — the ablation menu for the supervisors
+## 6. WHAT WAS STILL OPEN AT CLOSURE
+
+> Written as an ablation menu for the supervisors. **The project closed on 2026-09-09 without
+> any of §6.1a being run** — no compute remained. Read it as a hand-off, not a plan;
+> `docs/FINAL_REPORT.md` §7 is the ranked, current version of the same list.
 
 ### 6.1 The job ledger — everything launched, and where it landed
 
@@ -352,7 +360,8 @@ matched or approximated we are behind at 0.5 IoU — ×2.8 against SegVGGT on th
 FAST3DIS/IGGT once ScanNet is removed. The §2 headline lives in the one configuration where we
 train on the evaluation domain and the competitor does not.** That sentence belongs *before* the
 headline on any slide that carries both; the deck was reordered to do exactly that on 2026-08-31
-(`docs/slides/supervisors_2026-08-27.md`, slides 8 → 9 → 10).
+(the supervisor deck of 2026-08-27, deleted at project close and recoverable from git history,
+slides 8 → 9 → 10).
 
 ⚠ It does **not** follow that the recipe loses at equal data — see §2.1 caveat 2. Say
 *"we cannot match their training setting"*, never *"we lose at equal data"*.
@@ -452,7 +461,8 @@ be quoted with its label setting — the two columns disagree by ~1.5×.
    are per-view masks on a 37×37 grid scored by our own metric code, and no published number is on
    that ruler. Tier 2 belongs in backup slides only.
 2. **The COCO port check is retired** (archived 2026-08-27 to `docs/old/MASKDINO_COCO.md`, code
-   under `legacy/coco/`). Never quote it, and do not reintroduce it as a slide: the implementation
+   deleted at project close, in git history). Never quote it, and do not reintroduce it as a
+   slide: the implementation
    question it answered is settled.
 3. **Label IGGT's triple `"IGGT, as re-evaluated by FAST3DIS"`** — never *"IGGT (published)"*. IGGT
    publishes **no ScanNet AP at all**.

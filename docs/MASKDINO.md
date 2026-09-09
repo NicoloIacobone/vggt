@@ -1,4 +1,14 @@
-# MaskDINO on frozen VGGT — the active model track
+# MaskDINO on frozen VGGT — the model track
+
+> **Project closed 2026-09-09.** This document is frozen as it stood at closure and is kept as
+> part of the measurement record. For the closing account — what was built, what it scored, why
+> it stopped and what a successor should do — read [`docs/FINAL_REPORT.md`](FINAL_REPORT.md).
+
+**Status at closure:** every question this document opens is answered. The paragraphs below
+are the running status as it was written, dated section by section, and one line in them was
+already stale when the project stopped: *3D anchors (§8.3) are designed but not implemented* —
+they were implemented on 2026-08-04 and are worth **+66 % 3D AP50**, which is what §8.3 and
+`docs/RESULTS.md` §5.2 report. Read `docs/FINAL_REPORT.md` for the settled picture.
 
 **Status:** single-frame question answered and won (2026-07-27). At 490 scenes this head scores
 **val mIoU 0.669 / AP50 0.699** against the retired baseline head's **0.451 / 0.294** on the identical

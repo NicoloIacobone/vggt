@@ -1047,6 +1047,9 @@ with gr.Blocks(
         [kitchen_video, "25", None, 50.0, False, False, True, False, "Depthmap and Camera Branch", "True"],
         [fern_video, "20", None, 45.0, False, False, True, False, "Depthmap and Camera Branch", "True"],
     ]
+    # upstream's `examples/` media is not shipped with this fork; keep only the rows whose
+    # clip is actually on disk so the demo still starts without it.
+    examples = [row for row in examples if os.path.isfile(row[0])]
 
     def example_pipeline(
         input_video,
@@ -1074,28 +1077,29 @@ with gr.Blocks(
         )
         return glbfile, log_msg, target_dir, dropdown, image_paths, dual_html
 
-    gr.Markdown("Click any row to load an example.", elem_classes=["example-log"])
+    if examples:
+        gr.Markdown("Click any row to load an example.", elem_classes=["example-log"])
 
-    gr.Examples(
-        examples=examples,
-        inputs=[
-            input_video,
-            num_images,
-            input_images,
-            conf_thres,
-            mask_black_bg,
-            mask_white_bg,
-            show_cam,
-            mask_sky,
-            prediction_mode,
-            is_example,
-        ],
-        outputs=[reconstruction_output, log_output, target_dir_output, frame_filter,
-                 image_gallery, dual_view_output],
-        fn=example_pipeline,
-        cache_examples=False,
-        examples_per_page=50,
-    )
+        gr.Examples(
+            examples=examples,
+            inputs=[
+                input_video,
+                num_images,
+                input_images,
+                conf_thres,
+                mask_black_bg,
+                mask_white_bg,
+                show_cam,
+                mask_sky,
+                prediction_mode,
+                is_example,
+            ],
+            outputs=[reconstruction_output, log_output, target_dir_output, frame_filter,
+                     image_gallery, dual_view_output],
+            fn=example_pipeline,
+            cache_examples=False,
+            examples_per_page=50,
+        )
 
     # -------------------------------------------------------------------------
     # "Reconstruct" button logic:

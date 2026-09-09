@@ -1,5 +1,9 @@
 # Commands — the full catalogue
 
+> **Project closed 2026-09-09.** This document is frozen as it stood at closure and is kept as
+> part of the measurement record. For the closing account — what was built, what it scored, why
+> it stopped and what a successor should do — read [`docs/FINAL_REPORT.md`](FINAL_REPORT.md).
+
 Every runnable recipe in the repo, with the caveats that make each one correct. `CLAUDE.md` keeps
 only the handful used daily; everything else lives here. Read the section you need, not the file.
 
@@ -70,8 +74,8 @@ python tests/test_maskdino_tracking_metrics.py  # HOTA/AssA/DetA/IDF1: a switch 
 ```
 
 **Every test runs under `myenv/` and none needs backbone weights.** The retired COCO arm's two
-tests moved to `legacy/coco/tests/` with the rest of that arm; one of them needed the detectron2
-reference env and is no longer part of this suite.
+tests left the suite with the rest of that arm (deleted at project close, in git history); one of
+them needed the detectron2 reference env and had already stopped being part of it.
 
 ---
 
@@ -407,9 +411,10 @@ python scripts/visualize_maskdino.py --checkpoint <run_dir>/checkpoint_best.pth 
 The port check is complete and COCO is not a ruler this project reports on. The whole arm — the
 upstream-equivalence transplant, `train_maskdino_coco.sh`, the resolution oracle and the
 upstream-MaskDINO control (with its `third_party/maskdino_control/` clone glue and both tests) —
-now lives under **`legacy/coco/`**, mirroring the layout it had here. The write-ups are
-`docs/old/MASKDINO_COCO.md` and `docs/old/MASKDINO_HISTORY.md` §7.6. Nothing in it is quotable
-next to a ScanNet number.
+was archived under `legacy/coco/`, and **deleted at project close** (2026-09-09) — it is in git
+history, and `docs/FINAL_REPORT.md` §8.1 records why it went. Its write-ups (`docs/old/MASKDINO_COCO.md`,
+`docs/old/MASKDINO_HISTORY.md` §7.6) were deleted at the same time and live in git history.
+Nothing in it was ever quotable next to a ScanNet number.
 
 ---
 

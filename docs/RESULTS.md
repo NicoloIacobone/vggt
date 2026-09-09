@@ -1,5 +1,9 @@
 # Results — one table per protocol
 
+> **Project closed 2026-09-09.** This document is frozen as it stood at closure and is kept as
+> part of the measurement record. For the closing account — what was built, what it scored, why
+> it stopped and what a successor should do — read [`docs/FINAL_REPORT.md`](FINAL_REPORT.md).
+
 Every number in this file is on the **official ScanNet v2 1201/312 split or larger**, and on one
 of two rulers. **The single most common mistake in this project is comparing across them.** Read
 §1 before quoting anything.

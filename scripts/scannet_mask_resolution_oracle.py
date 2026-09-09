@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-GT-only mask-resolution ceiling on ScanNet — the analogue of
-`scripts/coco_mask_resolution_oracle.py` for the ScanNet track, measured under the
-full-resolution ruler of docs/MASKDINO.md §6.5.
+GT-only mask-resolution ceiling on ScanNet — the analogue, for the ScanNet track, of the
+retired COCO arm's `coco_mask_resolution_oracle.py` (deleted at project close; in git
+history), measured under the full-resolution ruler of docs/MASKDINO.md §6.5.
 
 For every GT instance of every scored frame: area-downsample its binary 518x518 mask onto the
 prediction grid (the best *soft* logit map that grid can hold), bilinearly upsample back to

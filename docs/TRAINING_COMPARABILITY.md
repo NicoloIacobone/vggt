@@ -1,5 +1,9 @@
 # Training-setting comparability — what each competitor trains on, and what we can match
 
+> **Project closed 2026-09-09.** This document is frozen as it stood at closure and is kept as
+> part of the measurement record. For the closing account — what was built, what it scored, why
+> it stopped and what a successor should do — read [`docs/FINAL_REPORT.md`](FINAL_REPORT.md).
+
 **Companion to `docs/RELATED_WORK.md`, which settles the *evaluation* side.** That file answers
 "is this number scored the same way as ours" (two 3D protocols, class-aware vs class-agnostic, the
 posed/unposed bridge). This file answers the question that was never asked: **is this number
@@ -258,7 +262,8 @@ That sentence is not a retraction of §8.2 — that row is genuinely matched on 
 label setting and view budget, and a strictly frozen backbone at ~0.8 GPU-days beating two adapted
 ones is a result. It is an **ordering** rule: a reviewer forms this sentence unprompted, so it is
 stated first and the lead second. The supervisor deck was reordered on 2026-08-31 to do exactly
-that (`docs/slides/supervisors_2026-08-27.md`: the training axis is now slide 8, the headline
+that (the supervisor deck of 2026-08-27, deleted at project close and in git history: the
+training axis is now slide 8, the headline
 slide 9, the matched-axes audit slide 10).
 
 ⚠ And the counter-statement travels with it, because it is equally true: **none of this shows the

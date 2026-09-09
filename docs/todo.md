@@ -1,8 +1,16 @@
-# TODO
+# Work ledger — frozen at project close
 
-Open work only. Everything closed up to 2026-07-28 is in
-`docs/old/todo_archive_20260728.md`; the reasoning behind each closed item is in
-`docs/old/MILESTONES.md` (the retired head) and `docs/RESULTS.md` (MaskDINO).
+> **Project closed 2026-09-09. Nothing here is being worked on.** This file is kept as a frozen
+> record of what was open, what was closed and why, at the moment the project stopped — and
+> because ~40 comments in live source files (`train/`, `scripts/`, `models/`, `tests/`, `slurm/`)
+> cite its item numbers as the rationale for specific code paths. For the closing account, and for
+> the ranked list of what a successor should actually pick up, read
+> [`docs/FINAL_REPORT.md`](FINAL_REPORT.md) — §7 supersedes every unchecked box below.
+
+It was maintained as an open-work list: closed items were archived out of it as they closed. The
+archives it points at (`docs/old/todo_archive_20260728.md`, `docs/old/MILESTONES.md`) were deleted
+at project close and live only in git history; `docs/RESULTS.md` carries the reasoning that
+mattered.
 
 **Goal restated (2026-07-30).** A 3D-consistent multi-view instance segmentation model on a
 **strictly frozen** VGGT backbone, written up as a controlled decoder study for a top-tier venue
