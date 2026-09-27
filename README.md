@@ -1,3 +1,113 @@
+## My contributions
+
+This is a fork of [facebookresearch/vggt](https://github.com/facebookresearch/vggt). All credit for
+VGGT, its training and its published results goes to the original authors (Jianyuan Wang, Minghao
+Chen, Nikita Karaev, Andrea Vedaldi, Christian Rupprecht, David Novotny) and Meta AI. **The upstream
+model in [`vggt/`](vggt/) and upstream's training framework in [`training/`](training/) are untouched
+and never trained.** VGGT is used strictly as a frozen backbone.
+
+Everything else in this repository is mine: a MaskDINO-family decoder for multi-view-consistent 3D
+instance segmentation on top of that frozen backbone, plus the datasets, protocols, evaluation and
+measurement record around it. The README below is already written for this project rather than for
+upstream, so this section is an index of what I built and where it lives; the full account is in
+[`docs/FINAL_REPORT.md`](docs/FINAL_REPORT.md).
+
+### What I added
+
+**The model** ([`models/maskdino/`](models/maskdino/))
+
+- [`pixel_decoder.py`](models/maskdino/pixel_decoder.py) - ViTDet-style 3-level feature pyramid over
+  the frozen backbone tokens, with an MSDeformAttn encoder
+  ([`ms_deform_attn.py`](models/maskdino/ms_deform_attn.py)).
+- [`decoder.py`](models/maskdino/decoder.py), [`decoder_layers.py`](models/maskdino/decoder_layers.py),
+  [`head.py`](models/maskdino/head.py) - the MaskDINO decoder: two-stage query selection, DAB anchors,
+  denoising, deep supervision.
+- [`multiframe.py`](models/maskdino/multiframe.py) - cross-frame attention (`--multi_frame`), so one
+  query owns one instance in **every** frame of a bundle by construction. No mask matching, fusion or
+  tracking stage.
+- [`anchor3d.py`](models/maskdino/anchor3d.py) - 3D anchors replacing the 2D DAB boxes
+  (`--anchor_3d`).
+- [`criterion.py`](models/maskdino/criterion.py), [`matcher.py`](models/maskdino/matcher.py),
+  [`box_ops.py`](models/maskdino/box_ops.py), [`utils.py`](models/maskdino/utils.py).
+
+**The data and evaluation pipeline** ([`train/`](train/), [`data/`](data/))
+
+- [`maskdino_data.py`](train/maskdino_data.py) - the feature cache. Backbone features are computed
+  once per scene under `no_grad` and reused, which is what makes head-only training cheap.
+- [`benchmark3d.py`](train/benchmark3d.py) - the **official ScanNet 3D instance evaluator, vendored
+  unmodified**, so the numbers can be placed next to published ones.
+- [`eval3d_geometry.py`](train/eval3d_geometry.py) - the 2D to 3D bridge: unprojection with the
+  backbone's own predicted depth and cameras, per-superpoint majority vote, Sim(3) plus ICP.
+- Four dataset adapters: [`scannet3d.py`](train/scannet3d.py),
+  [`scannetpp3d.py`](train/scannetpp3d.py), [`replica3d.py`](train/replica3d.py),
+  [`datasets3d.py`](train/datasets3d.py); plus [`eval_metrics.py`](train/eval_metrics.py),
+  [`maskdino_eval.py`](train/maskdino_eval.py), [`perframe.py`](train/perframe.py) and the
+  visualisers.
+- [`data/splits/`](data/splits/) - the official ScanNet v2 1201 train / 312 val split, and the
+  ScanNet++ NVS-sem val list.
+
+**Entry points** ([`scripts/`](scripts/))
+
+[`train_maskdino.py`](scripts/train_maskdino.py), [`eval_3d_maskdino.py`](scripts/eval_3d_maskdino.py),
+[`eval_perframe.py`](scripts/eval_perframe.py),
+[`collect_eval3d_matrix.py`](scripts/collect_eval3d_matrix.py),
+[`eval3d_projection_oracle.py`](scripts/eval3d_projection_oracle.py) and
+[`gate_3d_gt.py`](scripts/gate_3d_gt.py) (the oracles that separate mask quality from geometry
+quality), [`verify_scannetpp_gt.py`](scripts/verify_scannetpp_gt.py),
+[`scannet_mask_resolution_oracle.py`](scripts/scannet_mask_resolution_oracle.py),
+[`visualize_maskdino.py`](scripts/visualize_maskdino.py), [`view_ply.py`](scripts/view_ply.py).
+
+**Cluster drivers and dataset builds** ([`slurm/`](slurm/))
+
+Training ([`train_maskdino.sh`](slurm/train_maskdino.sh),
+[`train_maskdino_multi.sh`](slurm/train_maskdino_multi.sh)), the chained evaluation matrix
+([`eval_3d_matrix.sh`](slurm/eval_3d_matrix.sh),
+[`chain_eval3d_matrix.sh`](slurm/chain_eval3d_matrix.sh)), and fetch/build jobs for Aria Synthetic
+Environments ([`fetch_ase.sh`](slurm/fetch_ase.sh), [`download_ase.py`](slurm/download_ase.py)),
+Replica ([`fetch_replica.sh`](slurm/fetch_replica.sh), [`build_replica.py`](slurm/build_replica.py))
+and InsScene-15K ([`fetch_insscene15k.sh`](slurm/fetch_insscene15k.sh),
+[`build_insscene2d.py`](slurm/build_insscene2d.py), [`insscene_shards.py`](slurm/insscene_shards.py)).
+
+**Tests** ([`tests/`](tests/))
+
+23 standalone CPU-only Python test scripts plus 3 shell harnesses. They need no GPU and no backbone
+weights, so they run on a laptop.
+
+**The measurement record** ([`docs/`](docs/))
+
+[`FINAL_REPORT.md`](docs/FINAL_REPORT.md) is the closing account. [`RESULTS.md`](docs/RESULTS.md) holds
+every number in one place, [`MASKDINO.md`](docs/MASKDINO.md) the architecture and protocols,
+[`MULTIDATASET.md`](docs/MULTIDATASET.md) the training-data axis,
+[`TRAINING_COMPARABILITY.md`](docs/TRAINING_COMPARABILITY.md) what each competitor trains on versus
+evaluates on, [`COMMANDS.md`](docs/COMMANDS.md) the full command catalogue.
+
+**Retired but preserved** ([`legacy/`](legacy/))
+
+The predecessor decoder head and the one-shot dataset builders, frozen and still imported by active
+code.
+
+### How to run my part
+
+```bash
+python -m venv myenv && source myenv/bin/activate
+pip install -r requirements.txt -r requirements_demo.txt
+
+# Tests: standalone scripts, not pytest. CPU-only.
+for t in tests/test_*.py; do python "$t"; done
+
+# Training (needs the ScanNet tars, see docs/DATASET.md)
+python scripts/train_maskdino.py --train_scenes scene0000_00 --val_scenes scene0080_00 \
+    --num_epochs 50 --num_queries 300 --scans_root <scans_root>
+sbatch --export=ALL,N_SCENES=490 slurm/train_maskdino.sh
+
+# The 3D ruler, the only protocol comparable to a published number
+sbatch --export=ALL,CHECKPOINT=<run_dir>/checkpoint_best_bundle.pth slurm/eval_3d_maskdino.sh
+```
+
+The full catalogue is in [`docs/COMMANDS.md`](docs/COMMANDS.md).
+
+---
+
 # 3D instance segmentation on a strictly frozen VGGT backbone
 
 > **Research project at ETH Zurich, Photogrammetry & Remote Sensing — closed 2026-09-09.**
