@@ -88,8 +88,10 @@ are citing that history — do not treat the links as live.
 
 ### The preprint (`paper/`, started 2026-09-30)
 
-`paper/` is git-ignored: it stays on the local machine only, until the preprint is cleared for
-publication. Do not add it to the repository.
+The compiled preprint is published at the repo root as
+`How_Far_Does_a_Frozen_VGGT_Go_A_Controlled_Study_of_Feed-Forward_3D_Instance_Segmentation.pdf`.
+The sources in `paper/` are git-ignored and stay on the local machine only: do not add them to the
+repository. After rebuilding, copy `paper/main.pdf` over the root PDF to update it.
 
 `paper/` holds an arXiv preprint written from the frozen record: LaTeX sources, `make` to build,
 `make check` to verify. It is a *presentation* of the results, not new research, and it takes an
