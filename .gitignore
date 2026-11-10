@@ -167,3 +167,6 @@ input_images_*/
 # ASE CDN urls — licence-gated signed links, never commit
 ASE_cdn_urls.json
 aria_synthetic_environments_dataset_download_urls.json
+
+# preprint draft — local only until it is cleared for publication
+paper/

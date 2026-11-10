@@ -86,6 +86,23 @@ The pre-official-split archive (`docs/old/`) and the supervisor slide decks (`do
 removed at project close; they are recoverable from git history. Documents that cite them by path
 are citing that history — do not treat the links as live.
 
+### The preprint (`paper/`, started 2026-09-30)
+
+`paper/` is git-ignored: it stays on the local machine only, until the preprint is cleared for
+publication. Do not add it to the repository.
+
+`paper/` holds an arXiv preprint written from the frozen record: LaTeX sources, `make` to build,
+`make check` to verify. It is a *presentation* of the results, not new research, and it takes an
+analysis framing (a controlled study, not a state-of-the-art claim). Read `paper/README.md`, then:
+
+- `paper/notes/FACTS.md`: the number ledger. **No number enters the paper unless it is there**,
+  and every entry names its home in `docs/`. The paper prints percentages (0.053 becomes 5.3).
+- `paper/notes/DOC_ISSUES.md`: places where `docs/` is inconsistent or contradicted by the
+  competitors' papers, found while writing. **`docs/` was not edited**; the paper follows the
+  corrected reading. Item 0 matters most: PanSt3R already froze its geometry backbone, so the
+  "first frozen measurement" claim made in `docs/` is not made in the paper.
+- `paper/notes/OPEN_QUESTIONS.md`: decisions that are the author's (authors, acknowledgements).
+
 ## Environment & core commands
 
 A virtualenv is expected in-repo at `myenv/` — use `myenv/bin/python`. It is **not** committed.
